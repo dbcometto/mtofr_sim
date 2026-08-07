@@ -2,8 +2,11 @@
 import time
 
 from mtofr.viz import PlanePlotter
+from mtofr.world.world import World
 from mtofr.world.ground_plane.env import GroundPlaneEnv
 from mtofr.world.ground_plane.platforms import BicycleUGV
+from mtofr.agent.agent import Agent
+from mtofr.memory.memory import Memory
 
 
 
@@ -12,18 +15,18 @@ from mtofr.world.ground_plane.platforms import BicycleUGV
 
 #==========# Config #==========#
 DT = 0.1
-N_STEPS = 50
 
 
 
 
 
 #==========# Set up #==========#
-platforms = {"ugv1": BicycleUGV()}
-env = GroundPlaneEnv(platforms)
+platform = BicycleUGV()
+memory = Memory()
+agent = Agent(platform=platform, memory=memory, controls={"vel": 1.0, "steer": 0.1})
 
-controls = {"ugv1": {"vel": 1.0, "steer": 0.1}}
-
+env = GroundPlaneEnv()
+world = World(env, agents={"ugv1": agent})
 vizualizer = PlanePlotter()
 
 
@@ -42,12 +45,12 @@ if __name__ == "__main__":
                     print(f"Falling behind by {1000*(delta_t-DT):3.3f}ms")
 
                 #-----# Step #-----#
-                env.step_all(controls, delta_t)
+                world.step(delta_t)
 
                 #-----# Visualize #-----#
-                world_states = env.get_states()
+                world_states = world.get_states()
                 vizualizer.update(world_states)
-                # print(env.get_states()["ugv1"])
+                # print(world.get_states()["ugv1"])
 
     except KeyboardInterrupt:
         pass

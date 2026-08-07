@@ -1,19 +1,17 @@
-"""Defines the environment and platform interfaces"""
+"""Defines the core physical interfaces: WorldState, Platform, Environment."""
 from abc import ABC, abstractmethod
 import numpy as np
 
 
 class WorldState:
-    """Shared state interface"""
+    """Shared physical state interface"""
     def __init__(self, t=0.0, x=0.0, y=0.0, theta=0.0, vx=0.0, vy=0.0, vtheta=0.0):
         self.t = t
 
-        # Position
         self.x = x
         self.y = y
         self.theta = theta
 
-        # Velocities in world frame
         self.vx = vx
         self.vy = vy
         self.vtheta = vtheta
@@ -30,20 +28,17 @@ class WorldState:
 
 
 class Platform(ABC):
-    """Handles platform logic"""
+    """Pure physical dynamics, stateful"""
+    state: WorldState
 
     @abstractmethod
-    def step(self, state: WorldState, controls: dict, dt: float) -> WorldState: ...
+    def step_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState: ...
 
 
 class Environment(ABC):
-    """Manages platform data and steps the world"""
-    platforms: dict
-    states: dict
+    """Steps physical dynamics for a set of platforms"""
 
     @abstractmethod
-    def step_all(self, controls: dict, dt: float) -> None: ...
-
-    @abstractmethod
-    def get_states(self) -> dict: ...
-
+    def step_dynamics_all(self, platforms: dict, controls: dict, dt: float) -> dict:
+        """platforms: eid -> Platform, controls: eid -> control dict.
+        Returns eid -> new WorldState."""

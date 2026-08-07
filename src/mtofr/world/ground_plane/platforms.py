@@ -5,17 +5,19 @@ from mtofr.world.base import Platform, WorldState
 
 class BicycleUGV(Platform):
     """A UGV with bicycle dynamics
-    
+
     Controls:
     - "vel": desired forward speed in m/s
     - "steer": desired steering angle in rad around +z
     """
-    def __init__(self, wheelbase=0.33, max_speed=8.0, max_steer=0.4):
+    def __init__(self, wheelbase=0.33, max_speed=8.0, max_steer=0.4,
+                 initial_state: WorldState = None):
         self.wheelbase = wheelbase
         self.max_speed = max_speed
         self.max_steer = max_steer
+        self.state = initial_state or WorldState()
 
-    def step(self, state: WorldState, controls: dict, dt: float) -> WorldState:
+    def step_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState:
         speed = np.clip(controls["vel"], -self.max_speed, self.max_speed)
         steer = np.clip(controls["steer"], -self.max_steer, self.max_steer)
 

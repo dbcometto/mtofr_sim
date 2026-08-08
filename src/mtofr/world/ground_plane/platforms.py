@@ -10,16 +10,18 @@ class BicycleUGV(Platform):
     - "vel": desired forward speed in m/s
     - "steer": desired steering angle in rad around +z
     """
-    def __init__(self, wheelbase=0.33, max_speed=8.0, max_steer=0.4,
-                 initial_state: WorldState = None):
+    def __init__(self, wheelbase=0.33, min_speed=-2.0, max_speed=8.0,
+                 min_steer=-0.4, max_steer=0.4, initial_state: WorldState = None):
         self.wheelbase = wheelbase
+        self.min_speed = min_speed
         self.max_speed = max_speed
+        self.min_steer = min_steer
         self.max_steer = max_steer
         self.state = initial_state or WorldState()
 
     def step_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState:
-        speed = np.clip(controls["vel"], -self.max_speed, self.max_speed)
-        steer = np.clip(controls["steer"], -self.max_steer, self.max_steer)
+        speed = np.clip(controls["vel"], self.min_speed, self.max_speed)
+        steer = np.clip(controls["steer"], self.min_steer, self.max_steer)
 
         vtheta = (speed / self.wheelbase) * np.tan(steer)
         theta = state.theta + vtheta * dt

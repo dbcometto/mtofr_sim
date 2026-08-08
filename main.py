@@ -16,14 +16,18 @@ from mtofr.memory.memory import Memory
 #==========# Config #==========#
 DT = 0.1
 
-
+test_mission = [
+    {"target": (5.0, 5.0),"avoid": [{"point": (0.0, 0.0), "radius": 2.0}]},
+    {"target": (-5.0, -5.0), "avoid": [{"point": (0.0, 0.0), "radius": 2.0}]},
+]
 
 
 
 #==========# Set up #==========#
 platform = BicycleUGV()
 memory = Memory()
-agent = Agent(platform=platform, memory=memory, controls={"vel": 1.0, "steer": 0.1})
+agent = Agent(platform=platform, memory=memory, mission=test_mission)
+
 
 env = GroundPlaneEnv()
 world = World(env, agents={"ugv1": agent})
@@ -32,25 +36,25 @@ vizualizer = PlanePlotter()
 
 
 #==========# Main #==========#
+accumulator = 0.0
 last_time = time.perf_counter()
 if __name__ == "__main__":
     try:
         while True:
-            #-----# Handle timing #-----#
             current_time = time.perf_counter()
-            delta_t = current_time-last_time
-            if delta_t > DT:
-                last_time = current_time
-                if delta_t > 2*DT:
-                    print(f"Falling behind by {1000*(delta_t-DT):3.3f}ms")
+            accumulator += current_time - last_time
+            last_time = current_time
 
-                #-----# Step #-----#
-                world.step(delta_t)
+            if accumulator > 5 * DT:
+                print(f"Falling behind, skipping {accumulator - DT:.3f}s")
+                accumulator = DT   # drop the backlog instead of stepping through it
 
-                #-----# Visualize #-----#
+            while accumulator >= DT:
+                world.step(DT)
+                accumulator -= DT
+
                 world_states = world.get_states()
                 vizualizer.update(world_states)
-                # print(world.get_states()["ugv1"])
 
     except KeyboardInterrupt:
         pass

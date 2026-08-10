@@ -3,6 +3,42 @@
 
 
 
+
+## Status 10 Aug 26
+(Written by Claude)
+
+Architecture landed on today (after several deliberate reframes):
+
+World — owns Environment + agents dict, runs the tick loop: agents update (issue/poll tasks) → environment steps physical dynamics
+Agent — holds a mission graph, memory, and per-primitive task handles. Never touches WorldState — only issues capability requests and reads status. Translates IPL primitive types (move_to, avoid) into platform-specific capability names via platform.capabilities(), so Agent stays fully platform-agnostic
+Platform (BicycleUGV) — owns physical state, runs its own internal MPC (scipy.optimize.minimize, warm-started) to compute controls each tick based on whatever tasks are currently active. Exposes actuate/poll_status/cancel (async-style, even though currently synchronous) plus persistent avoid regions
+Environment (GroundPlaneEnv) — infinite plane, no bounds/collisions, just steps each platform's dynamics
+Memory — per-agent typed store (currently Location), private per platform (no shared ground truth between agents)
+viz (PlanePlotter) — live matplotlib position + heading arrow, headless-mode toggle in main.py
+
+Mission representation: graph-based — nodes hold multiple primitives, edges hold explicit conditions referencing specific primitive indices and required statuses (e.g. {"primitive": 1, "status": "success"}). Replaced an earlier flat-list version once concurrency/multi-primitive needs became clear.
+
+Key design principles established:
+
+Continuous capabilities (move_to, avoid) are persistent platform state feeding one combined MPC cost — not independent per-primitive control outputs
+Discrete capabilities use actuate/poll/cancel with success/fail/timeout, modeled loosely on ROS-action-style semantics but kept custom/minimal for now
+Platform reports task-completion status; Agent only reasons about status, never raw physical state
+LLM will write DSL (not raw Python/dicts); a compiler layer validates and translates DSL → the graph structure Agent consumes — keeps LLM output safely inspectable/rejectable before reaching hardware
+The graph itself is a candidate artifact for human-commander review/approval — directly supports the thesis's human-oversight claim
+
+Known open items, deferred intentionally:
+
+avoid-as-mission-node is mechanically working but conceptually awkward (fires as a normal primitive with no real "done" state; a cleaner separate mechanism may be warranted later)
+No validation layer yet for LLM/DSL-generated graphs (primitive indices, capability names) — designed for, not built
+Only one platform type and one environment exist — abstraction boundaries are unvalidated by a second real implementation
+No multi-agent test yet, despite World/Agent architecture supporting it in principle
+The actual thesis comparison (structured vs. unstructured mission execution on reliability/adaptability/coordination/oversight) hasn't started
+
+Assessment: solid, working foundation consistent with the thesis direction — genuine architectural validation happened today, but this is infrastructure, not yet evidence for the thesis claim itself.
+
+
+
+
 ## Pre-notes 8 Aug 26
 (Written by Claude)
 

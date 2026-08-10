@@ -37,3 +37,6 @@ class PlanePlotter:
 
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
+
+    def is_open(self) -> bool:
+        return plt.fignum_exists(self.fig.number)

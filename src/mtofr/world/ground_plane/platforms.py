@@ -124,7 +124,7 @@ class BicycleUGV(Platform):
                 R = np.diag([1.0, 0.1])
             return u.T @ R @ u
 
-        def mission_cost_fn(s, u, Q=None, avoid_weight=100.0):
+        def mission_cost_fn(s, u, Q=None, avoid_weight=100.0, avoid_heading_weight=10.0):
             if Q is None:
                 Q = np.eye(2)
             e = np.array([s.x - target[0], s.y - target[1]])
@@ -134,6 +134,12 @@ class BicycleUGV(Platform):
                 point, radius = pt["point"], pt["radius"]
                 d = np.hypot(s.x - point[0], s.y - point[1])
                 cost += avoid_weight * max(0.0, radius - d)**2
+
+                # Penalize heading directly at the obstacle, scaled by proximity
+                avoid_bearing = np.arctan2(point[1] - s.y, point[0] - s.x)
+                heading_toward_avoid = np.arctan2(np.sin(s.theta - avoid_bearing), np.cos(s.theta - avoid_bearing))
+                proximity = 1.0 / (d + 0.5)   # stronger penalty the closer you are
+                cost += avoid_heading_weight * proximity * np.cos(heading_toward_avoid)**2
 
             return cost
 

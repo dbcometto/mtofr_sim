@@ -35,7 +35,7 @@ class Agent:
         primitives = node["primitives"]
         caps = self.platform.capabilities()
 
-        for i, p in enumerate(primitives):
+        for name, p in primitives.items():
             capability = caps.get(p["type"])
             if capability is None:
                 print(f"[Agent] Platform cannot fulfill IPL type '{p['type']}' — halting mission.")
@@ -44,18 +44,18 @@ class Agent:
                 self._blocked = True
                 return
 
-            if i not in self._handles:
-                self._handles[i] = self.platform.actuate(capability, p["params"])
-                self._statuses[i] = "received"
-                print(f"[Agent] Node '{self.active_node_id}' primitive {i} ({p['type']}) -> actuated")
+            if name not in self._handles:
+                self._handles[name] = self.platform.actuate(capability, p["params"])
+                self._statuses[name] = "received"
+                print(f"[Agent] Node '{self.active_node_id}' primitive '{name}' ({p['type']}) -> actuated")
                 continue
 
-            status = self.platform.poll_status(self._handles[i])["status"]
-            if status != self._statuses.get(i):
-                print(f"[Agent] Node '{self.active_node_id}' primitive {i} ({p['type']}) -> {status}")
-            self._statuses[i] = status
+            status = self.platform.poll_status(self._handles[name])["status"]
+            if status != self._statuses.get(name):
+                print(f"[Agent] Node '{self.active_node_id}' primitive '{name}' ({p['type']}) -> {status}")
+            self._statuses[name] = status
             if status in ("fail", "timeout"):
-                del self._handles[i]   # retry next tick
+                del self._handles[name]
 
         for edge in self.mission_graph["edges"].get(self.active_node_id, []):
             if all(self._statuses.get(c["primitive"]) == c["status"] for c in edge["conditions"]):

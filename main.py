@@ -19,18 +19,41 @@ ENABLE_HEADLESS = False
 
 test_mission = {
     "nodes": {
-        "n1": {"primitives": [
-            {"type": "avoid", "params": {"point": (0.0, 0.0), "radius": 2.0}},
-            {"type": "move_to", "params": {"target": (5.0, 5.0)}},
-        ]},
-        "n2": {"primitives": [
-            {"type": "avoid", "params": {"point": (0.0, 0.0), "radius": 2.0}},
-            {"type": "move_to", "params": {"target": (-5.0, -5.0)}},
-        ]},
+        "n1": {"primitives": {
+            "avoid1": {"type": "avoid", "params": {"point": (0.0, 0.0), "radius": 2.0}},
+            "nav": {"type": "move_to", "params": {"target": (5.0, 5.0)}},
+        }},
+        "n2": {"primitives": {
+            "avoid1": {"type": "avoid", "params": {"point": (0.0, 0.0), "radius": 2.0}},
+            "nav": {"type": "move_to", "params": {"target": (-5.0, -5.0)}},
+        }},
     },
     "edges": {
-        "n1": [{"conditions": [{"primitive": 1, "status": "success"}], "to": "n2"}],
-        "n2": [{"conditions": [{"primitive": 1, "status": "success"}], "to": "n1"}],
+        "n1": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n2"}],
+        "n2": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n1"}],
+    },
+    "start": "n1",
+}
+
+
+test_mission_2 = {
+    "nodes": {
+        "n1": {"primitives": {
+            "nav": {"type": "move_to", "params": {"target": (7.0, 7.0)}},
+        }},
+        "n2": {"primitives": {
+            "avoid_top_center": {"type": "avoid", "params": {"point": (0.0, 9.0), "radius": 3.0}},
+            "nav": {"type": "move_to", "params": {"target": (-7.0, 7.0)}},
+        }},
+        "n3": {"primitives": {
+            "avoid_origin": {"type": "avoid", "params": {"point": (0.0, 2.0), "radius": 2.0}},
+            "nav": {"type": "move_to", "params": {"target": (7.0, -7.0)}},
+        }},
+    },
+    "edges": {
+        "n1": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n2"}],
+        "n2": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n3"}],
+        "n3": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n1"}],
     },
     "start": "n1",
 }
@@ -40,7 +63,7 @@ test_mission = {
 #==========# Set up #==========#
 platform = BicycleUGV()
 memory = Memory()
-agent = Agent(platform=platform, memory=memory, mission_graph=test_mission)
+agent = Agent(platform=platform, memory=memory, mission_graph=test_mission_2)
 
 
 env = GroundPlaneEnv()

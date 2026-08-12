@@ -22,10 +22,23 @@ class Backseater:
         self._statuses = {}     # primitive name -> last known status
         self._blocked = False
 
+    def capabilities(self):
+        """Relays the Frontseater's advertised CapabilityRegistry — the query path a planner
+        uses to discover what this backseater's platform can do, instead of assuming it."""
+        return self.frontseater.capabilities()
+
     def _activate_node(self, node_id):
         self.active_node_id = node_id
         self._handles = {}
         self._statuses = {}
+
+    def _resolve_params(self, capability, raw_params: dict) -> dict:
+        """Resolves memory-id params to their Memory entries before actuate()."""
+        resolved = {}
+        for spec in capability.params:
+            value = raw_params[spec.name]
+            resolved[spec.name] = self.memory.get(value) if spec.is_memory_ref else value
+        return resolved
 
     def update(self) -> None:
         if self._blocked or self.active_node_id is None:
@@ -33,10 +46,10 @@ class Backseater:
 
         node = self.mission_graph["nodes"][self.active_node_id]
         primitives = node["primitives"]
-        capabilities = self.frontseater.capabilities()
+        capability_registry = self.frontseater.capabilities()
 
         for name, primitive in primitives.items():
-            capability = capabilities.get(primitive["type"])
+            capability = capability_registry.get(primitive["type"])
             if capability is None:
                 print(f"[Backseater] Frontseater cannot fulfill IPL type '{primitive['type']}' — halting mission.")
                 for handle in self._handles.values():
@@ -45,7 +58,18 @@ class Backseater:
                 return
 
             if name not in self._handles:
-                self._handles[name] = self.frontseater.actuate(capability, primitive["params"])
+                try:
+                    resolved_params = self._resolve_params(capability, primitive["params"])
+                    capability.validate(resolved_params)
+                except (KeyError, ValueError) as error:
+                    print(f"[Backseater] Node '{self.active_node_id}' primitive '{name}' "
+                          f"({primitive['type']}) -> invalid params: {error} — halting mission.")
+                    for handle in self._handles.values():
+                        self.frontseater.cancel(handle)
+                    self._blocked = True
+                    return
+
+                self._handles[name] = self.frontseater.actuate(capability.ipl_type, resolved_params)
                 self._statuses[name] = "received"
                 print(f"[Backseater] Node '{self.active_node_id}' primitive '{name}' ({primitive['type']}) -> actuated")
                 continue

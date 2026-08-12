@@ -4,6 +4,8 @@ import numpy as np
 from scipy.optimize import minimize
 from mtofr.world.base import Frontseater, WorldState
 from mtofr.world.ground_plane.hardware import BicycleHardware
+from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
+from mtofr.memory.memory import Location
 
 
 class BicycleFrontseater(Frontseater):
@@ -18,27 +20,43 @@ class BicycleFrontseater(Frontseater):
         self.nav_tolerance = nav_tolerance
         self._prev_solution = np.zeros(nav_horizon * 2)   # warm-start cache
 
-        self._avoid_regions = []   # persistent, not a task: [{"point": (x,y), "radius": r}]
+        self._avoid_regions = []   # persistent, not a task: [{"point": Location, "radius": float}]
 
         self._active_handle = None
-        self._active_target = None
+        self._active_target = None   # Location
         self._task_status = {}     # handle -> status string
 
+        self._capability_registry = CapabilityRegistry([
+            Capability(
+                ipl_type="move_to",
+                description="Navigate to a target location until within tolerance, using the internal MPC.",
+                params=(ParamSpec("target", Location, "Location to navigate to", is_memory_ref=True),),
+            ),
+            Capability(
+                ipl_type="avoid",
+                description="Add a persistent circular avoid-region; instantaneous, not a duration task.",
+                params=(
+                    ParamSpec("point", Location, "Center of the avoid-region", is_memory_ref=True),
+                    ParamSpec("radius", float, "Avoid-region radius in meters"),
+                ),
+            ),
+        ])
+
     #=====# Capabilities #=====#
-    def capabilities(self) -> dict:
-        return {"move_to": "navigate", "avoid": "set_avoid"}
+    def capabilities(self) -> CapabilityRegistry:
+        return self._capability_registry
 
     def actuate(self, capability: str, params: dict) -> str:
         handle = str(uuid.uuid4())
         print(f"[Frontseater] actuate('{capability}', {params}) -> handle {handle[:8]}")
 
-        if capability == "navigate":
+        if capability == "move_to":
             self._active_handle = handle
             self._active_target = params["target"]
             self._task_status[handle] = "received"
 
-        elif capability == "set_avoid":
-            self._avoid_regions.append(params)   # {"point":..., "radius":...}
+        elif capability == "avoid":
+            self._avoid_regions.append(params)   # {"point": Location, "radius": float}
             self._task_status[handle] = "success"   # instantaneous, not a duration task
 
         else:
@@ -51,8 +69,8 @@ class BicycleFrontseater(Frontseater):
 
         if handle == self._active_handle and status in ("received", "in_progress"):
             current_state = self.hardware.read_state()
-            distance = np.hypot(current_state.x - self._active_target[0],
-                                 current_state.y - self._active_target[1])
+            distance = np.hypot(current_state.x - self._active_target.x,
+                                 current_state.y - self._active_target.y)
             if distance <= self.nav_tolerance:
                 status = "success"
                 self._active_handle = None
@@ -89,7 +107,7 @@ class BicycleFrontseater(Frontseater):
         avoid = self._avoid_regions
 
         def platform_cost_fn(s, u):
-            bearing = np.arctan2(target[1] - s.y, target[0] - s.x)
+            bearing = np.arctan2(target.y - s.y, target.x - s.x)
             heading_error = np.arctan2(np.sin(s.theta - bearing), np.cos(s.theta - bearing))
             return 20 * heading_error**2
 
@@ -102,16 +120,16 @@ class BicycleFrontseater(Frontseater):
         def mission_cost_fn(s, u, Q=None, avoid_weight=100.0, avoid_heading_weight=10.0):
             if Q is None:
                 Q = np.eye(2)
-            e = np.array([s.x - target[0], s.y - target[1]])
+            e = np.array([s.x - target.x, s.y - target.y])
             cost = e.T @ Q @ e
 
-            for pt in avoid:
-                point, radius = pt["point"], pt["radius"]
-                d = np.hypot(s.x - point[0], s.y - point[1])
+            for region in avoid:
+                point, radius = region["point"], region["radius"]
+                d = np.hypot(s.x - point.x, s.y - point.y)
                 cost += avoid_weight * max(0.0, radius - d)**2
 
                 # Penalize heading directly at the obstacle, scaled by proximity
-                avoid_bearing = np.arctan2(point[1] - s.y, point[0] - s.x)
+                avoid_bearing = np.arctan2(point.y - s.y, point.x - s.x)
                 heading_toward_avoid = np.arctan2(np.sin(s.theta - avoid_bearing), np.cos(s.theta - avoid_bearing))
                 proximity = 1.0 / (d + 0.5)   # stronger penalty the closer you are
                 cost += avoid_heading_weight * proximity * np.cos(heading_toward_avoid)**2

@@ -1,6 +1,7 @@
 """Defines the core physical interfaces: WorldState, Hardware, Frontseater, Environment."""
 from abc import ABC, abstractmethod
 import numpy as np
+from mtofr.capability.capability import CapabilityRegistry
 
 
 class WorldState:
@@ -72,8 +73,9 @@ class Frontseater(ABC):
         self.hardware.send_controls(controls)
 
     @abstractmethod
-    def capabilities(self) -> dict:
-        """Maps IPL primitive type -> this platform's capability name."""
+    def capabilities(self) -> CapabilityRegistry:
+        """Returns this platform's advertised capabilities — the query path a Backseater
+        (and eventually a planner) uses instead of assuming what the platform can do."""
 
     @abstractmethod
     def actuate(self, capability: str, params: dict) -> str:

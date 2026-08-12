@@ -7,7 +7,7 @@ from mtofr.world.ground_plane.env import GroundPlaneEnv
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
 from mtofr.backseater.backseater import Backseater
-from mtofr.memory.memory import Memory
+from mtofr.memory.memory import Memory, Location
 
 
 
@@ -21,12 +21,12 @@ ENABLE_HEADLESS = False
 test_mission = {
     "nodes": {
         "n1": {"primitives": {
-            "avoid1": {"type": "avoid", "params": {"point": (0.0, 0.0), "radius": 2.0}},
-            "nav": {"type": "move_to", "params": {"target": (5.0, 5.0)}},
+            "avoid1": {"type": "avoid", "params": {"point": "origin", "radius": 2.0}},
+            "nav": {"type": "move_to", "params": {"target": "northeast"}},
         }},
         "n2": {"primitives": {
-            "avoid1": {"type": "avoid", "params": {"point": (0.0, 0.0), "radius": 2.0}},
-            "nav": {"type": "move_to", "params": {"target": (-5.0, -5.0)}},
+            "avoid1": {"type": "avoid", "params": {"point": "origin", "radius": 2.0}},
+            "nav": {"type": "move_to", "params": {"target": "southwest"}},
         }},
     },
     "edges": {
@@ -40,15 +40,15 @@ test_mission = {
 test_mission_2 = {
     "nodes": {
         "n1": {"primitives": {
-            "nav": {"type": "move_to", "params": {"target": (7.0, 7.0)}},
+            "nav": {"type": "move_to", "params": {"target": "east"}},
         }},
         "n2": {"primitives": {
-            "avoid_top_center": {"type": "avoid", "params": {"point": (0.0, 9.0), "radius": 3.0}},
-            "nav": {"type": "move_to", "params": {"target": (-7.0, 7.0)}},
+            "avoid_top_center": {"type": "avoid", "params": {"point": "top_center", "radius": 3.0}},
+            "nav": {"type": "move_to", "params": {"target": "west"}},
         }},
         "n3": {"primitives": {
-            "avoid_origin": {"type": "avoid", "params": {"point": (0.0, 2.0), "radius": 2.0}},
-            "nav": {"type": "move_to", "params": {"target": (7.0, -7.0)}},
+            "avoid_origin": {"type": "avoid", "params": {"point": "north_of_origin", "radius": 2.0}},
+            "nav": {"type": "move_to", "params": {"target": "southeast"}},
         }},
     },
     "edges": {
@@ -64,7 +64,17 @@ test_mission_2 = {
 #==========# Set up #==========#
 hardware = BicycleHardware()
 frontseater = BicycleFrontseater(hardware=hardware)
+
 memory = Memory()
+memory.add("origin", Location(0.0, 0.0))
+memory.add("northeast", Location(5.0, 5.0))
+memory.add("southwest", Location(-5.0, -5.0))
+memory.add("east", Location(7.0, 7.0))
+memory.add("west", Location(-7.0, 7.0))
+memory.add("southeast", Location(7.0, -7.0))
+memory.add("top_center", Location(0.0, 9.0))
+memory.add("north_of_origin", Location(0.0, 2.0))
+
 backseater = Backseater(frontseater=frontseater, memory=memory, mission_graph=test_mission_2)
 
 

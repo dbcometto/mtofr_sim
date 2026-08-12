@@ -1,26 +1,17 @@
-"""Defines platforms to be used with the ground_plane environment"""
+"""Defines frontseaters to be used with the ground_plane environment"""
 import uuid
 import numpy as np
 from scipy.optimize import minimize
-from mtofr.world.base import Platform, WorldState
+from mtofr.world.base import Frontseater, WorldState
+from mtofr.world.ground_plane.hardware import BicycleHardware
 
 
-class BicycleUGV(Platform):
-    """A UGV with bicycle dynamics
-
-    Controls:
-    - "vel": desired forward speed in m/s
-    - "steer": desired steering angle in rad around +z
-    """
-    def __init__(self, wheelbase=0.33, min_speed=-2.0, max_speed=8.0,
-                 min_steer=-0.4, max_steer=0.4, initial_state: WorldState = None,
-                 nav_horizon=10, nav_dt=0.1, nav_tolerance=0.5):
-        self.wheelbase = wheelbase
-        self.min_speed = min_speed
-        self.max_speed = max_speed
-        self.min_steer = min_steer
-        self.max_steer = max_steer
-        self.state = initial_state or WorldState()
+class BicycleFrontseater(Frontseater):
+    """The planning/control brain for a UGV with bicycle dynamics. Runs its own
+    internal MPC against its Hardware's dynamics model, never touching
+    Hardware.state directly — only send_controls/read_state."""
+    def __init__(self, hardware: BicycleHardware, nav_horizon=10, nav_dt=0.1, nav_tolerance=0.5):
+        self.hardware = hardware
 
         self.nav_horizon = nav_horizon
         self.nav_dt = nav_dt
@@ -33,30 +24,13 @@ class BicycleUGV(Platform):
         self._active_target = None
         self._task_status = {}     # handle -> status string
 
-    def calculate_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState:
-        speed = np.clip(controls["vel"], self.min_speed, self.max_speed)
-        steer = np.clip(controls["steer"], self.min_steer, self.max_steer)
-
-        vtheta = (speed / self.wheelbase) * np.tan(steer)
-        theta = state.theta + vtheta * dt
-        vx = speed * np.cos(theta)
-        vy = speed * np.sin(theta)
-
-        return WorldState(
-            t=state.t + dt,
-            x=state.x + vx * dt,
-            y=state.y + vy * dt,
-            theta=theta,
-            vx=vx, vy=vy, vtheta=vtheta,
-        )
-
     #=====# Capabilities #=====#
     def capabilities(self) -> dict:
         return {"move_to": "navigate", "avoid": "set_avoid"}
 
     def actuate(self, capability: str, params: dict) -> str:
         handle = str(uuid.uuid4())
-        print(f"[Platform] actuate('{capability}', {params}) -> handle {handle[:8]}")
+        print(f"[Frontseater] actuate('{capability}', {params}) -> handle {handle[:8]}")
 
         if capability == "navigate":
             self._active_handle = handle
@@ -76,9 +50,10 @@ class BicycleUGV(Platform):
         status = self._task_status.get(handle, "fail")
 
         if handle == self._active_handle and status in ("received", "in_progress"):
-            dist = np.hypot(self.state.x - self._active_target[0],
-                             self.state.y - self._active_target[1])
-            if dist <= self.nav_tolerance:
+            current_state = self.hardware.read_state()
+            distance = np.hypot(current_state.x - self._active_target[0],
+                                 current_state.y - self._active_target[1])
+            if distance <= self.nav_tolerance:
                 status = "success"
                 self._active_handle = None
                 self._active_target = None
@@ -95,18 +70,18 @@ class BicycleUGV(Platform):
         self._task_status[handle] = "fail"
 
     #=====# Controls (internal MPC) #=====#
-    def _rollout_cost(self, control_seq, cost_fn):
+    def _rollout_cost(self, control_seq, cost_fn, start_state):
         controls = control_seq.reshape(self.nav_horizon, 2)
         cost = 0.0
-        s = self.state
+        state = start_state
 
         for vel, steer in controls:
             u = [vel, steer]
-            s = self.calculate_dynamics(s, {"vel": vel, "steer": steer}, self.nav_dt)
-            cost += cost_fn(s, u)
+            state = self.hardware.calculate_dynamics(state, {"vel": vel, "steer": steer}, self.nav_dt)
+            cost += cost_fn(state, u)
         return cost
 
-    def compute_controls(self) -> dict:
+    def compute_controls(self, state: WorldState) -> dict:
         if self._active_target is None:
             return {"vel": 0.0, "steer": 0.0}
 
@@ -149,9 +124,10 @@ class BicycleUGV(Platform):
         prev = self._prev_solution.reshape(self.nav_horizon, 2)
         x0 = np.vstack([prev[1:], prev[-1]]).flatten()
 
-        bounds = [(self.min_speed, self.max_speed), (self.min_steer, self.max_steer)] * self.nav_horizon
+        bounds = [(self.hardware.min_speed, self.hardware.max_speed),
+                  (self.hardware.min_steer, self.hardware.max_steer)] * self.nav_horizon
 
-        result = minimize(self._rollout_cost, x0, args=(cost_fn,), bounds=bounds, method="SLSQP")
+        result = minimize(self._rollout_cost, x0, args=(cost_fn, state), bounds=bounds, method="SLSQP")
 
         self._prev_solution = result.x
         vel, steer = result.x[0], result.x[1]

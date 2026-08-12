@@ -3,8 +3,8 @@
 #==========# Main Memory Storage #==========#
 
 class Memory:
-    """Per-agent memory: typed store of known entities (locations, later agents, conditions, etc). 
-    Each agent owns its own Memory instance."""
+    """Typed store of known entities (locations, later agents, conditions, etc).
+    Currently one instance per backseater; a planner-level Memory is expected later too."""
 
     def __init__(self):
         self._entries = {}   # id -> entry object

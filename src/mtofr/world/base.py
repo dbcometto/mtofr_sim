@@ -1,4 +1,4 @@
-"""Defines the core physical interfaces: WorldState, Platform, Environment."""
+"""Defines the core physical interfaces: WorldState, Hardware, Frontseater, Environment."""
 from abc import ABC, abstractmethod
 import numpy as np
 
@@ -27,21 +27,49 @@ class WorldState:
         return np.array([self.vx, self.vy, self.vtheta])
 
 
-class Platform(ABC):
-    """Owns physical state and its own active tasks. Computes its own controls
-    internally each tick — Agent never sends controls, only capability requests."""
+class PerfectSensor:
+    """Reports ground-truth state exactly. Placeholder seam for a future
+    noisy/partial-observability sensor model, without changing Hardware's interface."""
+    def read(self, state: WorldState) -> WorldState:
+        return state
+
+
+class Hardware(ABC):
+    """Owns physical state and executes low-level controls each tick — the
+    MCU/actuator-equivalent layer. Knows nothing about capabilities or missions;
+    only ever sees raw controls in and raw (sensed) state out."""
     state: WorldState
+
+    def __init__(self):
+        self._sensor = PerfectSensor()
+        self._pending_controls: dict = {}
 
     @abstractmethod
     def calculate_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState: ...
 
-    @abstractmethod
-    def compute_controls(self) -> dict:
-        """Derive current controls from whatever tasks/avoid-state are active."""
+    def send_controls(self, controls: dict) -> None:
+        self._pending_controls = controls
+
+    def read_state(self) -> WorldState:
+        return self._sensor.read(self.state)
 
     def step_dynamics(self, dt: float) -> None:
-        controls = self.compute_controls()
-        self.state = self.calculate_dynamics(self.state, controls, dt)
+        self.state = self.calculate_dynamics(self.state, self._pending_controls, dt)
+
+
+class Frontseater(ABC):
+    """Platform-specific planning/control brain. Talks to its Hardware only
+    through send_controls/read_state — never touches Hardware.state directly.
+    Backseater never sends controls, only capability requests."""
+    hardware: Hardware
+
+    @abstractmethod
+    def compute_controls(self, state: WorldState) -> dict:
+        """Derive current controls from whatever tasks/avoid-state are active."""
+
+    def update(self) -> None:
+        controls = self.compute_controls(self.hardware.read_state())
+        self.hardware.send_controls(controls)
 
     @abstractmethod
     def capabilities(self) -> dict:
@@ -60,8 +88,8 @@ class Platform(ABC):
 
 
 class Environment(ABC):
-    """Steps physical dynamics for a set of platforms"""
+    """Steps physical dynamics for a set of hardware instances"""
 
     @abstractmethod
-    def step_dynamics_all(self, platforms: dict, dt: float) -> None:
-        """platforms: eid -> Platform. Mutates each platform's state in place."""
+    def step_dynamics_all(self, hardware: dict, dt: float) -> None:
+        """hardware: eid -> Hardware. Mutates each hardware's state in place."""

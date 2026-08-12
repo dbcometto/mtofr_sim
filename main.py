@@ -4,8 +4,9 @@ import time
 from mtofr.viz import PlanePlotter
 from mtofr.world.world import World
 from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms import BicycleUGV
-from mtofr.agent.agent import Agent
+from mtofr.world.ground_plane.hardware import BicycleHardware
+from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.backseater.backseater import Backseater
 from mtofr.memory.memory import Memory
 
 
@@ -61,13 +62,14 @@ test_mission_2 = {
 
 
 #==========# Set up #==========#
-platform = BicycleUGV()
+hardware = BicycleHardware()
+frontseater = BicycleFrontseater(hardware=hardware)
 memory = Memory()
-agent = Agent(platform=platform, memory=memory, mission_graph=test_mission_2)
+backseater = Backseater(frontseater=frontseater, memory=memory, mission_graph=test_mission_2)
 
 
-env = GroundPlaneEnv()
-world = World(env, agents={"ugv1": agent})
+environment = GroundPlaneEnv()
+world = World(environment, backseaters={"ugv1": backseater})
 vizualizer = None if ENABLE_HEADLESS else PlanePlotter()
 
 

@@ -10,14 +10,14 @@ class ParamSpec:
     name: str
     type: type
     description: str
-    is_memory_ref: bool = False   # if True, the mission graph supplies a Memory id (str);
-                                   # Backseater resolves it to an instance of `type` before actuate()
+    is_knowledge_ref: bool = False   # if True, the mission graph supplies a Knowledge id (str);
+                                      # Backseater resolves it to an instance of `type` before actuate()
 
     def describe(self) -> str:
         """Plaintext description of this param for a planner LLM or human."""
-        if self.is_memory_ref:
-            memory_description = self.type.describe()
-            return f"{self.name} (Memory id -> {self.type.__name__}): {self.description}\n        {memory_description}"
+        if self.is_knowledge_ref:
+            knowledge_description = self.type.describe()
+            return f"{self.name} (Knowledge id -> {self.type.__name__}): {self.description}\n        {knowledge_description}"
         return f"{self.name} ({self.type.__name__}): {self.description}"
 
 
@@ -32,7 +32,7 @@ class Capability:
 
     def validate(self, resolved_params: dict) -> None:
         """Raises ValueError if resolved_params doesn't satisfy every ParamSpec.
-        Expects params already resolved (memory ids swapped for their entries)."""
+        Expects params already resolved (knowledge ids swapped for their entries)."""
         for spec in self.params:
             if spec.name not in resolved_params:
                 raise ValueError(f"Capability '{self.ipl_type}' missing required param '{spec.name}'")

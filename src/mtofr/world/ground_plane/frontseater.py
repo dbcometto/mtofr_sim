@@ -5,15 +5,16 @@ from scipy.optimize import minimize
 from mtofr.world.base import Frontseater, WorldState
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
-from mtofr.memory.memory import Location
+from mtofr.knowledge.knowledge import Location
 
 
 class BicycleFrontseater(Frontseater):
     """The planning/control brain for a UGV with bicycle dynamics. Runs its own
     internal MPC against its Hardware's dynamics model, never touching
     Hardware.state directly — only send_controls/read_state."""
-    def __init__(self, hardware: BicycleHardware, nav_horizon=10, nav_dt=0.1, nav_tolerance=0.5):
+    def __init__(self, hardware: BicycleHardware, nav_horizon=10, nav_dt=0.1, nav_tolerance=0.5, debug=False):
         self.hardware = hardware
+        self.debug = debug
 
         self.nav_horizon = nav_horizon
         self.nav_dt = nav_dt
@@ -30,13 +31,13 @@ class BicycleFrontseater(Frontseater):
             Capability(
                 ipl_type="move_to",
                 description="Navigate to a target location until within tolerance, using the internal MPC.",
-                params=(ParamSpec("target", Location, "Location to navigate to", is_memory_ref=True),),
+                params=(ParamSpec("target", Location, "Location to navigate to", is_knowledge_ref=True),),
             ),
             Capability(
                 ipl_type="avoid",
                 description="Add a persistent circular avoid-region; instantaneous, not a duration task.",
                 params=(
-                    ParamSpec("point", Location, "Center of the avoid-region", is_memory_ref=True),
+                    ParamSpec("point", Location, "Center of the avoid-region", is_knowledge_ref=True),
                     ParamSpec("radius", float, "Avoid-region radius in meters"),
                 ),
             ),
@@ -48,7 +49,8 @@ class BicycleFrontseater(Frontseater):
 
     def actuate(self, capability: str, params: dict) -> str:
         handle = str(uuid.uuid4())
-        print(f"[Frontseater] actuate('{capability}', {params}) -> handle {handle[:8]}")
+        if self.debug:
+            print(f"[Frontseater] actuate('{capability}', {params}) -> handle {handle[:8]}")
 
         if capability == "move_to":
             self._active_handle = handle

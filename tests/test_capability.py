@@ -2,7 +2,7 @@
 import unittest
 
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
-from mtofr.memory.memory import Location
+from mtofr.knowledge.knowledge import Location
 
 
 class TestCapability(unittest.TestCase):
@@ -10,7 +10,7 @@ class TestCapability(unittest.TestCase):
         self.move_to = Capability(
             ipl_type="move_to",
             description="Navigate to a target location.",
-            params=(ParamSpec("target", Location, "Location to navigate to", is_memory_ref=True),),
+            params=(ParamSpec("target", Location, "Location to navigate to", is_knowledge_ref=True),),
         )
 
     def test_validate_accepts_correct_types(self):
@@ -24,7 +24,7 @@ class TestCapability(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.move_to.validate({"target": (1.0, 2.0)})   # tuple, not a Location
 
-    def test_describe_includes_memory_entry_description(self):
+    def test_describe_includes_knowledge_entry_description(self):
         description = self.move_to.describe()
         self.assertIn("move_to", description)
         self.assertIn(Location.describe(), description)

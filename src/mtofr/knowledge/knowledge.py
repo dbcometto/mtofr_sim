@@ -1,11 +1,11 @@
-"""Defines memory"""
+"""Defines knowledge"""
 from abc import ABC, abstractmethod
 
-#==========# Main Memory Storage #==========#
+#==========# Main Knowledge Storage #==========#
 
-class Memory:
+class Knowledge:
     """Typed store of known entities (locations, later agents, conditions, etc).
-    Currently one instance per backseater; a planner-level Memory is expected later too."""
+    Currently one instance per backseater; a planner-level Knowledge is expected later too."""
 
     def __init__(self):
         self._entries = {}   # id -> entry object
@@ -16,14 +16,19 @@ class Memory:
     def get(self, id: str):
         return self._entries[id]
 
+    def all(self) -> dict:
+        """id -> entry for every known entry, regardless of type. The query
+        path a visualization tool or human uses to browse a platform's full knowledge."""
+        return dict(self._entries)
+
     def all_of_type(self, cls) -> dict:
         return {id: e for id, e in self._entries.items() if isinstance(e, cls)}
 
 
-#==========# Individual Memories #==========#
+#==========# Individual Entries #==========#
 
-class MemoryEntry(ABC):
-    """Base for typed memory entries. Platforms/systems are free to define their own entry
+class KnowledgeEntry(ABC):
+    """Base for typed knowledge entries. Platforms/systems are free to define their own entry
     types beyond the ones built in here — every entry type must self-describe in plaintext
     so a planner LLM or human can understand a custom type without reading its source, the
     same self-description contract Capability/ParamSpec use."""
@@ -33,8 +38,8 @@ class MemoryEntry(ABC):
         """Plaintext description of what this entry type represents and its fields."""
 
 
-class Location(MemoryEntry):
-    """A location memory (2D)"""
+class Location(KnowledgeEntry):
+    """A location knowledge entry (2D)"""
     def __init__(self, x, y):
         self.x = x
         self.y = y

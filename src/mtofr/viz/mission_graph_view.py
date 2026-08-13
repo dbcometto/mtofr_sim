@@ -110,7 +110,7 @@ class MissionGraphViewer:
                 if target not in positions:
                     continue
                 self._render_edge(ax, node_id, target, positions[node_id], positions[target],
-                                   edge.get("conditions", []), show_edge_labels)
+                                   edge.get("condition", []), show_edge_labels)
 
         for node_id, position in positions.items():
             self._render_node(ax, mission_graph, node_id, position, active_node_id, primitive_statuses)
@@ -134,7 +134,7 @@ class MissionGraphViewer:
         ax.set_ylim(min(ys) - LAYOUT_PADDING, max(ys) + LAYOUT_PADDING)
 
     def _render_edge(self, ax, source_id: str, target_id: str, source: tuple, target: tuple,
-                      conditions: list, show_edge_labels: bool) -> None:
+                      condition: list, show_edge_labels: bool) -> None:
         x1, y1 = source
         x2, y2 = target
         # A single annotate() spanning the whole edge would put the arrowhead
@@ -146,10 +146,10 @@ class MissionGraphViewer:
 
         midpoint = ((x1 + x2) / 2, (y1 + y2) / 2)
         label_position = (midpoint[0], midpoint[1] + LABEL_Y_OFFSET)
-        label = f"{source_id} -> {target_id}: {self._describe_conditions(conditions)}"
+        label = f"{source_id} -> {target_id}: {self._describe_condition(condition)}"
         self._edges.append({"midpoint": midpoint, "label": label})
         if show_edge_labels:
-            ax.text(label_position[0], label_position[1], self._abbreviate_conditions(conditions),
+            ax.text(label_position[0], label_position[1], self._abbreviate_condition(condition),
                     fontsize=7, color="black", ha="center", va="center", clip_on=False)
 
     @staticmethod
@@ -223,19 +223,20 @@ class MissionGraphViewer:
         for name, primitive in primitives.items():
             if node_id == active_node_id and primitive_statuses and name in primitive_statuses:
                 info = primitive_statuses[name]
-                lines.append(f"{name} ({info['type']}): {info['status']}")
+                lines.append(f"{name} ({info['capability']}): {info['status']}")
             else:
-                lines.append(f"{name} ({primitive['type']})")
+                lines.append(f"{name} ({primitive['capability']})")
         return "\n".join(lines)
 
     @staticmethod
-    def _describe_conditions(conditions: list) -> str:
-        if not conditions:
+    def _describe_condition(condition: list) -> str:
+        if not condition:
             return "(always)"
-        return ", ".join(f"{condition['primitive']}={condition['status']}" for condition in conditions)
+        return " ".join(str(token) for token in condition)
 
     @staticmethod
-    def _abbreviate_conditions(conditions: list) -> str:
-        if not conditions:
+    def _abbreviate_condition(condition: list, max_length: int = 24) -> str:
+        if not condition:
             return "*"
-        return ",".join(f"{condition['primitive']}={condition['status'][0]}" for condition in conditions)
+        text = " ".join(str(token) for token in condition)
+        return text if len(text) <= max_length else text[:max_length - 1] + "…"

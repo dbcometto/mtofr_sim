@@ -78,12 +78,14 @@ class Frontseater(ABC):
         (and eventually a planner) uses instead of assuming what the platform can do."""
 
     @abstractmethod
-    def actuate(self, capability: str, params: dict) -> str:
+    def start_capability(self, capability: str, inputs: dict) -> str:
         """Start a capability task. Returns a handle. Status begins as 'received'."""
 
     @abstractmethod
     def poll_status(self, handle: str) -> dict:
-        """Returns {"status": "received"|"in_progress"|"success"|"fail"|"timeout"}."""
+        """Returns {"status": "received"|"in_progress"|"success"|"fail"|"timeout",
+        "outputs": {name: value, ...}}. `outputs` may include any subset of the
+        capability's declared OutputSpecs, whichever are meaningful for the current status."""
 
     @abstractmethod
     def cancel(self, handle: str) -> None: ...

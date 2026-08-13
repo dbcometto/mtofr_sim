@@ -12,34 +12,41 @@ class BicycleFrontseater(Frontseater):
     """The planning/control brain for a UGV with bicycle dynamics. Runs its own
     internal MPC against its Hardware's dynamics model, never touching
     Hardware.state directly — only send_controls/read_state."""
-    def __init__(self, hardware: BicycleHardware, nav_horizon=10, nav_dt=0.1, nav_tolerance=0.5, debug=False):
+    def __init__(self, hardware: BicycleHardware, nav_horizon=10, nav_dt=0.1, debug=False):
         self.hardware = hardware
         self.debug = debug
 
         self.nav_horizon = nav_horizon
         self.nav_dt = nav_dt
-        self.nav_tolerance = nav_tolerance
         self._prev_solution = np.zeros(nav_horizon * 2)   # warm-start cache
 
         self._avoid_regions = []   # persistent, not a task: [{"point": Location, "radius": float}]
 
         self._active_handle = None
         self._active_target = None   # Location
+        self._active_tolerance = None   # float
         self._task_status = {}     # handle -> status string
+        self._task_capability = {}   # handle -> ipl_type, so poll_status knows which outputs to report
+        self._arrived = {}         # handle -> bool, latest "arrived" output for a move_to task
 
         self._capability_registry = CapabilityRegistry([
             Capability(
                 ipl_type="move_to",
                 description="Navigate to a target location until within tolerance, using the internal MPC.",
-                params=(ParamSpec("target", Location, "Location to navigate to", is_knowledge_ref=True),),
+                inputs=(
+                    ParamSpec("target", Location, "Location to navigate to"),
+                    ParamSpec("tolerance", float, "Distance within which the target counts as reached, in meters"),
+                ),
+                outputs=(ParamSpec("arrived", bool, "True once within tolerance of the current target"),),
             ),
             Capability(
                 ipl_type="avoid",
                 description="Add a persistent circular avoid-region; instantaneous, not a duration task.",
-                params=(
-                    ParamSpec("point", Location, "Center of the avoid-region", is_knowledge_ref=True),
+                inputs=(
+                    ParamSpec("point", Location, "Center of the avoid-region"),
                     ParamSpec("radius", float, "Avoid-region radius in meters"),
                 ),
+                outputs=(ParamSpec("registered", bool, "True once the avoid-region has been registered"),),
             ),
         ])
 
@@ -47,18 +54,22 @@ class BicycleFrontseater(Frontseater):
     def capabilities(self) -> CapabilityRegistry:
         return self._capability_registry
 
-    def actuate(self, capability: str, params: dict) -> str:
+    def start_capability(self, capability: str, inputs: dict) -> str:
         handle = str(uuid.uuid4())
         if self.debug:
-            print(f"[Frontseater] actuate('{capability}', {params}) -> handle {handle[:8]}")
+            print(f"[Frontseater] start_capability('{capability}', {inputs}) -> handle {handle[:8]}")
+
+        self._task_capability[handle] = capability
 
         if capability == "move_to":
             self._active_handle = handle
-            self._active_target = params["target"]
+            self._active_target = inputs["target"]
+            self._active_tolerance = inputs["tolerance"]
             self._task_status[handle] = "received"
+            self._arrived[handle] = False
 
         elif capability == "avoid":
-            self._avoid_regions.append(params)   # {"point": Location, "radius": float}
+            self._avoid_regions.append(inputs)   # {"point": Location, "radius": float}
             self._task_status[handle] = "success"   # instantaneous, not a duration task
 
         else:
@@ -73,20 +84,28 @@ class BicycleFrontseater(Frontseater):
             current_state = self.hardware.read_state()
             distance = np.hypot(current_state.x - self._active_target.x,
                                  current_state.y - self._active_target.y)
-            if distance <= self.nav_tolerance:
+            if distance <= self._active_tolerance:
                 status = "success"
+                self._arrived[handle] = True
                 self._active_handle = None
                 self._active_target = None
+                self._active_tolerance = None
             else:
                 status = "in_progress"
             self._task_status[handle] = status
 
-        return {"status": status}
+        capability = self._task_capability.get(handle)
+        if capability == "move_to":
+            return {"status": status, "outputs": {"arrived": self._arrived[handle]}}
+        if capability == "avoid":
+            return {"status": status, "outputs": {"registered": status == "success"}}
+        return {"status": status, "outputs": {}}
 
     def cancel(self, handle: str) -> None:
         if handle == self._active_handle:
             self._active_handle = None
             self._active_target = None
+            self._active_tolerance = None
         self._task_status[handle] = "fail"
 
     #=====# Controls (internal MPC) #=====#

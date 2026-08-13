@@ -278,7 +278,7 @@ class MissionDashboard:
         self.capability_tree.delete(*self.capability_tree.get_children())
         for name, info in status["primitives"].items():
             self.capability_tree.insert(
-                "", tk.END, iid=name, values=(info["type"], info["status"], info["handle"] or "")
+                "", tk.END, iid=name, values=(info["capability"], info["status"], info["handle"] or "")
             )
 
     def _refresh_mission_graph(self, backseater, status: dict) -> None:

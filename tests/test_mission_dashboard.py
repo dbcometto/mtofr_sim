@@ -31,9 +31,14 @@ class TestMissionDashboard(unittest.TestCase):
         hardware = BicycleHardware()
         frontseater = BicycleFrontseater(hardware=hardware)
         knowledge = Knowledge()
-        knowledge.add("goal", Location(2.0, 0.0))
         mission_graph = {
-            "nodes": {"n1": {"primitives": {"nav": {"type": "move_to", "params": {"target": "goal"}}}}},
+            "knowledge": {
+                "goal": {"type": Location, "value": Location(2.0, 0.0)},
+                "tolerance": {"type": float, "value": 0.5},
+            },
+            "nodes": {"n1": {"primitives": {
+                "nav": {"capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"}},
+            }}},
             "edges": {},
             "start": "n1",
         }

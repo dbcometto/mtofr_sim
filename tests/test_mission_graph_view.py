@@ -10,8 +10,8 @@ from mtofr.viz.mission_graph_view import compute_graph_layout, MissionGraphViewe
 LINEAR_GRAPH = {
     "nodes": {"n1": {"primitives": {}}, "n2": {"primitives": {}}},
     "edges": {
-        "n1": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n2"}],
-        "n2": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n1"}],
+        "n1": [{"condition": ["ugv1/arrived", "==", True], "to": "n2"}],
+        "n2": [{"condition": ["ugv1/arrived", "==", True], "to": "n1"}],
     },
     "start": "n1",
 }
@@ -20,8 +20,8 @@ BRANCHING_GRAPH = {
     "nodes": {"n1": {"primitives": {}}, "n2": {"primitives": {}}, "n3": {"primitives": {}}},
     "edges": {
         "n1": [
-            {"conditions": [{"primitive": "nav", "status": "success"}], "to": "n2"},
-            {"conditions": [{"primitive": "nav", "status": "fail"}], "to": "n3"},
+            {"condition": ["ugv1/arrived", "==", True], "to": "n2"},
+            {"condition": ["ugv1/arrived", "==", False], "to": "n3"},
         ],
     },
     "start": "n1",
@@ -29,14 +29,14 @@ BRANCHING_GRAPH = {
 
 CYCLE_GRAPH = {
     "nodes": {
-        "n1": {"primitives": {"nav": {"type": "move_to", "params": {}}}},
+        "n1": {"primitives": {"nav": {"capability": "move_to", "inputs": {}}}},
         "n2": {"primitives": {}},
         "n3": {"primitives": {}},
     },
     "edges": {
-        "n1": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n2"}],
-        "n2": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n3"}],
-        "n3": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "n1"}],
+        "n1": [{"condition": ["ugv1/arrived", "==", True], "to": "n2"}],
+        "n2": [{"condition": ["ugv1/arrived", "==", True], "to": "n3"}],
+        "n3": [{"condition": ["ugv1/arrived", "==", True], "to": "n1"}],
     },
     "start": "n1",
 }
@@ -97,7 +97,7 @@ class TestMissionGraphViewerRender(unittest.TestCase):
         self.viewer.render(self.ax, LINEAR_GRAPH, active_node_id="n1")
         display_x, display_y = self.viewer._to_display(self.viewer._edges[0]["midpoint"])
         label = self.viewer.find_edge_label_at(display_x, display_y)
-        self.assertEqual(label, "n1 -> n2: nav=success")
+        self.assertEqual(label, "n1 -> n2: ugv1/arrived == True")
 
     def test_edge_arrowhead_sits_at_the_midpoint_not_the_target_node(self):
         # Regression test: an arrowhead drawn at the target node's exact center was
@@ -119,8 +119,8 @@ class TestMissionGraphViewerRender(unittest.TestCase):
         self.viewer.render(self.ax, LINEAR_GRAPH, active_node_id="n1")
         self.assertIsNone(self.viewer.find_edge_label_at(None, None))
 
-    def test_describe_conditions_reports_always_when_unconditional(self):
-        self.assertEqual(MissionGraphViewer._describe_conditions([]), "(always)")
+    def test_describe_condition_reports_always_when_unconditional(self):
+        self.assertEqual(MissionGraphViewer._describe_condition([]), "(always)")
 
     def test_render_records_one_edge_entry_per_edge_including_the_cycle_closer(self):
         self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1")
@@ -168,11 +168,11 @@ class TestMissionGraphViewerRender(unittest.TestCase):
 
     def test_node_hover_label_includes_live_status_for_active_node(self):
         self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1",
-                            primitive_statuses={"nav": {"type": "move_to", "status": "in_progress", "handle": "abc"}})
+                            primitive_statuses={"nav": {"capability": "move_to", "status": "in_progress", "handle": "abc"}})
         label = next(node["label"] for node in self.viewer._nodes if node["label"].startswith("n1"))
         self.assertIn("in_progress", label)
 
-    def test_node_hover_label_for_inactive_node_shows_type_only(self):
+    def test_node_hover_label_for_inactive_node_shows_capability_only(self):
         self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1", primitive_statuses=None)
         label = next(node["label"] for node in self.viewer._nodes if node["label"].startswith("n1"))
         self.assertIn("move_to", label)

@@ -19,42 +19,66 @@ ENABLE_HEADLESS = False
 DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
 
 test_mission = {
+    "knowledge": {
+        "ugv1/arrived": {"type": bool, "value": False},
+        "ugv1/nav_tolerance": {"type": float, "value": 0.5},
+        "ugv1/avoid_radius": {"type": float, "value": 2.0},
+        "origin": {"type": Location, "value": Location(0.0, 0.0)},
+        "northeast": {"type": Location, "value": Location(5.0, 5.0)},
+        "southwest": {"type": Location, "value": Location(-5.0, -5.0)},
+    },
     "nodes": {
         "outbound": {"primitives": {
-            "avoid_origin": {"type": "avoid", "params": {"point": "origin", "radius": 2.0}},
-            "nav": {"type": "move_to", "params": {"target": "northeast"}},
+            "avoid_origin": {"capability": "avoid", "inputs": {"point": "origin", "radius": "ugv1/avoid_radius"}},
+            "nav": {"capability": "move_to", "inputs": {"target": "northeast", "tolerance": "ugv1/nav_tolerance"},
+                    "outputs": {"arrived": "ugv1/arrived"}},
         }},
         "return": {"primitives": {
-            "avoid_origin": {"type": "avoid", "params": {"point": "origin", "radius": 2.0}},
-            "nav": {"type": "move_to", "params": {"target": "southwest"}},
+            "avoid_origin": {"capability": "avoid", "inputs": {"point": "origin", "radius": "ugv1/avoid_radius"}},
+            "nav": {"capability": "move_to", "inputs": {"target": "southwest", "tolerance": "ugv1/nav_tolerance"},
+                    "outputs": {"arrived": "ugv1/arrived"}},
         }},
     },
     "edges": {
-        "outbound": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "return"}],
-        "return": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "outbound"}],
+        "outbound": [{"condition": ["ugv1/arrived", "==", True], "to": "return"}],
+        "return": [{"condition": ["ugv1/arrived", "==", True], "to": "outbound"}],
     },
     "start": "outbound",
 }
 
 
 test_mission_2 = {
+    "knowledge": {
+        "ugv1/arrived": {"type": bool, "value": False},
+        "ugv1/nav_tolerance": {"type": float, "value": 0.5},
+        "ugv1/avoid_radius_small": {"type": float, "value": 2.0},
+        "ugv1/avoid_radius_large": {"type": float, "value": 3.0},
+        "east": {"type": Location, "value": Location(7.0, 7.0)},
+        "west": {"type": Location, "value": Location(-7.0, 7.0)},
+        "southeast": {"type": Location, "value": Location(7.0, -7.0)},
+        "top_center": {"type": Location, "value": Location(0.0, 9.0)},
+        "north_of_origin": {"type": Location, "value": Location(0.0, 2.0)},
+    },
     "nodes": {
         "head_east": {"primitives": {
-            "nav": {"type": "move_to", "params": {"target": "east"}},
+            "nav": {"capability": "move_to", "inputs": {"target": "east", "tolerance": "ugv1/nav_tolerance"},
+                    "outputs": {"arrived": "ugv1/arrived"}},
         }},
         "loop_west": {"primitives": {
-            "avoid_top_center": {"type": "avoid", "params": {"point": "top_center", "radius": 3.0}},
-            "nav": {"type": "move_to", "params": {"target": "west"}},
+            "avoid_top_center": {"capability": "avoid", "inputs": {"point": "top_center", "radius": "ugv1/avoid_radius_large"}},
+            "nav": {"capability": "move_to", "inputs": {"target": "west", "tolerance": "ugv1/nav_tolerance"},
+                    "outputs": {"arrived": "ugv1/arrived"}},
         }},
         "return_southeast": {"primitives": {
-            "avoid_origin": {"type": "avoid", "params": {"point": "north_of_origin", "radius": 2.0}},
-            "nav": {"type": "move_to", "params": {"target": "southeast"}},
+            "avoid_origin": {"capability": "avoid", "inputs": {"point": "north_of_origin", "radius": "ugv1/avoid_radius_small"}},
+            "nav": {"capability": "move_to", "inputs": {"target": "southeast", "tolerance": "ugv1/nav_tolerance"},
+                    "outputs": {"arrived": "ugv1/arrived"}},
         }},
     },
     "edges": {
-        "head_east": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "loop_west"}],
-        "loop_west": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "return_southeast"}],
-        "return_southeast": [{"conditions": [{"primitive": "nav", "status": "success"}], "to": "head_east"}],
+        "head_east": [{"condition": ["ugv1/arrived", "==", True], "to": "loop_west"}],
+        "loop_west": [{"condition": ["ugv1/arrived", "==", True], "to": "return_southeast"}],
+        "return_southeast": [{"condition": ["ugv1/arrived", "==", True], "to": "head_east"}],
     },
     "start": "head_east",
 }
@@ -66,15 +90,6 @@ hardware = BicycleHardware()
 frontseater = BicycleFrontseater(hardware=hardware, debug=DEBUG)
 
 knowledge = Knowledge()
-knowledge.add("origin", Location(0.0, 0.0))
-knowledge.add("northeast", Location(5.0, 5.0))
-knowledge.add("southwest", Location(-5.0, -5.0))
-knowledge.add("east", Location(7.0, 7.0))
-knowledge.add("west", Location(-7.0, 7.0))
-knowledge.add("southeast", Location(7.0, -7.0))
-knowledge.add("top_center", Location(0.0, 9.0))
-knowledge.add("north_of_origin", Location(0.0, 2.0))
-
 backseater = Backseater(frontseater=frontseater, knowledge=knowledge, mission_graph=test_mission_2, debug=DEBUG)
 
 

@@ -6,48 +6,69 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ParamSpec:
-    """Describes one named input a capability's params dict must contain."""
+    """Describes one named field of a capability — either an input its inputs dict must
+    contain, or an output it may write via poll_status(); the same shape serves both.
+    Every field is a Knowledge reference: the mission graph always supplies a Knowledge
+    key (str), and Backseater always resolves/commits it as an instance of `type` — there
+    is no separate "raw value" path. A capability may omit any declared output on a given
+    poll, whichever are meaningful for its current status."""
     name: str
     type: type
     description: str
-    is_knowledge_ref: bool = False   # if True, the mission graph supplies a Knowledge id (str);
-                                      # Backseater resolves it to an instance of `type` before actuate()
 
     def describe(self) -> str:
-        """Plaintext description of this param for a planner LLM or human."""
-        if self.is_knowledge_ref:
-            knowledge_description = self.type.describe()
-            return f"{self.name} (Knowledge id -> {self.type.__name__}): {self.description}\n        {knowledge_description}"
-        return f"{self.name} ({self.type.__name__}): {self.description}"
+        """Plaintext description of this field for a planner LLM or human."""
+        header = f"{self.name} (Knowledge id -> {self.type.__name__}): {self.description}"
+        if hasattr(self.type, "describe"):   # KnowledgeEntry subclasses self-describe; plain types (float, bool, ...) don't
+            return f"{header}\n        {self.type.describe()}"
+        return header
 
 
 @dataclass(frozen=True)
 class Capability:
     """One platform-agnostic action a Frontseater can perform. `ipl_type` is the
-    mission-graph-facing name — what a primitive's "type" field must match, and what
+    mission-graph-facing name — what a primitive's "capability" field must match, and what
     Backseater passes straight through to Frontseater.actuate()."""
     ipl_type: str
     description: str
-    params: tuple[ParamSpec, ...] = ()
+    inputs: tuple[ParamSpec, ...] = ()
+    outputs: tuple[ParamSpec, ...] = ()
 
-    def validate(self, resolved_params: dict) -> None:
-        """Raises ValueError if resolved_params doesn't satisfy every ParamSpec.
-        Expects params already resolved (knowledge ids swapped for their entries)."""
-        for spec in self.params:
-            if spec.name not in resolved_params:
-                raise ValueError(f"Capability '{self.ipl_type}' missing required param '{spec.name}'")
-            value = resolved_params[spec.name]
+    def validate_inputs(self, resolved_inputs: dict) -> None:
+        """Raises ValueError if resolved_inputs doesn't satisfy every ParamSpec.
+        Expects inputs already resolved (knowledge ids swapped for their entries)."""
+        for spec in self.inputs:
+            if spec.name not in resolved_inputs:
+                raise ValueError(f"Capability '{self.ipl_type}' missing required input '{spec.name}'")
+            value = resolved_inputs[spec.name]
             if not isinstance(value, spec.type):
                 raise ValueError(
-                    f"Capability '{self.ipl_type}' param '{spec.name}' expected {spec.type.__name__}, "
+                    f"Capability '{self.ipl_type}' input '{spec.name}' expected {spec.type.__name__}, "
+                    f"got {type(value).__name__}"
+                )
+
+    def validate_outputs(self, outputs: dict) -> None:
+        """Raises ValueError if any output present in `outputs` doesn't match its declared
+        ParamSpec type, or isn't a declared output at all. Missing outputs are fine —
+        a capability may only have something meaningful to report on some statuses."""
+        outputs_by_name = {spec.name: spec for spec in self.outputs}
+        for name, value in outputs.items():
+            spec = outputs_by_name.get(name)
+            if spec is None:
+                raise ValueError(f"Capability '{self.ipl_type}' has no declared output '{name}'")
+            if not isinstance(value, spec.type):
+                raise ValueError(
+                    f"Capability '{self.ipl_type}' output '{name}' expected {spec.type.__name__}, "
                     f"got {type(value).__name__}"
                 )
 
     def describe(self) -> str:
-        """Plaintext description of this capability and its params, for a planner LLM or human."""
+        """Plaintext description of this capability, its inputs, and its outputs, for a planner LLM or human."""
         lines = [f"{self.ipl_type}: {self.description}"]
-        for spec in self.params:
-            lines.append(f"    {spec.describe()}")
+        for spec in self.inputs:
+            lines.append(f"    input {spec.describe()}")
+        for spec in self.outputs:
+            lines.append(f"    output {spec.describe()}")
         return "\n".join(lines)
 
 

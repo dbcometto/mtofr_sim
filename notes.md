@@ -1,6 +1,19 @@
 # Notes
 
 
+## Status 13 Aug 26 (local LLM setup: Ollama + Qwen3.5:4b)
+(Written by Claude)
+
+Decision made outside a session (relayed at the start of this one): the mission-commander LLM will run locally via Ollama on `qwen3.5:4b`, CPU-only, native Windows, no cloud API. Rejected cloud alternatives: no sustained free tier on the Claude API for this use case, and Ollama Cloud is a separate paid product not used here. This session only brought the repo's scripts/docs/config up to date with what had already been manually tested (`ollama -v`, `ollama pull qwen3.5:4b`, a manual `ollama run` chat test) — no Python integration or eval work yet.
+
+- **New `llm/ollama/` directory** (moved from a flat `scripts/`) holding `start_ollama.bat`, `stop_ollama.bat`, and `llm_config.yaml` — grouped so a future non-Ollama backend wouldn't require restructuring (`llm/` is the general package, `ollama/` this specific runner).
+- Both scripts now echo success/failure based on `%errorlevel%` instead of `start_ollama.bat` echoing unconditionally and `stop_ollama.bat` echoing nothing at all. Caveat documented inline and in `docs/llm_setup.md`: `start /min ollama serve` returns as soon as `cmd` launches the process, not once the server has actually bound its port, so this only catches launch failures (e.g. `ollama.exe` not found), not runtime ones (e.g. port already in use).
+- **Config is a plain YAML file (`llm_config.yaml`), not an Ollama Modelfile** — model name, system prompt, `temperature`, `num_predict`, `keep_alive` are decided by the user to be loaded and passed explicitly by future Python code on each `/api/chat` call, rather than baked into a custom model via `ollama create`. This keeps the system prompt tunable without rebuilding a model, which matters since the real mission-commander prompt (tool schema, few-shot examples) is unwritten and will iterate a lot during the eval work. System prompt content itself is a minimal placeholder for now (suppress verbose/markdown-heavy default style) — not the real mission-commander prompt.
+- **New `docs/llm_setup.md`**: full setup workflow (install → disable autostart → pull model → start/stop scripts) separated from usage (CLI `ollama run` vs stateless `/api/chat`, and the config file's role). `README.md`'s Ollama section now just points here instead of inlining the steps.
+- Explicitly not done this session, deferred to next: the Python `/api/chat` client (stateless — history managed manually, unlike `ollama run`'s CLI), streaming, the agentic tool-call loop, and an eval set validating Qwen3.5:4b (or backups considered: Phi-4-mini, Gemma 4 E4B) against the actual mission-graph tool schema (add/remove node, add/remove edge, add/remove knowledge fact).
+- **Found and fixed a real bug in `stop_ollama.bat` during smoke-testing**, not just a schema/docs change: killing `ollama.exe` alone left it respawning within moments, even with the Task Manager auto-start entry set to disabled. Root cause: the installer's tray app (`ollama app.exe`, a separate process from the server) acts as a watchdog and restarts `ollama.exe` whenever it's killed; Task Manager's "disabled" setting only prevents the tray app from launching at the next login, it doesn't quit an already-running instance or stop it from respawning the server. `stop_ollama.bat` now kills `ollama app.exe` before `ollama.exe`, verified via a live smoke test (two dangling `ollama.exe`/`ollama app.exe` processes from an earlier manual chat session, confirmed fully gone with no respawn after the fix).
+
+
 ## Status 13 Aug 26 (knowledge-based edge conditions and capability outputs)
 (Written by Claude)
 

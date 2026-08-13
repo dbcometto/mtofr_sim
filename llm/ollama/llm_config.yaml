@@ -1,0 +1,21 @@
+# Config for the local Ollama-hosted mission-commander LLM.
+# Loaded by future Python client code (not built yet) and passed explicitly
+# on each /api/chat request -- nothing here is baked into the model itself,
+# so changing any of this does not require re-running `ollama create`.
+
+model: qwen3.5:4b
+
+# Minimal placeholder: only enough to suppress the model's default
+# verbose/markdown-heavy conversational style. Real mission-commander
+# prompt design (tool schema, few-shot examples, etc.) is future work,
+# done alongside the tool-call eval.
+system_prompt: "Respond concisely and in plain text. Do not use markdown formatting."
+
+# Generation parameters, passed as Ollama's "options" object.
+temperature: 0.2
+num_predict: 512
+
+# How long Ollama keeps the model loaded in memory after the last request,
+# before unloading it to free RAM. Ollama's own default is "5m"; set explicitly
+# here so it's visible alongside the other params rather than left implicit.
+keep_alive: "5m"

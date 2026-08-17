@@ -44,6 +44,7 @@ class Hardware(ABC):
     def __init__(self):
         self._sensor = PerfectSensor()
         self._pending_controls: dict = {}
+        self.platform_id: str | None = None
 
     @abstractmethod
     def calculate_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState: ...
@@ -63,6 +64,16 @@ class Frontseater(ABC):
     through send_controls/read_state — never touches Hardware.state directly.
     Backseater never sends controls, only capability requests."""
     hardware: Hardware
+    _platform_id: str | None = None
+
+    @property
+    def platform_id(self) -> str | None:
+        return self._platform_id
+
+    @platform_id.setter
+    def platform_id(self, value: str | None) -> None:
+        self._platform_id = value
+        self.hardware.platform_id = value
 
     @abstractmethod
     def compute_controls(self, state: WorldState) -> dict:

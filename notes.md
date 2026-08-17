@@ -1,6 +1,21 @@
 # Notes
 
 
+## Status 17 Aug 26 (second platform, platform identity)
+(Written by Claude)
+
+Narrow structural test, at the user's request: get a second platform (`ugv2`) running independently alongside `ugv1` in `main.py`, in the same `World` instance, to validate that `World`/`Backseater`/the viz layer already support more than one platform — not a coordination test. Cross-platform coordination is explicitly scoped to the future planner relaying facts across an async comms boundary (build order step 7), not something Backseaters do directly, so this added no shared Knowledge and no cross-platform logic.
+
+- **Survey result: almost everything already supported this.** `World.__init__`/`step()`/`get_states()` are already keyed on an `entity_id -> Backseater` dict, iterated generically; `GroundPlaneEnv.step_dynamics_all` iterates a hardware dict the same way; `MissionDashboard`'s platform dropdown is built from `list(world.backseaters.keys())` and `PlanePlotter.render()` already draws one marker per entity in `states.items()`. None of this was aspirational — it was real, tested code with no single-platform assumption baked in. The only actual gap was `main.py` hardcoding exactly one platform's construction.
+- **New platform identity chain**, per the user's answer to "where should the id live": `Backseater` owns an optional `platform_id: str` given at construction, and is the only place identity is ever set directly. Its constructor assigns `self.frontseater.platform_id = platform_id` (guarded: only when both `platform_id` and `frontseater` are not `None`, so existing tests using minimal fake Frontseaters without a `hardware` attribute don't break). `Frontseater.platform_id` (`world/base.py`) is a `@property`, not a plain attribute — its setter also assigns `self.hardware.platform_id`, so setting it once on the Frontseater cascades all the way to Hardware without Backseater ever reaching past its Frontseater. `Hardware.platform_id` is a plain `str | None` attribute, defaulting to `None`.
+- **New `missions.py`**: `main.py`'s mission graph dicts moved out into their own module at the user's request ("move our test mission dicts into a new file and import them so it is cleaner"). The old unused `test_mission` dict (dead code — never actually passed to a `Backseater`) was dropped; the previously-used `test_mission_2` was renamed `mission_ugv1`; a new, structurally distinct `mission_ugv2` (2-node north/south patrol with its own avoid region, vs. `ugv1`'s 3-node east/west/southeast loop) was added per the user's preference for a genuinely different mission over reusing the same graph shape.
+- `main.py` now builds two fully independent stacks (`ugv1_hardware`/`ugv1_frontseater`/`ugv1_knowledge`/`ugv1_backseater`, and the same for `ugv2`, each with its own `platform_id`), sharing only the same `GroundPlaneEnv`/`World` instance. Both start at the origin and diverge toward their own mission's targets — no collision handling, per the user's explicit "pretend they pass through each other for now."
+- Tests: new `test_platform_identity.py` (id cascade Backseater -> Frontseater -> Hardware, and that omitting it leaves both untouched) and `test_multi_platform_world.py` (two independent stacks ticked through one real `World`, confirming no Knowledge key leakage and independent movement toward separate targets). 138 tests total (up from 131). Verified with a 50-tick headless run of the actual `main.py` module showing both platforms' `platform_id`s, positions, and Knowledge key sets staying fully separate.
+- **Known issue, not investigated this session**: the sim currently runs slowly while only using a single CPU core (observed by the user during this session, not yet profiled) — worth a look before piling on more platforms or a heavier planner, since it may get worse as this project's compute needs grow.
+
+Still left off at step 3 (the minimal single-platform planner) — untouched this session.
+
+
 ## Status 13 Aug 26 (local LLM setup: Ollama + Qwen3.5:4b)
 (Written by Claude)
 

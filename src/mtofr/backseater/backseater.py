@@ -19,11 +19,15 @@ class Backseater:
     Backseater never touches WorldState directly.
     """
 
-    def __init__(self, frontseater, knowledge, mission_graph=None, debug=False):
+    def __init__(self, frontseater, knowledge, mission_graph=None, platform_id: str = None, debug=False):
         self.frontseater = frontseater
         self.knowledge = knowledge
         self.mission_graph = mission_graph or {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
         self.debug = debug
+
+        self.platform_id = platform_id
+        if self.platform_id is not None and self.frontseater is not None:
+            self.frontseater.platform_id = platform_id  # cascades down to frontseater.hardware
 
         for key, declaration in self.mission_graph.get("knowledge", {}).items():
             self.knowledge.declare(key, declaration["type"], declaration["value"])

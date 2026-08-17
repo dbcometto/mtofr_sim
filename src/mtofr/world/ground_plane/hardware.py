@@ -1,6 +1,6 @@
 """Defines hardware to be used with the ground_plane environment"""
-import numpy as np
 from mtofr.world.base import Hardware, WorldState
+from mtofr.world.ground_plane.dynamics import bicycle_step
 
 
 class BicycleHardware(Hardware):
@@ -22,18 +22,8 @@ class BicycleHardware(Hardware):
         self._pending_controls = {"vel": 0.0, "steer": 0.0}
 
     def calculate_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState:
-        speed = np.clip(controls["vel"], self.min_speed, self.max_speed)
-        steer = np.clip(controls["steer"], self.min_steer, self.max_steer)
-
-        vtheta = (speed / self.wheelbase) * np.tan(steer)
-        theta = state.theta + vtheta * dt
-        vx = speed * np.cos(theta)
-        vy = speed * np.sin(theta)
-
-        return WorldState(
-            t=state.t + dt,
-            x=state.x + vx * dt,
-            y=state.y + vy * dt,
-            theta=theta,
-            vx=vx, vy=vy, vtheta=vtheta,
+        x, y, theta, vx, vy, vtheta = bicycle_step(
+            state.x, state.y, state.theta, controls["vel"], controls["steer"],
+            self.wheelbase, self.min_speed, self.max_speed, self.min_steer, self.max_steer, dt,
         )
+        return WorldState(t=state.t + dt, x=x, y=y, theta=theta, vx=vx, vy=vy, vtheta=vtheta)

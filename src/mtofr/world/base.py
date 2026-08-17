@@ -79,9 +79,26 @@ class Frontseater(ABC):
     def compute_controls(self, state: WorldState) -> dict:
         """Derive current controls from whatever tasks/avoid-state are active."""
 
+    def begin_update(self) -> None:
+        """Starts this tick's control computation. Default: computes synchronously and
+        stashes the result for finish_update(). A Frontseater whose compute_controls is
+        expensive (e.g. an MPC solve) can override this pair to dispatch the work to a
+        worker process here and collect the result in finish_update() instead, so World
+        can start every platform's work before blocking on any one of them -- see
+        BicycleFrontseater for the concrete case this exists for."""
+        self._pending_controls = self.compute_controls(self.hardware.read_state())
+
+    def finish_update(self) -> None:
+        """Completes this tick's control computation started by begin_update() and
+        applies it. Default: the result is already in hand (begin_update computed it
+        synchronously), so this just applies it."""
+        self.hardware.send_controls(self._pending_controls)
+
     def update(self) -> None:
-        controls = self.compute_controls(self.hardware.read_state())
-        self.hardware.send_controls(controls)
+        """Convenience for callers that don't need begin_update/finish_update split
+        across other platforms' work (e.g. direct single-platform use in tests)."""
+        self.begin_update()
+        self.finish_update()
 
     @abstractmethod
     def capabilities(self) -> CapabilityRegistry:

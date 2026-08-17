@@ -14,6 +14,7 @@ except tk.TclError:
 
 from mtofr.backseater.backseater import Backseater
 from mtofr.knowledge.knowledge import Knowledge, Location
+from mtofr.relay.relay import Relay
 from mtofr.world.ground_plane.env import GroundPlaneEnv
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
@@ -21,7 +22,7 @@ from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
 from mtofr.world.world import World
 
 if TK_AVAILABLE:
-    from mtofr.viz.dashboard import MissionDashboard, GRAPH_PLOT_BACKGROUND
+    from mtofr.viz.dashboard import MissionDashboard, GRAPH_PLOT_BACKGROUND, MISSION_OVERVIEW_ID
     import matplotlib.colors
 
 
@@ -45,12 +46,14 @@ class TestMissionDashboard(unittest.TestCase):
         backseater = Backseater(frontseater=frontseater, knowledge=knowledge, mission_graph=mission_graph)
         self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
+        # These tests exercise the single-platform mission-graph/capability view,
+        # so select a specific platform rather than relying on the default
+        # (Mission Overview, covered separately in TestMissionDashboardDefaults).
+        self.dashboard.selected_id.set("ugv1")
+        self.dashboard._refresh()
 
     def tearDown(self):
         self.dashboard._on_close()
-
-    def test_dropdown_defaults_to_first_platform(self):
-        self.assertEqual(self.dashboard.selected_id.get(), "ugv1")
 
     def test_update_after_a_sim_tick_does_not_raise(self):
         self.world.step(0.1)
@@ -65,11 +68,11 @@ class TestMissionDashboard(unittest.TestCase):
         self.dashboard.update()
         self.assertIn("goal", self.dashboard.knowledge_tree.get_children())
 
-    def test_knowledge_tree_splits_type_name_and_value_into_columns(self):
+    def test_knowledge_tree_splits_name_type_and_value_into_columns_in_that_order(self):
         self.dashboard.update()
-        type_name, name, value = self.dashboard.knowledge_tree.item("goal", "values")
-        self.assertEqual(type_name, "Location")
+        name, type_name, value = self.dashboard.knowledge_tree.item("goal", "values")
         self.assertEqual(name, "goal")
+        self.assertEqual(type_name, "Location")
         self.assertEqual(value, "x=2.0, y=0.0")
 
     def test_is_open_becomes_false_after_close(self):
@@ -89,24 +92,18 @@ class TestMissionDashboard(unittest.TestCase):
         self.assertIn("Pause", self.dashboard.pause_button.cget("text"))
         self.assertEqual(self.dashboard.pause_button.cget("style"), "TButton")
 
-    def test_side_panel_defaults_to_capabilities(self):
-        self.assertEqual(self.dashboard.side_panel_choice.get(), "Capabilities")
+    def test_selecting_capabilities_panel_shows_capabilities_frame(self):
+        self.dashboard.side_panel_choice.set("Capabilities")
+        self.dashboard._show_selected_side_panel()
         packed = self.dashboard.side_panel_container.pack_slaves()
         self.assertIn(self.dashboard.capabilities_frame, packed)
         self.assertNotIn(self.dashboard.knowledge_frame, packed)
-
-    def test_selecting_knowledge_panel_shows_knowledge_frame(self):
-        self.dashboard.side_panel_choice.set("Knowledge")
-        self.dashboard._show_selected_side_panel()
-        packed = self.dashboard.side_panel_container.pack_slaves()
-        self.assertIn(self.dashboard.knowledge_frame, packed)
-        self.assertNotIn(self.dashboard.capabilities_frame, packed)
 
     def test_switching_side_panels_does_not_resize_the_container(self):
         self.dashboard.root.update_idletasks()
         width_before = self.dashboard.side_panel_container.winfo_width()
         height_before = self.dashboard.side_panel_container.winfo_height()
-        self.dashboard.side_panel_choice.set("Knowledge")
+        self.dashboard.side_panel_choice.set("Capabilities")
         self.dashboard._show_selected_side_panel()
         self.dashboard.root.update_idletasks()
         self.assertEqual(self.dashboard.side_panel_container.winfo_width(), width_before)
@@ -134,6 +131,135 @@ class TestMissionDashboard(unittest.TestCase):
         self.dashboard._last_graph_hover_xy = (1000.0, 1000.0)
         self.dashboard._apply_graph_hover()
         self.assertFalse(self.dashboard._graph_tooltip.get_visible())
+
+    def test_dropdown_includes_mission_overview(self):
+        self.assertIn(MISSION_OVERVIEW_ID, self.dashboard.platform_dropdown.cget("values"))
+
+    def test_edge_labels_checkbox_and_back_button_are_shown_for_a_selected_platform(self):
+        self.dashboard.update()
+        self.assertIn(self.dashboard.edge_labels_checkbox, self.dashboard.graph_title.pack_slaves())
+        self.assertIn(self.dashboard.back_to_overview_button, self.dashboard.graph_title.pack_slaves())
+
+    def test_back_button_returns_to_mission_overview(self):
+        self.dashboard.update()
+        self.dashboard._deselect_platform()
+        self.assertEqual(self.dashboard.selected_id.get(), MISSION_OVERVIEW_ID)
+
+
+class _FakeMouseEvent:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+@unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
+class TestMissionDashboardDefaults(unittest.TestCase):
+    """A dashboard's defaults on first construction, before anything selects
+    a specific platform or side panel."""
+    def setUp(self):
+        hardware = BicycleHardware()
+        frontseater = BicycleFrontseater(hardware=hardware)
+        backseater = Backseater(frontseater=frontseater, knowledge=Knowledge(), platform_id="ugv1")
+        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
+        self.dashboard = MissionDashboard(self.world, PlanePlotter())
+
+    def tearDown(self):
+        self.dashboard._on_close()
+
+    def test_defaults_to_mission_overview(self):
+        self.assertEqual(self.dashboard.selected_id.get(), MISSION_OVERVIEW_ID)
+
+    def test_defaults_to_the_knowledge_side_panel(self):
+        self.assertEqual(self.dashboard.side_panel_choice.get(), "Knowledge")
+        packed = self.dashboard.side_panel_container.pack_slaves()
+        self.assertIn(self.dashboard.knowledge_frame, packed)
+        self.assertNotIn(self.dashboard.capabilities_frame, packed)
+
+    def test_edge_labels_checkbox_and_back_button_are_hidden_in_overview_mode(self):
+        self.dashboard.update()
+        self.assertNotIn(self.dashboard.edge_labels_checkbox, self.dashboard.graph_title.pack_slaves())
+        self.assertNotIn(self.dashboard.back_to_overview_button, self.dashboard.graph_title.pack_slaves())
+
+    def test_switching_between_overview_and_a_platform_does_not_resize_the_window(self):
+        self.dashboard.root.update_idletasks()
+        size_before = (self.dashboard.root.winfo_width(), self.dashboard.root.winfo_height())
+
+        self.dashboard.selected_id.set("ugv1")
+        self.dashboard.update()
+        self.dashboard.root.update_idletasks()
+        size_with_platform_selected = (self.dashboard.root.winfo_width(), self.dashboard.root.winfo_height())
+
+        self.dashboard.selected_id.set(MISSION_OVERVIEW_ID)
+        self.dashboard.update()
+        self.dashboard.root.update_idletasks()
+        size_back_to_overview = (self.dashboard.root.winfo_width(), self.dashboard.root.winfo_height())
+
+        self.assertEqual(size_before, size_with_platform_selected)
+        self.assertEqual(size_before, size_back_to_overview)
+
+
+@unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
+class TestMissionDashboardOverview(unittest.TestCase):
+    """Covers the "Mission Overview" dropdown entry: a platform list (hover shows
+    active primitives) in place of a single platform's mission graph, and Relay's
+    canonical knowledge in place of a single platform's own Knowledge."""
+    def setUp(self):
+        knowledge = Knowledge()
+        mission_graph = {
+            "knowledge": {"ugv1/arrived": {"type": bool, "value": False}},
+            "nodes": {"n1": {"primitives": {
+                "nav": {"capability": "move_to", "inputs": {}, "outputs": {}},
+            }}},
+            "edges": {},
+            "start": "n1",
+        }
+        hardware = BicycleHardware()
+        frontseater = BicycleFrontseater(hardware=hardware)
+        backseater = Backseater(frontseater=frontseater, knowledge=knowledge,
+                                 mission_graph=mission_graph, platform_id="ugv1")
+        self.relay = Relay()
+        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater}, relay=self.relay)
+        self.dashboard = MissionDashboard(self.world, PlanePlotter())
+        self.dashboard.selected_id.set(MISSION_OVERVIEW_ID)
+
+    def tearDown(self):
+        self.dashboard._on_close()
+
+    def test_selecting_mission_overview_does_not_raise(self):
+        self.dashboard.update()
+
+    def test_capability_tree_is_cleared_in_overview_mode(self):
+        self.dashboard.update()
+        self.assertEqual(self.capability_tree_children(), ())
+
+    def test_knowledge_tree_reflects_relays_canonical_store(self):
+        self.world.step(0.1)
+        self.dashboard.update()
+        self.assertIn("ugv1/arrived", self.dashboard.knowledge_tree.get_children())
+
+    def test_hovering_a_platform_row_shows_a_titled_tooltip(self):
+        self.dashboard.update()
+        row_position = self.dashboard.platform_overview_viewer._rows[0]["position"]
+        display_xy = self.dashboard.platform_overview_viewer._to_display(row_position)
+        self.dashboard._last_graph_hover_xy = display_xy
+        self.dashboard._apply_graph_hover()
+        self.assertTrue(self.dashboard._graph_tooltip.get_visible())
+        self.assertIn("Platform: ugv1", self.dashboard._graph_tooltip.get_text())
+
+    def test_clicking_a_platform_row_selects_that_platform(self):
+        self.dashboard.update()
+        row_position = self.dashboard.platform_overview_viewer._rows[0]["position"]
+        display_x, display_y = self.dashboard.platform_overview_viewer._to_display(row_position)
+        self.dashboard._on_graph_click(_FakeMouseEvent(display_x, display_y))
+        self.assertEqual(self.dashboard.selected_id.get(), "ugv1")
+
+    def test_clicking_away_from_any_row_does_not_change_selection(self):
+        self.dashboard.update()
+        self.dashboard._on_graph_click(_FakeMouseEvent(10000.0, 10000.0))
+        self.assertEqual(self.dashboard.selected_id.get(), MISSION_OVERVIEW_ID)
+
+    def capability_tree_children(self):
+        return self.dashboard.capability_tree.get_children()
 
 
 if __name__ == "__main__":

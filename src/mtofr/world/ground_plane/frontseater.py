@@ -1,26 +1,26 @@
 """Defines frontseaters to be used with the ground_plane environment"""
+import multiprocessing
 import uuid
 import numpy as np
-from scipy.optimize import minimize
 from mtofr.world.base import Frontseater, WorldState
 from mtofr.world.ground_plane.hardware import BicycleHardware
+from mtofr.world.ground_plane.mpc import run_mpc_worker
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
 from mtofr.knowledge.knowledge import Location
 
 
 class BicycleFrontseater(Frontseater):
-    """The planning/control brain for a UGV with bicycle dynamics. Runs its own
-    internal MPC against its Hardware's dynamics model, never touching
-    Hardware.state directly — only send_controls/read_state."""
+    """The planning/control brain for a UGV with bicycle dynamics. Runs its internal MPC
+    in a dedicated, persistent worker process (see mtofr.world.ground_plane.mpc) so that
+    multiple platforms' solves can overlap instead of serializing on one core -- this
+    Frontseater never touches Hardware.state directly, only send_controls/read_state,
+    same as before; only the MPC solve itself moved off the main process."""
     def __init__(self, hardware: BicycleHardware, nav_horizon=10, nav_dt=0.1, debug=False):
         self.hardware = hardware
         self.debug = debug
 
         self.nav_horizon = nav_horizon
         self.nav_dt = nav_dt
-        self._prev_solution = np.zeros(nav_horizon * 2)   # warm-start cache
-
-        self._avoid_regions = []   # persistent, not a task: [{"point": Location, "radius": float}]
 
         self._active_handle = None
         self._active_target = None   # Location
@@ -50,6 +50,21 @@ class BicycleFrontseater(Frontseater):
             ),
         ])
 
+        # The worker holds the warm-start solution and avoid-region list resident for
+        # this platform's lifetime -- see run_mpc_worker. daemon=True so a forgotten
+        # shutdown() doesn't keep the interpreter alive on exit.
+        self._request_queue = multiprocessing.Queue()
+        self._response_queue = multiprocessing.Queue()
+        self._worker_process = multiprocessing.Process(
+            target=run_mpc_worker,
+            args=(self._request_queue, self._response_queue, nav_horizon, nav_dt,
+                  hardware.wheelbase, hardware.min_speed, hardware.max_speed,
+                  hardware.min_steer, hardware.max_steer),
+            daemon=True,
+        )
+        self._worker_process.start()
+        self._awaiting_response = False   # set in begin_update(), consumed in finish_update()
+
     #=====# Capabilities #=====#
     def capabilities(self) -> CapabilityRegistry:
         return self._capability_registry
@@ -69,7 +84,8 @@ class BicycleFrontseater(Frontseater):
             self._arrived[handle] = False
 
         elif capability == "avoid":
-            self._avoid_regions.append(inputs)   # {"point": Location, "radius": float}
+            point, radius = inputs["point"], inputs["radius"]
+            self._request_queue.put({"type": "add_avoid_region", "point_x": point.x, "point_y": point.y, "radius": radius})
             self._task_status[handle] = "success"   # instantaneous, not a duration task
 
         else:
@@ -109,65 +125,49 @@ class BicycleFrontseater(Frontseater):
         self._task_status[handle] = "fail"
 
     #=====# Controls (internal MPC) #=====#
-    def _rollout_cost(self, control_seq, cost_fn, start_state):
-        controls = control_seq.reshape(self.nav_horizon, 2)
-        cost = 0.0
-        state = start_state
-
-        for vel, steer in controls:
-            u = [vel, steer]
-            state = self.hardware.calculate_dynamics(state, {"vel": vel, "steer": steer}, self.nav_dt)
-            cost += cost_fn(state, u)
-        return cost
-
     def compute_controls(self, state: WorldState) -> dict:
+        """Synchronous, single-process reference path: only ever idle here, since the
+        real per-tick solve goes through begin_update()/finish_update() and the worker
+        process instead (see World.step(), which calls those, not this). Kept so
+        BicycleFrontseater still satisfies Frontseater's abstract interface directly."""
         if self._active_target is None:
             return {"vel": 0.0, "steer": 0.0}
+        raise NotImplementedError(
+            "BicycleFrontseater solves the MPC via its worker process through "
+            "begin_update()/finish_update(), not by calling compute_controls() directly."
+        )
 
-        target = self._active_target
-        avoid = self._avoid_regions
+    def begin_update(self) -> None:
+        if self._active_target is None:
+            self._awaiting_response = False
+            return
+        state = self.hardware.read_state()
+        self._request_queue.put({
+            "type": "compute",
+            "state": (state.x, state.y, state.theta),
+            "target": (self._active_target.x, self._active_target.y),
+        })
+        self._awaiting_response = True
 
-        def platform_cost_fn(s, u):
-            bearing = np.arctan2(target.y - s.y, target.x - s.x)
-            heading_error = np.arctan2(np.sin(s.theta - bearing), np.cos(s.theta - bearing))
-            return 20 * heading_error**2
+    def finish_update(self) -> None:
+        if not self._awaiting_response:
+            self.hardware.send_controls({"vel": 0.0, "steer": 0.0})
+            return
+        result = self._response_queue.get()
+        self.hardware.send_controls({"vel": result["vel"], "steer": result["steer"]})
 
-        def standard_cost_fn(s, u, R=None):
-            u = np.array(u)
-            if R is None:
-                R = np.diag([1.0, 0.1])
-            return u.T @ R @ u
+    #=====# Lifecycle #=====#
+    def shutdown(self) -> None:
+        """Stops this platform's worker process. Not called automatically by anything
+        in World/Backseater -- a caller (e.g. main.py) that started this Frontseater is
+        responsible for calling it before exit."""
+        if not self._worker_process.is_alive():
+            return
+        self._request_queue.put({"type": "shutdown"})
+        self._worker_process.join(timeout=2.0)
 
-        def mission_cost_fn(s, u, Q=None, avoid_weight=100.0, avoid_heading_weight=10.0):
-            if Q is None:
-                Q = np.eye(2)
-            e = np.array([s.x - target.x, s.y - target.y])
-            cost = e.T @ Q @ e
-
-            for region in avoid:
-                point, radius = region["point"], region["radius"]
-                d = np.hypot(s.x - point.x, s.y - point.y)
-                cost += avoid_weight * max(0.0, radius - d)**2
-
-                # Penalize heading directly at the obstacle, scaled by proximity
-                avoid_bearing = np.arctan2(point.y - s.y, point.x - s.x)
-                heading_toward_avoid = np.arctan2(np.sin(s.theta - avoid_bearing), np.cos(s.theta - avoid_bearing))
-                proximity = 1.0 / (d + 0.5)   # stronger penalty the closer you are
-                cost += avoid_heading_weight * proximity * np.cos(heading_toward_avoid)**2
-
-            return cost
-
-        def cost_fn(s, u):
-            return platform_cost_fn(s, u) + standard_cost_fn(s, u) + mission_cost_fn(s, u)
-
-        prev = self._prev_solution.reshape(self.nav_horizon, 2)
-        x0 = np.vstack([prev[1:], prev[-1]]).flatten()
-
-        bounds = [(self.hardware.min_speed, self.hardware.max_speed),
-                  (self.hardware.min_steer, self.hardware.max_steer)] * self.nav_horizon
-
-        result = minimize(self._rollout_cost, x0, args=(cost_fn, state), bounds=bounds, method="SLSQP")
-
-        self._prev_solution = result.x
-        vel, steer = result.x[0], result.x[1]
-        return {"vel": vel, "steer": steer}
+    def __del__(self):
+        try:
+            self.shutdown()
+        except Exception:
+            pass

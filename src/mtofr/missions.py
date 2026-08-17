@@ -1,8 +1,17 @@
 """Example mission graphs for main.py's demo platforms."""
+from enum import IntEnum
 from mtofr.knowledge.knowledge import Location
 
 
-mission_ugv1 = {
+class MissionSet(IntEnum):
+    """Which pair of mission graphs main.py wires up for ugv1/ugv2."""
+    SPLIT = 0   # each platform runs its own independent loop, no relay/coordination
+    WAIT = 1    # ugv2 waits on a Relay-carried fact that originates on ugv1
+
+
+#==========# split: independent per-platform loops, no cross-platform coordination #==========#
+
+mission_split_ugv1 = {
     "knowledge": {
         "ugv1/arrived": {"type": bool, "value": False},
         "ugv1/nav_tolerance": {"type": float, "value": 0.5},
@@ -39,7 +48,7 @@ mission_ugv1 = {
 }
 
 
-mission_ugv2 = {
+mission_split_ugv2 = {
     "knowledge": {
         "ugv2/arrived": {"type": bool, "value": False},
         "ugv2/nav_tolerance": {"type": float, "value": 0.5},
@@ -64,4 +73,51 @@ mission_ugv2 = {
         "head_south": [{"condition": ["ugv2/arrived", "==", True], "to": "head_north"}],
     },
     "start": "head_north",
+}
+
+
+#==========# wait: ugv2 waits on a Relay-carried fact that originates on ugv1 #==========#
+
+mission_wait_ugv1 = {
+    "knowledge": {
+        "ugv1/arrived": {"type": bool, "value": False},
+        "ugv1/nav_tolerance": {"type": float, "value": 0.5},
+        "ugv1/destination": {"type": Location, "value": Location(6.0, 6.0)},
+    },
+    "nodes": {
+        "drive_to_destination": {"primitives": {
+            "nav": {"capability": "move_to", "inputs": {"target": "ugv1/destination", "tolerance": "ugv1/nav_tolerance"},
+                    "outputs": {"arrived": "ugv1/arrived"}},
+        }},
+    },
+    "edges": {},
+    "start": "drive_to_destination",
+}
+
+
+mission_wait_ugv2 = {
+    "knowledge": {
+        "ugv2/arrived": {"type": bool, "value": False},
+        "ugv2/nav_tolerance": {"type": float, "value": 0.5},
+        "ugv2/own_start": {"type": Location, "value": Location(0.0, 0.0)},
+        "ugv2/destination": {"type": Location, "value": Location(-6.0, -6.0)},
+        # Foreign key: not written by ugv2 at all, only ever filled in by Relay once
+        # ugv1 writes it. Declaring it here (per Knowledge's declare-before-use
+        # discipline) is what lets ugv2's own edge condition reference it.
+        "ugv1/arrived": {"type": bool, "value": False},
+    },
+    "nodes": {
+        "stay_at_start": {"primitives": {
+            "nav": {"capability": "move_to", "inputs": {"target": "ugv2/own_start", "tolerance": "ugv2/nav_tolerance"},
+                    "outputs": {"arrived": "ugv2/arrived"}},
+        }},
+        "drive_elsewhere": {"primitives": {
+            "nav": {"capability": "move_to", "inputs": {"target": "ugv2/destination", "tolerance": "ugv2/nav_tolerance"},
+                    "outputs": {"arrived": "ugv2/arrived"}},
+        }},
+    },
+    "edges": {
+        "stay_at_start": [{"condition": ["ugv1/arrived", "==", True], "to": "drive_elsewhere"}],
+    },
+    "start": "stay_at_start",
 }

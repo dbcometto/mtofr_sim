@@ -66,16 +66,17 @@ class TestBackseaterCapabilityResolution(unittest.TestCase):
         self.assertFalse(status["blocked"])
         self.assertEqual(
             status["primitives"],
-            {"nav": {"capability": "move_to", "status": "pending", "handle": None}},
+            {"nav": {"capability": "move_to", "status": "pending",
+                      "inputs": {"target": "goal", "tolerance": "tolerance"}}},
         )
 
-    def test_status_after_actuation_reports_capability_status_and_handle(self):
+    def test_status_after_actuation_reports_capability_status_and_inputs(self):
         self.backseater.update()
         status = self.backseater.status()
         primitive_status = status["primitives"]["nav"]
         self.assertEqual(primitive_status["capability"], "move_to")
         self.assertIn(primitive_status["status"], ("in_progress", "success"))
-        self.assertIsNotNone(primitive_status["handle"])
+        self.assertEqual(primitive_status["inputs"], {"target": "goal", "tolerance": "tolerance"})
 
     def test_status_reflects_blocked_mission(self):
         mission_graph = {

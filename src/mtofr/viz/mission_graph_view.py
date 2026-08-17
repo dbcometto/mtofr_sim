@@ -8,6 +8,13 @@ LAYOUT_ITERATIONS = 150
 LAYOUT_OPTIMAL_DISTANCE = 1.3   # target edge length the force simulation settles toward
 
 
+# id(mission_graph) -> (mission_graph, {node_id: (x, y)}); see compute_graph_layout.
+# The mission_graph itself is kept alongside the result (not just its id) so the
+# object can never be garbage-collected and have its id reused by an unrelated
+# dict while still "cached" -- that would silently return a stale, wrong layout.
+_layout_cache: dict = {}
+
+
 def compute_graph_layout(mission_graph: dict, iterations: int = LAYOUT_ITERATIONS) -> dict:
     """Returns node_id -> (x, y) via a force-directed (Fruchterman-Reingold-style)
     layout: every node pair repels, every edge attracts its two endpoints, run for
@@ -17,7 +24,17 @@ def compute_graph_layout(mission_graph: dict, iterations: int = LAYOUT_ITERATION
     cycle-closing edge is a short straight line rather than a long one that has to
     curve around intervening nodes. Deterministic: nodes start evenly spaced on a
     circle (in mission-graph insertion order) rather than at random positions, so
-    the same graph always lays out the same way."""
+    the same graph always lays out the same way.
+
+    Result is cached by the mission_graph object's identity: a mission graph is
+    static once built into a Backseater (see notes.md/CLAUDE.md), so re-running
+    150 iterations of an O(n^2) force simulation on every render() call — several
+    times a second — would recompute an answer that never changes. A future
+    Foreman that mutates a graph in place would need to invalidate this cache."""
+    cached_entry = _layout_cache.get(id(mission_graph))
+    if cached_entry is not None:
+        return cached_entry[1]
+
     node_ids = list(mission_graph.get("nodes", {}))
     if not node_ids:
         return {}
@@ -63,7 +80,9 @@ def compute_graph_layout(mission_graph: dict, iterations: int = LAYOUT_ITERATION
             step = displacement[node_id] / magnitude * min(magnitude, temperature)
             positions[node_id] = positions[node_id] + step
 
-    return {node_id: (float(position[0]), float(position[1])) for node_id, position in positions.items()}
+    result = {node_id: (float(position[0]), float(position[1])) for node_id, position in positions.items()}
+    _layout_cache[id(mission_graph)] = (mission_graph, result)
+    return result
 
 
 #==========# Viewer #==========#
@@ -146,7 +165,8 @@ class MissionGraphViewer:
 
         midpoint = ((x1 + x2) / 2, (y1 + y2) / 2)
         label_position = (midpoint[0], midpoint[1] + LABEL_Y_OFFSET)
-        label = f"{source_id} -> {target_id}: {self._describe_condition(condition)}"
+        label = (f"Edge: {source_id} -> {target_id}\n{'-' * 20}\n"
+                 f"Condition: {self._describe_condition(condition)}")
         self._edges.append({"midpoint": midpoint, "label": label})
         if show_edge_labels:
             ax.text(label_position[0], label_position[1], self._abbreviate_condition(condition),
@@ -217,7 +237,7 @@ class MissionGraphViewer:
     @staticmethod
     def _describe_node(mission_graph: dict, node_id: str, active_node_id, primitive_statuses: dict) -> str:
         primitives = mission_graph.get("nodes", {}).get(node_id, {}).get("primitives", {})
-        lines = [node_id]
+        lines = [f"Node: {node_id}", "-" * 20]
         if not primitives:
             lines.append("(no primitives)")
         for name, primitive in primitives.items():

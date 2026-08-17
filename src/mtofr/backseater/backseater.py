@@ -1,5 +1,6 @@
 """Defines a backseater"""
 from mtofr.condition.condition import parse_condition
+from mtofr.clock.clock import Clock
 
 
 class Backseater:
@@ -19,10 +20,12 @@ class Backseater:
     Backseater never touches WorldState directly.
     """
 
-    def __init__(self, frontseater, knowledge, mission_graph=None, platform_id: str = None, debug=False):
+    def __init__(self, frontseater, knowledge, mission_graph=None, platform_id: str = None,
+                 clock: Clock = None, debug=False):
         self.frontseater = frontseater
         self.knowledge = knowledge
         self.mission_graph = mission_graph or {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
+        self.clock = clock or Clock()
         self.debug = debug
 
         self.platform_id = platform_id
@@ -30,7 +33,7 @@ class Backseater:
             self.frontseater.platform_id = platform_id  # cascades down to frontseater.hardware
 
         for key, declaration in self.mission_graph.get("knowledge", {}).items():
-            self.knowledge.declare(key, declaration["type"], declaration["value"])
+            self.knowledge.declare(key, declaration["type"], declaration["value"], timestamp=self.clock.now())
 
         self._parsed_conditions = {
             node_id: [(parse_condition(edge["condition"]), edge["to"]) for edge in edges]
@@ -60,7 +63,7 @@ class Backseater:
                 name: {
                     "capability": primitive["capability"],
                     "status": self._statuses.get(name, "pending"),
-                    "handle": self._handles.get(name),
+                    "inputs": primitive.get("inputs", {}),
                 }
                 for name, primitive in primitives.items()
             },
@@ -82,7 +85,7 @@ class Backseater:
         capability.validate_outputs(outputs)
         for output_name, knowledge_key in primitive.get("outputs", {}).items():
             if output_name in outputs:
-                self.knowledge.set(knowledge_key, outputs[output_name])
+                self.knowledge.set(knowledge_key, outputs[output_name], timestamp=self.clock.now())
 
     def update(self) -> None:
         if self._blocked or self.active_node_id is None:

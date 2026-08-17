@@ -1,4 +1,5 @@
 """Tests for Knowledge (declare/set/get, type-locking) and KnowledgeEntry self-description."""
+import time
 import unittest
 
 from mtofr.knowledge.knowledge import Knowledge, Location, KnowledgeEntry
@@ -61,6 +62,56 @@ class TestKnowledge(unittest.TestCase):
         entries = knowledge.all()
         entries["loc_b"] = Location(9.0, 9.0)
         self.assertNotIn("loc_b", knowledge.all())
+
+    def test_declare_defaults_timestamp_to_wall_clock_time(self):
+        knowledge = Knowledge()
+        before = time.time()
+        knowledge.declare("ugv1/arrived", bool, False)
+        after = time.time()
+        self.assertTrue(before <= knowledge.timestamp_of("ugv1/arrived") <= after)
+
+    def test_declare_accepts_an_explicit_timestamp(self):
+        knowledge = Knowledge()
+        knowledge.declare("ugv1/arrived", bool, False, timestamp=123.0)
+        self.assertEqual(knowledge.timestamp_of("ugv1/arrived"), 123.0)
+
+    def test_set_updates_the_timestamp(self):
+        knowledge = Knowledge()
+        knowledge.declare("ugv1/arrived", bool, False, timestamp=1.0)
+        knowledge.set("ugv1/arrived", True, timestamp=2.0)
+        self.assertEqual(knowledge.timestamp_of("ugv1/arrived"), 2.0)
+
+    def test_set_defaults_timestamp_to_wall_clock_time_when_omitted(self):
+        knowledge = Knowledge()
+        knowledge.declare("ugv1/arrived", bool, False, timestamp=1.0)
+        before = time.time()
+        knowledge.set("ugv1/arrived", True)
+        after = time.time()
+        self.assertTrue(before <= knowledge.timestamp_of("ugv1/arrived") <= after)
+
+    def test_timestamp_of_returns_none_for_undeclared_key(self):
+        knowledge = Knowledge()
+        self.assertIsNone(knowledge.timestamp_of("never_declared"))
+
+    def test_set_or_declare_behaves_like_set_for_a_declared_key(self):
+        knowledge = Knowledge()
+        knowledge.declare("ugv1/arrived", bool, False)
+        knowledge.set_or_declare("ugv1/arrived", True, timestamp=5.0)
+        self.assertEqual(knowledge.get("ugv1/arrived"), True)
+        self.assertEqual(knowledge.timestamp_of("ugv1/arrived"), 5.0)
+
+    def test_set_or_declare_rejects_wrong_type_for_a_declared_key(self):
+        knowledge = Knowledge()
+        knowledge.declare("ugv1/arrived", bool, False)
+        with self.assertRaises(ValueError):
+            knowledge.set_or_declare("ugv1/arrived", "not a bool")
+
+    def test_set_or_declare_auto_declares_an_undeclared_key(self):
+        knowledge = Knowledge()
+        knowledge.set_or_declare("ugv1/new_fact", True, timestamp=5.0)
+        self.assertEqual(knowledge.get("ugv1/new_fact"), True)
+        self.assertIs(knowledge.type_of("ugv1/new_fact"), bool)
+        self.assertEqual(knowledge.timestamp_of("ugv1/new_fact"), 5.0)
 
 
 class TestLocationDescribe(unittest.TestCase):

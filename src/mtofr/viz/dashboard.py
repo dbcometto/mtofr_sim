@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
 from mtofr.viz.mission_graph_view import MissionGraphViewer
+from mtofr.viz.platform_overview_view import PlatformOverviewViewer
+
+MISSION_OVERVIEW_ID = "Mission Overview"
 
 #==========# Theme #==========#
 BACKGROUND = "#3c3c3c"
@@ -28,20 +31,30 @@ SCROLLBAR_THUMB = "#808080"
 SIDE_PANEL_WIDTH = 420
 SIDE_PANEL_HEIGHT = 220
 
+# Graph title bar is likewise a fixed size, so showing/hiding the edge-labels
+# checkbox and back button when switching between Mission Overview and a single
+# platform's mission graph never resizes the window either.
+GRAPH_TITLE_WIDTH = 340
+GRAPH_TITLE_HEIGHT = 30
+
 
 class MissionDashboard:
     """Single Tkinter window: a platform dropdown, the environment-specific spatial
     view (every platform drawn, selected one highlighted, pannable/zoomable), a
     mission graph (active node highlighted, hover for details), and a combined
-    capability-status/knowledge panel switchable via a selector. Also owns the sim's
-    pause state. Knows nothing about any specific environment or platform type — it
-    only calls World/Backseater/Knowledge's public query methods and delegates
-    spatial rendering to whatever EnvironmentViewer it's given."""
+    capability-status/knowledge panel switchable via a selector. The dropdown's
+    extra "Mission Overview" entry swaps the mission graph for a flat platform list
+    (hover shows each platform's active primitives) and the knowledge panel for
+    Relay's canonical cross-platform store, if a Relay is attached to the World.
+    Also owns the sim's pause state. Knows nothing about any specific environment or
+    platform type — it only calls World/Backseater/Knowledge/Relay's public query
+    methods and delegates spatial rendering to whatever EnvironmentViewer it's given."""
 
     def __init__(self, world, environment_viewer, title: str = "MTOFR Mission Dashboard"):
         self.world = world
         self.environment_viewer = environment_viewer
         self.mission_graph_viewer = MissionGraphViewer()
+        self.platform_overview_viewer = PlatformOverviewViewer()
         self._closed = False
         self._paused = False
         self._environment_view_initialized = False   # first render sets default limits;
@@ -55,9 +68,9 @@ class MissionDashboard:
         self._configure_theme()
 
         entity_ids = list(world.backseaters.keys())
-        self.selected_id = tk.StringVar(value=entity_ids[0] if entity_ids else "")
+        self.selected_id = tk.StringVar(value=MISSION_OVERVIEW_ID)
         self.show_edge_labels = tk.BooleanVar(value=False)
-        self.side_panel_choice = tk.StringVar(value="Capabilities")
+        self.side_panel_choice = tk.StringVar(value="Knowledge")
 
         self._build_layout(entity_ids)
         self._refresh()
@@ -112,9 +125,10 @@ class MissionDashboard:
         top.pack(side=tk.TOP, fill=tk.X, padx=6, pady=6)
 
         ttk.Label(top, text="Platform:").pack(side=tk.LEFT, padx=4)
-        dropdown = ttk.Combobox(top, values=entity_ids, textvariable=self.selected_id, state="readonly")
-        dropdown.pack(side=tk.LEFT, padx=4)
-        dropdown.bind("<<ComboboxSelected>>", lambda event: self._refresh())
+        self.platform_dropdown = ttk.Combobox(top, values=entity_ids + [MISSION_OVERVIEW_ID],
+                                               textvariable=self.selected_id, state="readonly")
+        self.platform_dropdown.pack(side=tk.LEFT, padx=4)
+        self.platform_dropdown.bind("<<ComboboxSelected>>", lambda event: self._refresh())
 
         self.pause_button = ttk.Button(top, text="⏸ Pause", command=self._toggle_pause)
         self.pause_button.pack(side=tk.LEFT, padx=10)
@@ -145,11 +159,18 @@ class MissionDashboard:
         side = ttk.Frame(parent)
         side.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        graph_title = ttk.Frame(side)
-        ttk.Label(graph_title, text="Mission graph").pack(side=tk.LEFT)
-        ttk.Checkbutton(graph_title, text="Show edge labels", variable=self.show_edge_labels,
-                         command=self._refresh).pack(side=tk.LEFT, padx=10)
-        graph_labelframe = ttk.LabelFrame(side, labelwidget=graph_title)
+        self.graph_title = ttk.Frame(side, width=GRAPH_TITLE_WIDTH, height=GRAPH_TITLE_HEIGHT)
+        self.graph_title.pack_propagate(False)   # fixed size: showing/hiding controls below must not resize anything
+        ttk.Label(self.graph_title, text="Mission Overview").pack(side=tk.LEFT)
+        # Only meaningful for a single selected platform's mission graph -- hidden
+        # while the Mission Overview platform list is showing instead.
+        self.edge_labels_checkbox = ttk.Checkbutton(
+            self.graph_title, text="Show edge labels", variable=self.show_edge_labels, command=self._refresh
+        )
+        self.back_to_overview_button = ttk.Button(
+            self.graph_title, text="⬅ Overview", command=self._deselect_platform
+        )
+        graph_labelframe = ttk.LabelFrame(side, labelwidget=self.graph_title)
         graph_labelframe.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
         self.graph_fig, self.graph_ax = plt.subplots(figsize=(4, 3))
@@ -157,6 +178,7 @@ class MissionDashboard:
         self.graph_canvas = FigureCanvasTkAgg(self.graph_fig, master=graph_labelframe)
         self.graph_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.graph_canvas.mpl_connect("motion_notify_event", self._on_graph_hover)
+        self.graph_canvas.mpl_connect("button_press_event", self._on_graph_click)
 
         panel_title = ttk.Frame(side)
         ttk.Label(panel_title, text="Panel:").pack(side=tk.LEFT)
@@ -172,15 +194,18 @@ class MissionDashboard:
         self.side_panel_container.pack_propagate(False)   # fixed size: swapping panels must not resize the window
 
         self.capabilities_frame, self.capability_tree = self._build_scrollable_tree(
-            self.side_panel_container, columns=(("type", "Type"), ("status", "Status"), ("handle", "Handle"))
+            self.side_panel_container, columns=(("type", "Type"), ("status", "Status"), ("inputs", "Inputs"))
         )
+        # Name/Type default narrower than Value so all three columns fit inside
+        # SIDE_PANEL_WIDTH without needing to resize the window on startup.
         self.knowledge_frame, self.knowledge_tree = self._build_scrollable_tree(
-            self.side_panel_container, columns=(("type", "Type"), ("name", "Name"), ("value", "Value"))
+            self.side_panel_container, columns=(("name", "Name"), ("type", "Type"), ("value", "Value")),
+            widths={"name": 90, "type": 70, "value": 220},
         )
         self._show_selected_side_panel()
 
     @staticmethod
-    def _build_scrollable_tree(parent, columns: tuple) -> tuple:
+    def _build_scrollable_tree(parent, columns: tuple, widths: dict = None) -> tuple:
         """Builds a Treeview with an always-visible vertical scrollbar and
         mouse-wheel binding (so scrolling works on hover, without first clicking
         to focus)."""
@@ -189,6 +214,8 @@ class MissionDashboard:
         tree = ttk.Treeview(frame, columns=column_ids, show="headings", height=8)
         for column_id, heading in columns:
             tree.heading(column_id, text=heading)
+            if widths and column_id in widths:
+                tree.column(column_id, width=widths[column_id])
 
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
@@ -205,7 +232,7 @@ class MissionDashboard:
         else:
             self.capabilities_frame.pack(fill=tk.BOTH, expand=True)
 
-    #=====# Hover #=====#
+    #=====# Hover / click #=====#
     def _on_graph_hover(self, event) -> None:
         # event.x/event.y are display (pixel) coordinates, which stay correctly
         # matched to the (fixed-size, in points) node/edge markers across resizes,
@@ -215,14 +242,33 @@ class MissionDashboard:
         self._apply_graph_hover()
         self.graph_canvas.draw_idle()
 
+    def _on_graph_click(self, event) -> None:
+        """Clicking a platform row in the Mission Overview list selects that
+        platform, the same as picking it from the dropdown."""
+        if self.selected_id.get() != MISSION_OVERVIEW_ID:
+            return
+        platform_id = self.platform_overview_viewer.find_platform_id_at(event.x, event.y)
+        if platform_id is not None:
+            self.selected_id.set(platform_id)
+            self._refresh()
+
+    def _deselect_platform(self) -> None:
+        """Returns from a single platform's mission graph back to the Mission
+        Overview platform list."""
+        self.selected_id.set(MISSION_OVERVIEW_ID)
+        self._refresh()
+
     def _apply_graph_hover(self) -> None:
         if self._graph_tooltip is None:
             return
         display_x, display_y = self._last_graph_hover_xy
         label = None
         if display_x is not None and display_y is not None:
-            label = (self.mission_graph_viewer.find_node_label_at(display_x, display_y)
-                     or self.mission_graph_viewer.find_edge_label_at(display_x, display_y))
+            if self.selected_id.get() == MISSION_OVERVIEW_ID:
+                label = self.platform_overview_viewer.find_platform_label_at(display_x, display_y)
+            else:
+                label = (self.mission_graph_viewer.find_node_label_at(display_x, display_y)
+                         or self.mission_graph_viewer.find_edge_label_at(display_x, display_y))
         if not label:
             self._graph_tooltip.set_visible(False)
             return
@@ -245,15 +291,33 @@ class MissionDashboard:
     #=====# Refresh #=====#
     def _refresh(self) -> None:
         self._refresh_environment_panel()
+        self._update_graph_panel_controls()
+
+        if self.selected_id.get() == MISSION_OVERVIEW_ID:
+            self.capability_tree.delete(*self.capability_tree.get_children())
+            self._refresh_platform_overview()
+            self._refresh_knowledge_tree(self.world.relay)
+            return
 
         backseater = self.world.backseaters.get(self.selected_id.get())
         if backseater is None:
             return
 
         status = backseater.status()
-        self._refresh_capability_tree(status)
+        self._refresh_capability_tree(backseater, status)
         self._refresh_mission_graph(backseater, status)
-        self._refresh_knowledge_tree(backseater)
+        self._refresh_knowledge_tree(backseater.knowledge)
+
+    def _update_graph_panel_controls(self) -> None:
+        """The edge-labels checkbox and "back to overview" button only make sense
+        for a single selected platform's mission graph -- hidden while the
+        Mission Overview platform list is showing instead."""
+        if self.selected_id.get() == MISSION_OVERVIEW_ID:
+            self.edge_labels_checkbox.pack_forget()
+            self.back_to_overview_button.pack_forget()
+        else:
+            self.edge_labels_checkbox.pack(side=tk.LEFT, padx=10)
+            self.back_to_overview_button.pack(side=tk.LEFT, padx=10)
 
     def _refresh_environment_panel(self) -> None:
         states = self.world.get_states()
@@ -274,11 +338,15 @@ class MissionDashboard:
         self.environment_viewer.render(self.environment_ax, states, selected_id=self.selected_id.get())
         self.environment_canvas.draw_idle()
 
-    def _refresh_capability_tree(self, status: dict) -> None:
+    def _refresh_capability_tree(self, backseater, status: dict) -> None:
         self.capability_tree.delete(*self.capability_tree.get_children())
         for name, info in status["primitives"].items():
+            inputs_text = ", ".join(
+                f"{field_name}={backseater.knowledge.get(key)!r}"
+                for field_name, key in info["inputs"].items()
+            )
             self.capability_tree.insert(
-                "", tk.END, iid=name, values=(info["capability"], info["status"], info["handle"] or "")
+                "", tk.END, iid=name, values=(info["capability"], info["status"], inputs_text)
             )
 
     def _refresh_mission_graph(self, backseater, status: dict) -> None:
@@ -295,12 +363,27 @@ class MissionDashboard:
         self._apply_graph_hover()
         self.graph_canvas.draw_idle()
 
-    def _refresh_knowledge_tree(self, backseater) -> None:
+    def _refresh_platform_overview(self) -> None:
+        self.graph_ax.clear()
+        self.graph_ax.set_facecolor(GRAPH_PLOT_BACKGROUND)
+        self.platform_overview_viewer.render(self.graph_ax, self.world.backseaters)
+        self._graph_tooltip = self.graph_ax.annotate(
+            "", xy=(0, 0), xytext=(15, 15), textcoords="offset points",
+            bbox=dict(boxstyle="round", fc=TOOLTIP_BACKGROUND, ec="gray"), zorder=10, visible=False,
+        )
+        self._apply_graph_hover()
+        self.graph_canvas.draw_idle()
+
+    def _refresh_knowledge_tree(self, knowledge_source) -> None:
+        """`knowledge_source` is anything exposing `.all()` — a platform's own
+        Knowledge, or the Relay's canonical cross-platform store."""
         self.knowledge_tree.delete(*self.knowledge_tree.get_children())
-        for entry_id, entry in backseater.knowledge.all().items():
+        if knowledge_source is None:
+            return
+        for entry_id, entry in knowledge_source.all().items():
             type_name = type(entry).__name__
             self.knowledge_tree.insert(
-                "", tk.END, iid=entry_id, values=(type_name, entry_id, self._describe_entry_value(entry, type_name))
+                "", tk.END, iid=entry_id, values=(entry_id, type_name, self._describe_entry_value(entry, type_name))
             )
 
     @staticmethod

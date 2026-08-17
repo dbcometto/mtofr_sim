@@ -1,6 +1,361 @@
 # Notes
 
 
+
+## Status 17 Aug 26 (performance pass: main-loop busy-spin, MPC hot-path, multiprocessing, iteration cap)
+(Written by Claude)
+
+Performance-only session, at the user's request ("the simulator seems to be limited by
+CPU compute power and is maxing out one core"). No mission-graph/architecture behavior
+changed except the two items below that were deliberately scoped in (Frontseater's
+begin_update/finish_update split, and the MPC iteration cap) — everything else is either
+a pure optimization (same output, less compute) or a bug fix.
+
+- **Found and fixed the literal cause of "one core maxed out": `main.py`'s loop never
+  slept.** It was an unthrottled busy-spin — whenever there was no physics step or
+  redraw to do yet (accumulator hasn't reached `DT`, or the sim is paused), it still
+  called `time.perf_counter()` in a tight `while True` as fast as the CPU allowed. Fixed
+  with a `time.sleep(0.001)` whenever a tick did no work. Independent of every other fix
+  below, this alone would have pegged one core permanently regardless of simulation load.
+- **Mission-graph layout was being recomputed from scratch every dashboard redraw**,
+  despite being static once a mission graph is built into a `Backseater` — 150 iterations
+  of an O(n^2) force simulation (`viz/mission_graph_view.py::compute_graph_layout`) on
+  every single tick. Now cached by the graph object's identity (`_layout_cache`,
+  keyed by `id(mission_graph)`), with the cache holding a strong reference to the graph
+  itself alongside its result — caching by `id()` alone risks a garbage-collected graph's
+  id being reused by an unrelated dict and silently returning a stale layout, so the
+  cache must keep the object alive for as long as it's cached.
+- **Dashboard redraw decoupled from physics tick rate**: `main.py` used to call
+  `vizualizer.update()` (a full redraw: environment plot, mission graph, both Treeviews)
+  after *every* `world.step()` call, including every step of a catch-up burst. Now it
+  redraws once per outer-loop iteration instead — a catch-up burst (capped at 5*DT of
+  backlog) still stays visually smooth since it's at most a handful of steps.
+- **MPC hot-path micro-optimizations** (`world/ground_plane/hardware.py::calculate_dynamics`,
+  `world/ground_plane/frontseater.py::compute_controls`, now `mpc.py::solve_mpc`):
+  profiling (`cProfile`) showed the whole simulator's cost was almost entirely inside
+  `scipy.optimize.minimize`'s cost-function evaluations, not scipy itself — replaced
+  scalar `numpy` calls (`np.clip`/`cos`/`sin`/`arctan2`/`hypot`/`tan`) with the `math`
+  module (numpy's per-call dispatch overhead dominates over the actual arithmetic for
+  scalars at this call volume — tens of thousands of calls per solve), and stopped
+  rebuilding the constant `Q`/`R` cost matrices (`np.diag`/`np.eye`) on every one of those
+  calls, inlining their quadratic forms as scalar arithmetic instead. Measured 4.6x
+  speedup on a single-process baseline (2 platforms, WAIT mission, no avoid regions):
+  300 ticks / 30s sim time went from 3.6s wall to 0.85s wall, same resulting trajectory.
+- **Multiprocessing added for the MPC solve, at the user's explicit request** after
+  confirming (profiling the harder SPLIT mission, which has `avoid` regions) that a
+  single platform's obstacle-avoidance solve is genuinely the dominant cost, and that
+  it's parallelizable since platforms are already fully independent (per the existing
+  architecture — no Backseater/Frontseater ever coordinates with another platform's
+  stack). Design, confirmed with the user before implementing:
+  - **`Frontseater` ABC gained `begin_update()`/`finish_update()`**, replacing the
+    single `update()` as what `World.step()` calls — `begin_update()` starts a
+    platform's control computation without blocking, `finish_update()` collects it.
+    This is backward compatible: the ABC's default implementation of both reproduces
+    exactly what `update()` used to do (`begin_update` calls `compute_controls()`
+    synchronously and stashes the result; `finish_update` sends it), and `update()`
+    itself still exists, now just composing the two — any Frontseater implementing
+    only `compute_controls()` (the pre-existing abstract method) needs no changes.
+    `World.step()` now does all platforms' `begin_update()` first, then all
+    `finish_update()`s, instead of interleaving update-then-dynamics per platform —
+    safe since platforms don't coordinate, so batching doesn't change per-platform
+    semantics, only lets their solves overlap.
+  - **`BicycleFrontseater` spawns one dedicated, persistent worker process per
+    platform** (created once in `__init__`, not per-tick), which holds the MPC's
+    warm-start solution and avoid-region list resident for the platform's lifetime —
+    the user's explicit choice over a shared pool shipping full solver state every
+    tick, since only the current hardware state and target actually change tick to
+    tick. `begin_update()` dispatches a `{"state", "target"}` request over a
+    `multiprocessing.Queue`; `finish_update()` blocks on the response queue. Naive
+    request/response loop, no timeout or crash recovery — matches the project's other
+    placeholder comms seams (e.g. Relay's clock sync) ahead of the real comms-boundary
+    work planned for build order step 4, at the user's explicit confirmation.
+  - The dynamics math itself was factored out into a new
+    `world/ground_plane/dynamics.py::bicycle_step()` (plain floats/math, no
+    WorldState/Hardware object) so `BicycleHardware.calculate_dynamics` and the new
+    `mpc.py::solve_mpc`'s rollout share one implementation instead of the worker
+    needing its own hand-copied physics that could drift out of sync.
+  - **Required restructuring `main.py`**: all setup code (previously unguarded
+    module-level code) moved inside `if __name__ == "__main__":`, alongside the run
+    loop. This is a Windows-specific necessity, not a style choice: `multiprocessing`'s
+    default "spawn" start method re-imports the launching script as `__main__` in every
+    worker process, so unguarded top-level setup would re-run there too — reconstructing
+    the whole world (and spawning more worker processes) recursively inside each worker.
+    `main.py`'s `finally:` block now also calls `shutdown()` on each platform's
+    Frontseater to stop its worker process cleanly on exit.
+  - Measured: on the SPLIT mission (2 platforms, with avoid regions — the hard case),
+    median per-tick wall time dropped from 54ms to ~32-36ms (parallelizing two
+    platforms' solves roughly halves the typical case, short of a clean 2x due to
+    IPC/queue overhead), but this alone did **not** fix the worst-case spike during
+    turns, since multiprocessing only overlaps platforms against each other — it can't
+    shrink one platform's own hardest solve. That took the iteration cap below.
+  - **A real pitfall found while benchmarking, not a bug in the shipped code**: an
+    early scratch benchmark script wasn't guarded by `if __name__ == "__main__":` and
+    had to be killed mid-run over the same Windows spawn-recursion risk described
+    above — a reminder that *any* script constructing a `BicycleFrontseater` at module
+    level needs the same guard as `main.py`, not just `main.py` itself.
+- **MPC iteration cap fixed the actual "slowdown on turns" the user reported.**
+  Diagnosed by instrumenting `scipy.optimize.minimize`'s own `result.nit`/`result.nfev`
+  from inside the worker process (patching `mpc.minimize` only works if done *inside*
+  the child, since Windows' spawn model means a parent-process monkeypatch never
+  reaches an already-imported child module) — this showed the worst-case ticks were
+  hitting SLSQP's default 100-iteration cap without converging near obstacles, each
+  burning 100ms-250ms+, while normal solves converge in a median of 11 iterations.
+  Capped `maxiter=20` in `mpc.py::solve_mpc`'s `minimize()` call — legitimate real-time
+  MPC practice, since a solve that hasn't converged by then will just be refined again
+  next tick from a warm start anyway. Verified apples-to-apples (both excluding the
+  one-time worker cold-start tick, which otherwise looks like a giant solve outlier):
+  worst-case tick dropped from 250ms to 72ms, with median/p90 essentially unchanged
+  (typical solves already converge well under 20 iterations). Iteration-count
+  percentiles across both platforms over a 60s SPLIT-mission run: min 1, p25 8,
+  median 11, p75 15, p90 20 (capped), with 11.7% of all solves actually hitting the cap
+  (the near-obstacle cases the cap targets).
+- **New `scripts/` directory** (top-level, not under `tests/` — these are one-off
+  profiling tools, not part of the automated suite) holding `mpc_profile.py`, which
+  replaces several one-shot diagnostic scripts written and discarded during this
+  session: runs the SPLIT mission through the real `World`/`BicycleFrontseater` stack
+  and reports both per-tick `World.step()` wall-time percentiles and per-solve
+  iteration/eval-count percentiles in one run, excluding the one-time worker
+  cold-start tick from the timing stats.
+- Tests: `test_mission_graph_view.py` gained the layout-cache regression tests (repeat
+  calls return the cached object; the cache holds a strong reference to what it cached);
+  `test_world.py`'s `FakeFrontseater` updated to expose `begin_update`/`finish_update`
+  instead of `update`, matching what `World.step()` now calls. Also fixed two tests
+  broken by the user's own unrelated rename of `mission_wait_ugv2`'s start node
+  (`"return_to_start"` -> `"stay_at_start"`): `test_missions.py` and
+  `test_relay_mission_integration.py` still referenced the old name. 189 tests total
+  (up from 187, before the two broken-then-fixed tests are counted as new). Verified
+  with the full suite (slower now, ~36s vs ~8s before multiprocessing, due to real
+  `multiprocessing.Process` spawns in the handful of tests that construct a
+  `BicycleFrontseater`) and multiple live runs of `main.py` (12-15s each), confirming
+  no errors and no leftover worker processes after shutdown (`tasklist` checked clean).
+
+Known follow-up, not done this session: the worker's request/response protocol has no
+timeout or crash-recovery, per the user's explicit "naive for now" — revisit alongside
+build order step 4's real comms boundary. Also not investigated: whether the MPC's
+finite-difference gradient (the dominant per-solve cost, per the iteration/eval-count
+data above) could be replaced with an analytic gradient for a much larger constant-factor
+speedup — flagged during design discussion as the single biggest remaining lever, but out
+of scope for this session's "tuning" ask.
+
+
+## Status 17 Aug 26 (later night) — Mission Overview dashboard polish
+(Written by Claude)
+
+Follow-up feedback pass on the Mission Overview tab added earlier tonight, all at
+the user's explicit direction:
+
+- **Graph panel is now titled "Mission Overview" unconditionally** (was "Mission
+  graph", and used to only apply to the single-platform view) — it's the same
+  panel whether it's showing a platform's mission graph or the platform list, so
+  one static title now covers both. The "Show edge labels" checkbox only makes
+  sense for the mission-graph half, so `_update_graph_panel_controls()` now
+  packs/unpacks it (and the new back button below) based on whether Mission
+  Overview or a specific platform is selected, called once per `_refresh()`.
+- **`PlatformOverviewViewer` rows are no longer hover-only**: each row always
+  shows `platform_id: "active_node_id"` inline, next to a small colored square
+  marker (`ax.scatter(..., marker="s")`) that marks exactly where to hover/click —
+  the row's tracked "position" for hit-testing is the box's coordinates, not the
+  text's, since the box is the visible target. Active-primitives detail stays
+  hover-only (`find_platform_label_at`); a new `find_platform_id_at()` reuses the
+  same hit-testing for the click-to-select path below.
+- **Mission Overview and the Knowledge side panel are now the dashboard's
+  defaults on construction** (previously the first platform + Capabilities),
+  at the user's explicit request. The knowledge Treeview's columns were also
+  reordered to Name/Type/Value (previously Type/Name/Value) with Name and Type
+  given fixed narrower widths (90/70px) than Value (220px) so all three fit
+  inside the existing fixed-width side panel without resizing on startup.
+- **Left-clicking a platform row in Mission Overview now selects that platform**
+  (`_on_graph_click`, bound to the graph canvas's `button_press_event`, calls
+  `find_platform_id_at` and sets `selected_id` exactly like the dropdown would),
+  and a new "⬅ Overview" button (visible only for a single selected platform,
+  per the checkbox-visibility logic above) calls `_deselect_platform()` to
+  return to the platform list.
+- Tests: new `test_platform_overview_view.py` (row count, the always-visible
+  inline label including the "(none)" placeholder when a platform has no active
+  node, hover-label and click-id hit-testing, box-marker presence), plus
+  `test_mission_dashboard.py` updates for the new defaults (a dedicated
+  `TestMissionDashboardDefaults` class), the Name/Type/Value column reorder, and
+  new coverage for checkbox/back-button visibility and click-to-select. 186
+  tests total (up from 171). Verified with a real headless run of `main.py`'s
+  actual `wait`-mission wiring, screenshotting the graph panel to confirm the
+  box+inline-label rendering matches what was asked for.
+
+
+## Status 17 Aug 26 (night) — Relay implemented (build order step 3)
+(Written by Claude)
+
+Built Relay per the architecture settled in the previous entry, plus the pieces it
+turned out to depend on that didn't exist yet.
+
+- **New `clock/clock.py`**: `Clock` wraps wall-clock `time.time()` with an
+  adjustable offset (`now()`, `set_offset()`). Lives on `Backseater` (not
+  Frontseater/Hardware), at the user's direction — a platform-agnostic layer is
+  the right place for something Relay needs to be able to adjust uniformly,
+  regardless of platform type.
+- **`Knowledge` gained per-key timestamps**: `declare()`/`set()` now take an
+  optional `timestamp` (defaulting to wall-clock time if omitted, so every
+  existing call site keeps working unchanged), plus a new `timestamp_of(key)`
+  accessor. `Backseater` stamps every declare/output-commit with its own
+  `clock.now()`. This is what lets Relay compare "when did each platform last
+  write this key" for last-write-wins, instead of Relay only being able to guess
+  from when it happened to notice a change.
+- **New `Knowledge.set_or_declare(key, value, timestamp=None)`**: behaves like
+  `set()` for an already-declared key, otherwise auto-declares via `type(value)`.
+  This is the deliberately-rare bypass the user asked for so a future
+  replanning flow (Frontend/LLM pushing a fact no mission graph anticipated)
+  won't be blocked by Knowledge's normal declare-before-use discipline — for a
+  pre-planned mission today, every relayed key is still pre-declared by the
+  receiving platform's own graph, so this path is essentially unused.
+- **New `relay/relay.py`**: `Relay` holds one canonical
+  `{key: {value, timestamp, platform_id}}` store. `sync(backseaters)` — called
+  by `World.step()` once per tick, after dynamics, at the user's direction
+  ("relay should sync after the backseater gets new knowledge... towards the
+  end of the tick") — does three passes: a no-op `sync_clock()` per platform
+  (resets clock offset to 0.0; the real clock-sync mechanism is still an open
+  design question per the previous entry, this just keeps the seam explicit),
+  a **pull** merging every platform's Knowledge into canonical (last-write-wins
+  by timestamp, gated by a per-platform checksum so an unchanged platform's
+  Knowledge is skipped instead of re-scanned every tick — the user's own
+  suggestion), then a **push** writing any canonical fact newer than a
+  platform's local copy back into that platform's Knowledge via
+  `set_or_declare`. Push preserves the canonical timestamp rather than
+  re-stamping "now" — re-stamping would make a pushed fact look freshly-written
+  on the next sync, letting it out-race the platform that actually originated it
+  and oscillate forever.
+- **`World` gained an optional `relay` constructor arg**, defaulting to `None`
+  (existing single/multi-platform tests untouched); `step()` calls
+  `relay.sync(self.backseaters)` at the very end when one is attached.
+- **`Backseater.status()`'s per-primitive `"handle"` field was dropped and
+  replaced with `"inputs"`** (the primitive's static `field_name -> knowledge_key`
+  mapping from the mission graph) — the user wanted the handle gone from both the
+  dashboard's capability table and its tooltips, replaced by something more
+  informative. No caching needed: `MissionDashboard` resolves each key to its
+  live value via `knowledge.get()` at render time, since the user was clear the
+  Backseater itself shouldn't own that caching.
+- **`missions.py` mission-naming convention changed** to `mission_<set>_<platform_id>`
+  at the user's explicit request: the two existing graphs were renamed
+  `mission_ugv1`/`mission_ugv2` -> `mission_split_ugv1`/`mission_split_ugv2`
+  (content unchanged), and a new pair, `mission_wait_ugv1`/`mission_wait_ugv2`,
+  demonstrates the cross-platform relay: ugv1 drives to a destination and writes
+  `ugv1/arrived`; ugv2's first node drives to its own starting location (a
+  deliberately trivial move, per the user's example), and its only outgoing edge
+  is gated purely on `ugv1/arrived == True` — a key ugv2's own graph pre-declares
+  but never writes itself, so any value it ever sees for that key can only have
+  arrived through Relay. A new exported `MissionSet(IntEnum)` (`SPLIT`/`WAIT`)
+  lives in `missions.py`; `main.py` selects the active pair via a
+  `MISSION_SETS: dict[MissionSet, tuple]` lookup keyed by a single
+  `ACTIVE_MISSION_SET` config constant, and always constructs a `Relay()`
+  regardless of which mission set is active, at the user's direction.
+- **New "Mission Overview" dashboard tab** (name chosen by the user from three
+  options offered): an extra entry in the existing platform dropdown, not a
+  separate widget. Selecting it swaps the mission-graph panel for a new
+  `viz/platform_overview_view.py::PlatformOverviewViewer` — one row per platform
+  id, hover shows that platform's active primitives — and swaps the knowledge
+  panel's source from a single platform's `Knowledge` to `Relay.all()`
+  (`_refresh_knowledge_tree` now takes any object exposing `.all()`). The
+  capability-status table is cleared while this tab is selected, since there's
+  no single active platform to describe. All hover tooltips (mission graph
+  nodes/edges, and the new platform-overview rows) now start with a
+  `"Node: "`/`"Edge: "`/`"Platform: "` title line and a separator, at the user's
+  request for "a title and maybe some nicer formatting instead of just the raw
+  data."
+- Tests: `test_clock.py`, `test_relay.py` (canonical merge, a genuine two-writer
+  timestamp conflict independent of dict iteration order, the checksum-skip
+  fast path proven via a corrupt-then-resync check, the `sync_clock` no-op, the
+  `set_or_declare` bypass), `test_missions.py`, a new
+  `test_relay_mission_integration.py` (builds the real `mission_wait_*` graphs
+  through actual `Backseater`/`BicycleFrontseater`/`BicycleHardware`/`World`/
+  `Relay` instances and confirms ugv2 only transitions off `return_to_start`
+  once ugv1 actually arrives, with an explicit assertion that ugv2's own
+  Knowledge never appears as an output key for `"ugv1/arrived"` in its own
+  graph), plus updates to every test touching `Knowledge.declare/set`'s new
+  timestamp param, `status()`'s old `"handle"` field, the renamed
+  `mission_ugv1`/`mission_ugv2` dicts, and the mission-graph-view tooltip text
+  format. 171 tests total (up from 138). Verified with a headless run of the
+  real `main.py` wiring (`ACTIVE_MISSION_SET = WAIT`) confirming `ugv1/arrived`
+  lands in `ugv2`'s own Knowledge and in `Relay.all()`, and that ugv2 actually
+  transitions to `drive_elsewhere`, purely through Relay.
+
+Left off here — 3.5 (Foreman) and 3.75 (Frontend) are next and untouched.
+
+
+## Status 17 Aug 26 (evening) — Foreman/Relay/Frontend architecture design
+(Written by Claude)
+
+Design-only session (no code changes) settling the shape of step 3+ — the 
+planner layer sitting above Backseater/Frontseater/Hardware. Following the 
+project's "discuss before implementing" pattern, this locks names and 
+responsibilities before Claude Code touches anything.
+
+- **Three components, replacing the informal "planner" from earlier build-order 
+  notes:**
+  - **Foreman** — the mission graph manager. Owns the multi-platform union 
+    view (one active node per assigned platform — a concurrent, multi-typed 
+    finite-state-machine-like structure, not yet built). Handles LLM/user tool 
+    calls that edit the graph (add/remove node, add/remove edge, add/remove 
+    knowledge, query graph state + verification status), runs a **verify** 
+    step, and delegates validated graphs down to Backseaters.
+  - **Relay** — owns the canonical cross-platform Knowledge database (distinct 
+    from each Backseater's own per-platform `Knowledge` instance) and handles 
+    conflict resolution. This is the concrete realization of the "future 
+    planner relaying facts across an async comms boundary" mentioned in the 
+    build-order's step 7 — Relay *is* that higher-level asset.
+  - **Frontend** — the user + LLM-facing layer. The LLM is one component 
+    *within* Frontend, not a peer of Foreman/Relay. Every LLM-callable tool 
+    (graph edits, knowledge query/write, mission-state query) is also exposed 
+    directly to the user — same underlying methods, multiple callers. A 
+    Frontend write acts like any other platform pushing knowledge up to Relay 
+    (own identity, e.g. `platform_id = "frontend"`/`"operator"`, same 
+    timestamp/conflict-resolution path — no bypass around Backseater-equivalent 
+    validation). A dedicated Frontend UI (buttons, a second visualizer window) 
+    is deliberately deferred; only shared method signatures need to exist for 
+    now, callable from a CLI-driven LLM loop.
+  - Names rejected along the way: "MGM"/"CM" (placeholder, disliked), Planner, 
+    Overlooker/Overseer/Overwatch (too surveillance/military-coded or awkward).
+
+- **Foreman's verify step**: checks that every Knowledge key referenced in an 
+  edge condition is declared in the graph's top-level `"knowledge"` section 
+  before delegation — reusing the same declare/type-lock concept `Knowledge` 
+  already has, just checked at graph-authoring time instead of runtime. 
+  Explicitly **out of scope for now**: edge-reachability / dead-node checking 
+  (ambiguous how to handle a legitimate terminal/success node with no outgoing 
+  edge — revisit once "mission complete" representation is decided).
+  Verify can run **manually** (user/LLM-triggered on demand) and **always 
+  automatically on "issue the order"** as a hard gate before delegation — but 
+  explicitly *not* on every single tool call, since a graph is expected to be 
+  incomplete/invalid mid-edit. The LLM's graph-query tool should return the 
+  latest verification result alongside graph state.
+
+- **Type checking is intentionally dual-location, not duplicated by mistake**: 
+  Backseater type-checks each knowledge write at the platform boundary 
+  (existing, unchanged); Relay also type-checks, since Frontend's writes reach 
+  Relay directly rather than passing through a Backseater.
+
+- **Conflict resolution**: last-write-wins by platform-recorded timestamp — 
+  explicitly a placeholder ("good enough for a thesis sim," not a robust 
+  distributed-systems answer). This requires platforms to share a consistent 
+  notion of time, which was already an implicit need for time-based mission 
+  conditions, not new scope. **Clock synchronization mechanism is tentatively 
+  Relay's job**, exact approach (authoritative clock, offset reporting, etc.) 
+  undecided and flagged as a real open question, not solved here.
+
+- Naming decided by elimination/preference, not derived from any technical 
+  constraint — flagging in case it needs revisiting once real interfaces 
+  exist and a name stops fitting.
+
+**Explicitly deferred / open, not decided this session:**
+1. Real conflict-resolution robustness beyond last-write-wins.
+2. Clock synchronization mechanism (Relay-owned, unspecified).
+3. Edge-reachability / dead-node verification.
+4. Frontend's manual UI / second visualizer window.
+5. Whether LLM chat happens via CLI or a UI panel (leaning CLI, not finalized).
+6. The still-open CPU-core profiling item from the multi-platform test session.
+
+Still nothing implemented for this layer — next session is expected to start 
+translating this into an actual Foreman/Relay/Frontend implementation plan, 
+likely starting with Foreman (graph manager + verify) since it's fully 
+testable without an LLM or Relay in the loop.
+
 ## Status 17 Aug 26 (second platform, platform identity)
 (Written by Claude)
 

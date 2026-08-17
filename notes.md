@@ -1,6 +1,240 @@
 # Notes
 
 
+## Status 17 Aug 26 (very late) — distributed/full-mesh redesign discussion (undecided, deferred)
+(Written by Claude)
+
+Design-only discussion (no code changes) proposing a significant departure from 
+the just-designed Foreman/Relay/Frontend model (previous entry, same day) — 
+not yet decided, explicitly deferred pending Claude Code's codebase-grounded 
+analysis. Recorded here so the reasoning isn't lost, not as a locked decision.
+
+**The trigger**: reconsidering whether a centralized `Relay` (already built and 
+tested — see the "Relay implemented" entry above) is architecturally honest 
+given the project's own "async/blackout-tolerant as first-class, not a 
+retrofit" principle. A centralized relay requiring a live path to one object 
+is arguably in tension with that principle, similar to ROS1's `roscore` 
+dependency vs. ROS2's decentralized DDS transport (imperfect analogy — DDS 
+still uses discovery/domains, it's not authority-free — but the spirit holds).
+
+**Proposed alternative, sketched but not committed:**
+- Drop centralized `Relay` entirely. Every platform's own `Knowledge` instance 
+  syncs pairwise, directly, with every other platform's — full mesh, assumed 
+  fully connected for now (real comms topology / partial connectivity 
+  explicitly deferred to later, if ever). Conflict resolution stays 
+  last-write-wins by timestamp, computed pairwise instead of through one 
+  canonical store.
+- `Knowledge` gains a third piece of per-key metadata, `origin_platform_id` 
+  (alongside existing `value`/`timestamp`) — the platform that held the key 
+  at its most recent timestamp update, transitively (true original source 
+  through however many hops, not just the last platform that relayed it).
+- **Status stays local** to each Backseater (+ sim world viewer) — never 
+  gossiped, since it's high-frequency and purely observational. Not part of 
+  this redesign's scope.
+- **Capabilities become a Knowledge entry** (`<platform>/capabilities`), 
+  written by a platform to its own Knowledge at init and propagated via 
+  ordinary sync like any other fact — would require `CapabilityRegistry` to 
+  become a `KnowledgeEntry` subclass (implementing `describe()`, like 
+  `Location` does) to be declarable.
+- **Mission graph structure becomes a Knowledge entry** 
+  (`<platform>/mission_graph`), deliberately separate from active-node (which 
+  stays fast-changing local Backseater state, not gossiped as part of the 
+  graph — bundling them was considered and rejected: active-node changes 
+  every tick, graph structure rarely, and conflating them under one 
+  timestamp risks a stale delayed broadcast clobbering a platform's own more 
+  recent self-transition). Assigning a platform a new mission becomes just an 
+  ordinary Knowledge write to that key — no special `load_mission` call, no 
+  privileged path.
+- **This fully absorbs what "Graph Relay" would have been** in an earlier 
+  four-relay sketch considered mid-discussion (Knowledge/Status/Capability/
+  Graph Relays) — once mission graphs are Knowledge entries, a separate Graph 
+  Relay is redundant with Knowledge Relay. That four-relay idea itself 
+  replaced an even earlier "one unified Relay with namespaced sub-interfaces" 
+  idea and a "one Relay class, four thin wrapper objects" idea — abandoned 
+  once it became clear push/pull semantics genuinely differ per data type 
+  (Knowledge bidirectional; Status/Capability pull-only), so a shared 
+  mechanism doesn't actually fit cleanly. None of these intermediate shapes 
+  are being pursued.
+- **Every platform — including a new operator/LLM "interface" platform — gets 
+  a hardcoded default/fallback mission graph at init.** For an idle UGV/UAV, 
+  something like a loiter loop; for the operator, a single node running its 
+  own capabilities (add_node, verify, issue_order, etc. — see MissionBuilder 
+  below) concurrently, with a literal `True` unconditional self-transition, 
+  so it's always "running" without any new Frontseater autonomy — Frontseater 
+  still only ever implements what the graph tells it, no decision-making 
+  added there. This single mechanism was recognized mid-discussion as solving 
+  two separate problems at once: normal idle-platform behavior, and how an 
+  operator/LLM interface stays alive and responsive without special-casing.
+- **Foreman is dropped entirely.** It was found to add no real value once 
+  cross-platform coordination turned out to be 100% Knowledge-mediated — no 
+  cross-graph *reasoning* is needed (e.g. no rule spanning two platforms' 
+  graphs together), only cross-graph *inspection* (visualizing which node's 
+  knowledge-write feeds which other platform's edge-condition read), which is 
+  a read-only structural scan belonging in the visualizer, not a backend 
+  component.
+- **MissionBuilder** replaces Foreman's editing role — the mutable, 
+  in-progress graph-editing surface (add/remove node, add/remove edge, 
+  add/remove knowledge, verify). Verify is unchanged from the previous 
+  entry's design (knowledge-declaration check only, edge-reachability still 
+  deferred; runs manually and always automatically before issuing/broadcasting 
+  a mission). Once verified, "issuing" a mission is just MissionBuilder 
+  writing the graph to the target platform's `mission_graph` Knowledge key.
+- **Interface-as-platform**: the operator/LLM is architecturally identical to 
+  any UGV/UAV — a generic, unmodified `Backseater`, with a custom Frontseater 
+  implementing the operator's own capabilities (add_node, verify, 
+  issue_order, query_status, etc.) via the same `CapabilityRegistry`/
+  `ParamSpec` self-description machinery every other capability already uses. 
+  This means the LLM's tool schema is not a bespoke thing to hand-design — 
+  it's the same `capabilities()` query path used everywhere else. Considered 
+  and rejected along the way: a dedicated `OperatorBackseater` subclass 
+  (unnecessary — the plain generic Backseater already suffices once mission 
+  graphs are just Knowledge-stored data like anything else).
+
+**Security — explicitly, deliberately not addressed.** Once "assigning a 
+mission" is just an ordinary Knowledge write, there is no privileged path 
+left to gate: any platform can write any Knowledge key, including another 
+platform's `mission_graph` or its own (e.g. an operator accidentally 
+overwriting its own default graph with something broken, with no path back). 
+This is being noted and accepted as a known limitation for this thesis's 
+scope, in the same category as the already-accepted worker-crash-handling 
+gap — not solved here, and real cryptographic/identity-based trust is 
+considered out of scope (no adversarial actor is being modeled). A narrower 
+allowlist idea (each platform locally checks a gossiped fact's 
+`origin_platform_id` against a hardcoded trusted-sources list before 
+adopting a new mission graph) was discussed as a cheap partial mitigation but 
+not committed to.
+
+**Conflict resolution robustness**: last-write-wins by timestamp remains a 
+named simplification, not a solved consensus mechanism — discussed and 
+explicitly not pursuing vector clocks or CRDTs as part of this redesign. 
+Vector clocks would only detect concurrent conflicts, not resolve them (still 
+need a tiebreak rule on top); CRDTs require a conflict-free merge rule 
+defined per data type, which arbitrary `Knowledge` values (typed objects, 
+whole mission graphs, capability registries) don't have an obvious one for. 
+Treated as a possible future upgrade, not a near-term one.
+
+**From an autonomy-research standpoint**: this direction was judged more 
+defensible than centralized Relay — a system requiring a live path to a 
+central point isn't autonomous under comms denial by definition, and 
+real field/military C2 practice already assumes comms will degrade (this 
+matches the project's own OPORD/intent-driven framing at the mission-
+authoring level; what changes here is purely the knowledge-propagation layer 
+underneath it). The trade-off is real added scope (comms topology modeling, 
+no single canonical query point, transitive-origin bookkeeping) landing 
+before Step 3.5's actual deliverable (a working MissionBuilder/LLM demo) — 
+this is a redesign of already-working, tested infrastructure (Relay), not 
+free.
+
+**Known open holes, not resolved this discussion:**
+1. Hot-swap mechanism undesigned: how a Backseater detects its own 
+   `mission_graph` key changed and switches onto the new graph; unclear what 
+   happens to in-flight primitives from the old graph on switchover.
+2. No execution-time verification: MissionBuilder's verify() only runs at 
+   authoring time; nothing gates what actually gets adopted once "issuing" is 
+   just a Knowledge write — a malformed graph could hot-swap in unchecked.
+3. Knowledge-declaration re-seeding sequencing on hot-swap is undefined (does 
+   adopting a new graph automatically re-run its own `"knowledge"` section's 
+   declarations against the platform's Knowledge store?).
+4. Clock sync's placeholder (previously `Relay.sync_clock()`) has no obvious 
+   new owner without a central Relay object — pairwise sync still needs some 
+   shared notion of "now" for last-write-wins to mean anything.
+5. The dashboard's direct Python references to every Backseater (a 
+   single-process simulation convenience) is a simplification that won't 
+   hold once this heads toward real distributed hardware (F1Tenth deployment 
+   target) — on real hardware, an operator should only see a platform's 
+   status if actually in comms range with it.
+6. Full-mesh pairwise sync is O(n²) in platform count, vs. the current 
+   Relay's O(n) — irrelevant at the current 2-platform scale, worth 
+   remembering given how much attention performance already got this project 
+   (see the "performance pass" entry above).
+7. No guaranteed path back to a platform's own default/safe graph if its 
+   `mission_graph` key gets clobbered (self-inflicted or otherwise) — related 
+   to the accepted security gap above but broader.
+
+**Status: fully undecided.** Nothing has been implemented. Next step (agreed) 
+is a Claude Code review of the actual current codebase (`Knowledge`, 
+`Backseater`, `Frontseater`, `Relay`, mission graph shape, `Condition`, 
+`CapabilityRegistry`, `World`) to assess real implementation cost against 
+what already exists, and to weigh in on the open holes above before any 
+commitment is made either way. The existing, working, tested Relay (previous 
+entry) remains in place and unmodified until/unless this direction is 
+actually chosen.
+
+
+
+
+## Status 17 Aug 26 - Step 3.5 Prompt
+
+Architecture change: the earlier three-part Foreman/Relay/Frontend design 
+(from the 17 Aug design session) is being replaced. Foreman was found to add 
+no real value once cross-platform coordination turned out to be entirely 
+Knowledge-mediated — there's no cross-graph reasoning needed, only cross-graph 
+*inspection* (e.g. visualizing which node's knowledge-write feeds which other 
+platform's edge-condition read), and that inspection is a read-only, 
+structural, per-graph-declarations scan that belongs in the visualizer, not 
+in a backend component. So "Foreman" is dropped entirely — no union-graph 
+manager exists or is needed.
+
+Step 3.5 is replaced by four Relays plus one Builder:
+
+- **Knowledge Relay** (the existing Relay class, to be renamed) — canonical 
+  cross-platform Knowledge store. Bidirectional: pulls each platform's local 
+  Knowledge into canonical (last-write-wins by timestamp), then pushes 
+  canonical facts newer than a platform's local copy back down. Synced every 
+  World tick. This component already exists and is fully implemented/tested — 
+  only the name changes as part of this restructure.
+- **Status Relay** (new) — cached, timestamped snapshot of each platform's 
+  Backseater.status() (active node, blocked flag, per-primitive 
+  capability/status/inputs). Pull-only from platforms (Relay never pushes a 
+  status back to a platform — a platform doesn't need to be told its own 
+  status). Deliberately caches rather than passing through live, so a 
+  platform's last-known status remains visible/queryable during a comms 
+  blackout — staleness (time since last update) should be inspectable 
+  alongside the cached value, not hidden.
+- **Capability Relay** (new) — cached, timestamped snapshot of each platform's 
+  Backseater.capabilities(). Also pull-only, also periodically repolled (not 
+  just fetched once at registration) in case a platform's capability set 
+  changes at runtime (e.g. after simulated damage/failure) — but capabilities 
+  change far less often than status or knowledge, so this relay's poll cadence 
+  should be configurable independently and can be much less frequent.
+- **Graph Relay** (new) — holds the authoritative, delegated mission graph per 
+  platform once MissionBuilder has pushed it. This is the query-up path (e.g. 
+  for a dashboard or LLM asking "what's currently running on ugv1") and the 
+  hand-off point that actually delegates a finished graph down to a 
+  Backseater. Distinct from MissionBuilder's in-progress/mutable graph — 
+  Graph Relay only ever holds verified, delegated graphs.
+- **MissionBuilder** (new) — the mutable, in-progress graph-editing surface. 
+  Owns one editable graph per platform (not a merged/union structure — just a 
+  dict of independent graphs, since no cross-graph reasoning is needed). 
+  Exposes add/remove node, add/remove edge, add/remove knowledge as callable 
+  methods, meant to be called by both an LLM tool-calling loop and a manual 
+  user interface later (same methods, multiple callers — this is the 
+  "Frontend" idea from the earlier design, now folded directly into 
+  MissionBuilder rather than being a separate wrapping layer). Runs verify() 
+  — currently just a knowledge-declaration check (every edge-condition 
+  Knowledge key must be declared in the graph's knowledge section) — 
+  edge-reachability/dead-node checking is still explicitly deferred. Verify 
+  runs manually on demand and always automatically as a gate before 
+  issue_order() delegates. On issue_order(), pushes the verified graph to 
+  Graph Relay (for delegation/query) and pushes the graph's knowledge 
+  declarations (types + initial values) to Knowledge Relay, so platforms 
+  receive pre-seeded values before they even start executing.
+
+After your inspection, interview me on how much of the Knowledge Relay's existing pull/push/checksum machinery generalizes across all four relays via a shared base class, versus needing to 
+stay type-specific, given push/pull semantics genuinely differ per relay 
+(Knowledge is bidirectional; Status/Capability are pull-only; Graph's 
+"push" is really a one-time delegation trigger, not a recurring sync). Don't 
+force a shared abstraction that doesn't fit the real shape of the data.  Also, some things maybe should be pushed up from the backseater (like status or capability changes... maybe even everything) rather than polled, but that may increase comm bandwidth requirements.  I am not sure status is worth pushing up frequently, so maybe polling 1/sec is enough, and polling capabilities 1/10s or 1/30s.  We'll also eventually need a way for text messages to travel from the frontseater to the user/LLM (for LLM/human replanning purpopses), but none of that machinery is implemented yet.
+
+Interview me for any questions and create live task lists of your research, planning, and then execution precesses.
+
+Please update CLAUDE.md's architecture section and add a dated notes.md entry 
+reflecting this restructure (Foreman dropped, four-relay + MissionBuilder 
+model adopted, rationale as above) before and after implementation, 
+following the standard process.
+
+
+
 
 ## Status 17 Aug 26 (performance pass: main-loop busy-spin, MPC hot-path, multiprocessing, iteration cap)
 (Written by Claude)

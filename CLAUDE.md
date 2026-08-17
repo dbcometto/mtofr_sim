@@ -78,4 +78,4 @@ For any non-trivial feature or change (not one-line fixes):
 
 
 ## Known Issues
-- Only uses 1 cpu core, which is maxed out, while the system is not performing quickly.
+- None currently

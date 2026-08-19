@@ -1,7 +1,120 @@
 # Notes
 
 
-## Status 17 Aug 26 (very late) — distributed/full-mesh redesign discussion (undecided, deferred)
+## Status 19 Aug 26 — peer-to-peer mesh redesign finalized (supersedes Foreman/Relay/Frontend and four-relay/MissionBuilder)
+(Written by Claude)
+
+Design-only session (no code changes yet), prompted by the user with a fully worked-out
+target architecture, superseding both the 17 Aug evening Foreman/Relay/Frontend design and
+the 17 Aug night four-relay + MissionBuilder design below — neither of those is being built.
+This finalizes the direction the 17 Aug (very late) "distributed/full-mesh redesign
+discussion" entry below had already sketched as undecided; that discussion is now decided,
+with several details it left open now settled (see interview answers below).
+
+**Core shift**: Backseater still fully owns the mission graph, capability dispatch, and
+enabling/disabling of capabilities — unchanged. What's new is that Frontseater/Backseater
+communication becomes continuous during a capability's execution rather than a one-shot
+resolve-then-execute: a running capability can `query()`/`write()` (or declare a brand-new
+key) through Backseater at any time while active, across any of four databases, not just
+receive values once at start.
+
+**No centralized Relay.** Every platform's own four databases sync directly with every
+other platform's, pairwise, full-mesh (assumed fully connected for now; real comms
+topology/partial connectivity explicitly deferred, as before).
+
+**Four separate databases per platform** (all owned by Backseater): **Knowledge** (keyed by
+arbitrary entry key, strongly typed, declarable at any time — not just from a mission
+graph's `"knowledge"` section at construction); **Mission** (keyed by platform_id, one
+`mission_graph` value per platform; a write requires a privilege check, type check, and
+structural verify — all three gates at the single Backseater write point — and a successful
+write triggers hot-swap); **Capabilities** (keyed by platform_id, self-write-only, gossiped
+`CapabilityRegistry` snapshot); **Status** (keyed by platform_id, self-write-only, a
+combined status + arbitrary message string, gossiped across the mesh so a remote platform's
+health/errors are observable, not just local). This fully absorbs what the four-relay
+sketch's "Graph Relay"/"Status Relay"/"Capability Relay" would have been, and folds
+"Knowledge Relay" into Backseater itself rather than a separate object.
+
+**Privilege hierarchy**: integer level per platform, 0 = highest, assigned by the simulation
+harness at construction (the runtime reassignment rule below has no bootstrap case, so the
+very first assignment is a direct harness-side write, not gated by the rule itself). A
+platform may write another platform's Mission database, or reassign another platform's
+privilege level, only if its own level is strictly higher-privilege than the target's; may
+only assign levels less-or-equal to its own; can never modify its own level. Explicit,
+deliberate placeholder — not real security, not modeling an adversarial actor, in the same
+spirit as the security gap the "very late" entry below already accepted.
+
+**Mesh sync and clock handling**: `World` drives the mesh sync itself rather than a separate
+Relay object, since it already holds every platform's Backseater — after dynamics,
+`World.step()` calls a pairwise sync between every pair of Backseaters, replacing
+`relay.sync(backseaters)`. World owns *who can currently talk to whom* (full mesh for now);
+Backseater owns *what a sync actually does* once paired, via a `sync_with()`-style method
+that absorbs the old Relay's pull/push/last-write-wins logic across all four databases.
+`Clock` (`clock/clock.py`) is repurposed, not dropped or rebuilt from scratch: each pairwise
+`sync_with()` handshake estimates a clock offset to that specific peer (replacing the single
+global offset the old `sync_clock()` reset to 0.0), and every incoming fact's timestamp is
+converted into the receiving platform's own local frame immediately and re-stamped in local
+time before storage — there is still no shared/authoritative clock anywhere. Every entry
+across all four databases tracks `origin_platform_id` (the platform that held it at its most
+recent locally-converted timestamp, transitively) — this is what privilege checks key off
+of. All type/privilege/structural checks happen write-side only, once, at the originating
+platform's `publish()` call; there is no receipt-side re-verification. Conflict resolution
+stays last-write-wins by (locally-converted) timestamp across all four databases — still a
+named simplification, not a robust consensus mechanism, per the "very late" entry's existing
+discussion of vector clocks/CRDTs as a possible-but-not-near-term upgrade.
+
+**`ParamSpec` downgraded**: carries just a key name plus a declared type (plus plaintext
+description), used only for `capabilities()`'s self-description — no longer used for eager
+value-resolution. A capability receives keys, not resolved values, and calls
+`query()`/`publish()` on Backseater itself whenever it actually needs data, for any of the
+four databases; Backseater still type-checks before a query resolves or a publish is
+accepted, keeping type-safety centralized rather than left to each Frontseater
+implementation.
+
+**Default startup mission**: every platform — including a future LLM/operator "interface"
+platform, architecturally just another platform, no special class — starts on a hardcoded
+mission graph at init (an idle/loiter loop for an ordinary platform; for the interface, a
+single node running all its own capabilities concurrently under an unconditional
+self-transition, so it's always active without any new Frontseater autonomy). **Not built
+this session, and explicitly deferred to a future step (interview answer):** any
+MissionBuilder-equivalent mission-authoring surface. When it is eventually built, the plan is
+for it to take the shape of an interactive capability/Frontseater rather than a bespoke
+system, per the user's direction — but no incremental add_node/add_edge/verify-style tool
+calls exist yet, and none are being added in this pass. For now a platform can only receive
+a complete, already-built mission graph via a Mission-database write.
+
+**Hot-swap**: when a Backseater detects its own Mission database entry has changed:
+declare/set every knowledge key listed in the new graph's knowledge section, cancel all
+currently-running capabilities from the old graph, set the active node to the new graph's
+declared start node, and start that node's capabilities.
+
+**Interview answers settled this session** (the three genuinely open architectural
+questions, asked directly since the codebase alone couldn't resolve them):
+1. *What drives the pairwise mesh sync, given Backseaters currently hold zero references to
+   each other and World is the only thing holding all of them?* — World mediates it, calling
+   into a pairwise sync method per pair of Backseaters each tick; Backseaters still never
+   store direct references to peers, preserving the existing "Backseater doesn't know about
+   other platforms" invariant, just as Relay's removal doesn't require breaking it either.
+2. *How does a mission graph actually get authored/edited before publishing, given the
+   prompt says nothing like MissionBuilder's incremental tool calls?* — Not being built this
+   pass; deferred to a future step, at which point it becomes an interactive
+   capability/Frontseater rather than a bespoke system.
+3. *What happens to `relay/relay.py` and `clock/clock.py`, given the centralized design they
+   were built for is now fully superseded?* — Relay is deleted as a standalone class; its
+   logic is rolled into Backseater (the `sync_with()`-style method above), with World only
+   exposing which platforms are currently connected (faking full connectivity for now, but
+   structured so a future comms model could restrict it). Clock is repurposed (per-peer
+   offset table via the sync_with() handshake) rather than deleted or rebuilt from scratch.
+
+**Status: decided, not yet implemented.** CLAUDE.md's architecture section has been rewritten
+to reflect this design. The existing `relay/relay.py`/`clock/clock.py` and their tests are
+still in the tree unmodified as of this entry — removal/adaptation is implementation work for
+a future session, done incrementally with tests alongside each change per the project's
+standard process, not as part of this planning-only pass. The build order's old step 3.5
+(Foreman)/3.75 (Frontend) are dropped; the mesh redesign itself becomes the (not yet done)
+step 3, with mission-authoring/LLM-interface work pushed to a new step 4.
+
+
+## [SUPERSEDED by the 19 Aug 26 peer-to-peer mesh redesign above — not built] Status 17 Aug 26 (very late) — distributed/full-mesh redesign discussion (undecided, deferred)
 (Written by Claude)
 
 Design-only discussion (no code changes) proposing a significant departure from 
@@ -163,7 +276,7 @@ actually chosen.
 
 
 
-## Status 17 Aug 26 - Step 3.5 Prompt
+## Status 17 Aug 26 - Step 3.5 Prompt (Superseded)
 
 Architecture change: the earlier three-part Foreman/Relay/Frontend design 
 (from the 17 Aug design session) is being replaced. Foreman was found to add 
@@ -513,7 +626,7 @@ turned out to depend on that didn't exist yet.
 Left off here — 3.5 (Foreman) and 3.75 (Frontend) are next and untouched.
 
 
-## Status 17 Aug 26 (evening) — Foreman/Relay/Frontend architecture design
+## [SUPERSEDED by the 19 Aug 26 peer-to-peer mesh redesign above — not built] Status 17 Aug 26 (evening) — Foreman/Relay/Frontend architecture design
 (Written by Claude)
 
 Design-only session (no code changes) settling the shape of step 3+ — the 

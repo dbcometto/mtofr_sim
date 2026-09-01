@@ -47,7 +47,11 @@ class Hardware(ABC):
         self.platform_id: str | None = None
 
     @abstractmethod
-    def calculate_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState: ...
+    def calculate_dynamics(self, state: WorldState, controls: dict, dt: float,
+                            max_speed_multiplier: float = 1.0) -> WorldState:
+        """max_speed_multiplier scales the platform's own max speed (e.g. from an
+        Environment's terrain lookup); 1.0 is a no-op for a Hardware with no such
+        concept."""
 
     def send_controls(self, controls: dict) -> None:
         self._pending_controls = controls
@@ -55,8 +59,8 @@ class Hardware(ABC):
     def read_state(self) -> WorldState:
         return self._sensor.read(self.state)
 
-    def step_dynamics(self, dt: float) -> None:
-        self.state = self.calculate_dynamics(self.state, self._pending_controls, dt)
+    def step_dynamics(self, dt: float, max_speed_multiplier: float = 1.0) -> None:
+        self.state = self.calculate_dynamics(self.state, self._pending_controls, dt, max_speed_multiplier)
 
 
 class Frontseater(ABC):

@@ -152,6 +152,103 @@ class _FakeMouseEvent:
         self.y = y
 
 
+class _FakeAxesMouseEvent:
+    """A fake matplotlib MouseEvent carrying the data-space fields (inaxes/xdata/
+    ydata/step/button) the environment pan/zoom handlers read, in addition to
+    display-space x/y."""
+    def __init__(self, ax, x, y, inaxes=True, step=0, button=1):
+        self.x = x
+        self.y = y
+        self.inaxes = ax if inaxes else None
+        xdata, ydata = ax.transData.inverted().transform((x, y))
+        self.xdata = xdata
+        self.ydata = ydata
+        self.step = step
+        self.button = button
+
+
+@unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
+class TestMissionDashboardEnvironmentPanZoom(unittest.TestCase):
+    """Scroll-to-zoom and left-drag-to-pan on the environment plot, working
+    directly without needing the matplotlib toolbar's own pan/zoom tools toggled on."""
+    def setUp(self):
+        hardware = BicycleHardware()
+        self.frontseater = BicycleFrontseater(hardware=hardware)
+        backseater = Backseater(frontseater=self.frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
+        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
+        self.dashboard = MissionDashboard(self.world, PlanePlotter())
+        self.dashboard.update()   # establishes the environment_ax's initial view limits
+        self.ax = self.dashboard.environment_ax
+
+    def tearDown(self):
+        self.dashboard._on_close()
+        self.frontseater.shutdown()
+
+    def test_scroll_up_zooms_in_around_the_cursor(self):
+        xlim_before, ylim_before = self.ax.get_xlim(), self.ax.get_ylim()
+        center = self.ax.transData.transform((0, 0))
+        event = _FakeAxesMouseEvent(self.ax, center[0], center[1], step=1)
+
+        self.dashboard._on_environment_scroll(event)
+
+        xlim_after, ylim_after = self.ax.get_xlim(), self.ax.get_ylim()
+        self.assertLess(xlim_after[1] - xlim_after[0], xlim_before[1] - xlim_before[0])
+        self.assertLess(ylim_after[1] - ylim_after[0], ylim_before[1] - ylim_before[0])
+
+    def test_scroll_down_zooms_out(self):
+        xlim_before = self.ax.get_xlim()
+        center = self.ax.transData.transform((0, 0))
+        event = _FakeAxesMouseEvent(self.ax, center[0], center[1], step=-1)
+
+        self.dashboard._on_environment_scroll(event)
+
+        xlim_after = self.ax.get_xlim()
+        self.assertGreater(xlim_after[1] - xlim_after[0], xlim_before[1] - xlim_before[0])
+
+    def test_scroll_outside_axes_does_not_raise_or_change_limits(self):
+        xlim_before = self.ax.get_xlim()
+        event = _FakeAxesMouseEvent(self.ax, 5, 5, inaxes=False, step=1)
+
+        self.dashboard._on_environment_scroll(event)
+
+        self.assertEqual(self.ax.get_xlim(), xlim_before)
+
+    def test_left_drag_pans_the_view(self):
+        xlim_before, ylim_before = self.ax.get_xlim(), self.ax.get_ylim()
+
+        start = _FakeAxesMouseEvent(self.ax, 100, 100, button=1)
+        self.dashboard._on_environment_pan_start(start)
+        moved = _FakeAxesMouseEvent(self.ax, 120, 100, button=1)
+        self.dashboard._on_environment_pan_move(moved)
+
+        xlim_after, ylim_after = self.ax.get_xlim(), self.ax.get_ylim()
+        self.assertNotEqual(xlim_after, xlim_before)
+        # A purely horizontal drag should not move the vertical extent.
+        self.assertAlmostEqual(ylim_after[0], ylim_before[0])
+        self.assertAlmostEqual(ylim_after[1], ylim_before[1])
+
+    def test_pan_end_stops_further_dragging_from_moving_the_view(self):
+        start = _FakeAxesMouseEvent(self.ax, 100, 100, button=1)
+        self.dashboard._on_environment_pan_start(start)
+        self.dashboard._on_environment_pan_end(_FakeAxesMouseEvent(self.ax, 100, 100))
+
+        xlim_before = self.ax.get_xlim()
+        moved = _FakeAxesMouseEvent(self.ax, 150, 100, button=1)
+        self.dashboard._on_environment_pan_move(moved)
+
+        self.assertEqual(self.ax.get_xlim(), xlim_before)
+
+    def test_right_click_drag_does_not_start_a_pan(self):
+        start = _FakeAxesMouseEvent(self.ax, 100, 100, button=3)
+        self.dashboard._on_environment_pan_start(start)
+
+        xlim_before = self.ax.get_xlim()
+        moved = _FakeAxesMouseEvent(self.ax, 150, 100, button=3)
+        self.dashboard._on_environment_pan_move(moved)
+
+        self.assertEqual(self.ax.get_xlim(), xlim_before)
+
+
 @unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
 class TestMissionDashboardDefaults(unittest.TestCase):
     """A dashboard's defaults on first construction, before anything selects

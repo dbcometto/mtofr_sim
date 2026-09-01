@@ -31,6 +31,7 @@ class BicycleFrontseater(Frontseater):
         self._task_output_keys = {}   # handle -> {output field name -> knowledge key}
         self._task_input_keys = {}    # handle -> {input field name -> knowledge key}
         self._arrived = {}         # handle -> bool, latest "arrived" output for a move_to task
+        self._stopwatch_start_time = {}   # handle -> simulation time (WorldState.t) at start_capability
 
         self._capability_registry = CapabilityRegistry([
             Capability(
@@ -50,6 +51,13 @@ class BicycleFrontseater(Frontseater):
                     ParamSpec("radius", float, "Avoid-region radius in meters"),
                 ),
                 outputs=(ParamSpec("registered", bool, "True once the avoid-region has been registered"),),
+            ),
+            Capability(
+                ipl_type="stopwatch",
+                description="Reports simulation time (seconds) elapsed since this capability instance "
+                            "was (re)started; resets to zero every time it is started again.",
+                inputs=(),
+                outputs=(ParamSpec("elapsed_time", float, "Seconds since this stopwatch instance started"),),
             ),
         ])
 
@@ -94,6 +102,10 @@ class BicycleFrontseater(Frontseater):
             self._request_queue.put({"type": "add_avoid_region", "point_x": point.x, "point_y": point.y, "radius": radius})
             self._task_status[handle] = "success"   # instantaneous, not a duration task
 
+        elif capability == "stopwatch":
+            self._stopwatch_start_time[handle] = self.hardware.read_state().t
+            self._task_status[handle] = "in_progress"   # never completes on its own
+
         else:
             raise ValueError(f"Unknown capability: {capability}")
 
@@ -131,6 +143,11 @@ class BicycleFrontseater(Frontseater):
             if "registered" in output_keys:
                 self.backseater.publish("knowledge", output_keys["registered"], registered)
             return {"status": status, "outputs": {"registered": registered}}
+        if capability == "stopwatch":
+            elapsed_time = self.hardware.read_state().t - self._stopwatch_start_time[handle]
+            if "elapsed_time" in output_keys:
+                self.backseater.publish("knowledge", output_keys["elapsed_time"], elapsed_time)
+            return {"status": status, "outputs": {"elapsed_time": elapsed_time}}
         return {"status": status, "outputs": {}}
 
     def cancel(self, handle: str) -> None:

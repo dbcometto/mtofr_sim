@@ -38,6 +38,19 @@ class TestBicycleHardwareDynamics(unittest.TestCase):
         end = self.hardware.calculate_dynamics(start, {"vel": 999.0, "steer": 0.0}, dt=1.0)
         self.assertAlmostEqual(end.x, self.hardware.max_speed)
 
+    def test_max_speed_multiplier_scales_the_clamp(self):
+        start = WorldState()
+        end = self.hardware.calculate_dynamics(start, {"vel": 999.0, "steer": 0.0}, dt=1.0,
+                                                max_speed_multiplier=0.5)
+        self.assertAlmostEqual(end.x, self.hardware.max_speed * 0.5)
+
+    def test_default_max_speed_multiplier_is_a_no_op(self):
+        start = WorldState()
+        with_default = self.hardware.calculate_dynamics(start, {"vel": 1.0, "steer": 0.0}, dt=1.0)
+        with_explicit_one = self.hardware.calculate_dynamics(start, {"vel": 1.0, "steer": 0.0}, dt=1.0,
+                                                               max_speed_multiplier=1.0)
+        self.assertAlmostEqual(with_default.x, with_explicit_one.x)
+
     def test_steer_is_clamped_to_bounds(self):
         start = WorldState()
         clamped = self.hardware.calculate_dynamics(start, {"vel": 1.0, "steer": 999.0}, dt=0.1)

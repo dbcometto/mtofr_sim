@@ -1,6 +1,130 @@
 # Notes
 
 
+## Status 1 Sep 26 (later) — image-based map system hooked up (build order step 4)
+
+(Written by Claude)
+
+Implemented build order step 4: the image-based cosmetic/traversability/regions map
+system is now loaded, rendered, and physically enforced, not just sitting as unused
+asset files. Interviewed first (coordinate convention, collision response, speed
+multiplier semantics, blank-map extent, yaml schema, map selection, layer-toggle UI),
+then implemented incrementally with tests at each step, per CLAUDE.md's process.
+
+**Maps moved out of `world/`**: `src/mtofr/world/maps/` → `src/mtofr/maps/` (sibling
+to `world/`/`database/`/`viz/`/etc.), since maps aren't ground_plane-specific and
+could serve a future environment. `maps/simple_test/` renamed to
+`maps/simple_village/` (all its files and yaml fields renamed to match), per this
+session's interview answer. `mtofr.maps` re-exports `GroundMap`/`TraversabilityType`/
+`RegionType` from the new `maps/ground_map.py`.
+
+**`GroundMap`** (`maps/ground_map.py`): loads a map directory's yaml (now pyyaml —
+added as a new project dependency, there was no yaml parser before) plus its three
+PNGs. Yaml schema changed from flat `"#hex": "name"` traversability entries to
+structured `"#hex": {name, blocking, speed_multiplier}` dicts, to carry the new
+physical-effect fields per-map. Coordinate convention (interview-settled): world
+`(0, 0)` is the image center, `+y` is up — matching the bicycle model's existing
+math convention — which is the opposite of image row order, so pixel sampling flips
+vertically. A sampled pixel color snaps to its *nearest* declared color (by squared
+RGB distance) rather than requiring an exact match, since PNG anti-aliasing blends a
+few pixels along every color boundary; an in-bounds color with no match falls back
+to a passable/no-effect default, off-map coordinates count as blocked.
+
+**Physical enforcement** — `GroundPlaneEnv` (`world/ground_plane/env.py`) takes an
+optional `ground_map` (`None` = today's original fully unbounded/no-effect
+behavior). Each tick, before stepping a hardware instance: samples the
+speed_multiplier at its *current* position and passes it through to
+`Hardware.calculate_dynamics()`/`step_dynamics()` (both gained a
+`max_speed_multiplier: float = 1.0` parameter — a no-op default so any other
+`Hardware` subclass is unaffected) to scale `BicycleHardware`'s own `max_speed`
+before dynamics run; then, if the resulting position is blocked, reverts to the
+previous position/heading with velocity zeroed instead of applying the step
+(interview-settled "clamp at boundary", approximated as reject-and-zero rather than
+an exact geometric boundary crossing — the raster resolution makes that
+approximation fine). `blank`'s traversability is now bounded to its 128x128m image
+extent (off-map blocked) rather than truly infinite, per this session's interview
+answer; a `MAP_NAME = None` / `mission_set.map_name = None` config is the new
+"mapless" escape hatch for the old fully-infinite behavior.
+
+**Visualization** — `PlanePlotter` (`world/ground_plane/viz/plane_plotter.py`) draws
+a `GroundMap`'s cosmetic image (always, when a map is given) at the correct
+world-meters extent via `imshow`, plus toggleable traversability/regions overlays
+(alpha-blended) with a combined legend (platform markers + terrain/region color
+swatches for whichever overlay is currently visible). `EnvironmentViewer.render()`
+(`viz/base.py`) gained `show_traversability`/`show_regions` kwargs (default
+`False`), ignored by a viewer with no map. `EnvironmentViewer` also gained a
+`background_color` class attribute (default `"white"`) that `MissionDashboard`
+applies to the environment Axes before each render; `PlanePlotter` overrides it to a
+light gray when given a `GroundMap`, so panning/zooming past the map's edge reads
+clearly as "off the map" instead of blank white. The heading indicator changed from
+`ax.arrow()` (a data-space patch, so its visual size scaled with the current
+zoom level — flagged as not ideal once maps made panning/zooming a normal thing to
+do) to a small rotated-triangle *marker* at a fixed on-screen (points) offset from
+the platform dot, computed via `ax.transData` each render — markers live in points
+like the dot's own `markersize` already did, so this stays a constant on-screen size
+across zoom levels.
+
+**Dashboard** (`viz/dashboard.py`) — two new checkboxes ("Show traversability"/"Show
+regions", unchecked by default) above the environment plot. Scroll-wheel zoom and
+left-click-drag pan now work directly on the environment canvas (bound via
+`mpl_connect` on `scroll_event`/`button_press_event`/`motion_notify_event`/
+`button_release_event`), without needing `NavigationToolbar2Tk`'s own pan/zoom tools
+toggled on first — the toolbar itself is kept for Home/Save. The environment
+figure's subplot margins were tightened (`subplots_adjust`) to shrink the blank
+space around the map view per user feedback.
+
+**Missions restructured** (`missions.py`) — replaced with a single
+`MissionSetConfig` dataclass per `MissionSet` (`map_name`, `platform_builders`,
+`mission_graphs`), gathered into one `MISSION_SETS` dict, rather than three parallel
+dicts main.py had to keep in sync by hand. `platform_builders` is
+`platform_id -> Callable[[bool], Frontseater]` — hardware/frontseater construction
+(which Hardware/Frontseater subclass, with what kwargs, what initial `WorldState`)
+now lives in `missions.py` per mission set rather than main.py, since a future
+mission set may want different platform types/hardware configs, not just
+`BicycleHardware` (per this session's interview answer, prompted by "different
+mission sets can have different hardware"). `main.py` now loops over
+`mission_set.platform_builders.items()` to build each platform's stack, rather than
+two hardcoded ugv1/ugv2 blocks — also makes main.py's setup platform-count-agnostic,
+matching `World`'s existing "platform-count-agnostic" principle. New
+`MissionSet.VILLAGE` (now the default `ACTIVE_MISSION_SET`, per user request) pairs
+`simple_village` with two new mission graphs: `mission_village_ugv1` demonstrates the
+hard block (drives straight at the map's central building, gets stopped dead at the
+wall, then gives up after a max stuck duration — see stopwatch capability below —
+and heads back to a road waypoint instead of staying stuck forever);
+`mission_village_ugv2` demonstrates the speed multiplier by looping between a road
+waypoint and a clear-terrain waypoint.
+
+**New "stopwatch" capability** (`world/ground_plane/frontseater.py`) — added so
+`mission_village_ugv1`'s "give up on the building" edge condition would have
+something to check. No inputs; one output, `elapsed_time` (float): simulation
+seconds (`WorldState.t`, not wall-clock time, so it survives catch-up bursts/pauses
+consistently) since this capability instance was (re)started, resetting to zero
+every time `Backseater` restarts it (which already happens naturally on any node
+transition, since `_activate_node()` clears `self._handles` — no special-casing
+needed for "restart on restart"). Status stays `"in_progress"` forever; it never
+completes on its own, matching the "primitive status doesn't drive transitions,
+only Knowledge does" design.
+
+**Noted but explicitly deferred (per user, "leave it as future work")**: the MPC
+solver (`world/ground_plane/mpc.py`) has no notion of `GroundMap` terrain at all —
+its rollout cost only knows the platform's fixed min/max speed and a straight-line
+target/avoid-region cost. The speed multiplier and hard block are both applied
+*after* the fact, purely physically, in `GroundPlaneEnv`; the planner itself neither
+routes through roads for a speed advantage nor anticipates the building, it just
+keeps commanding "drive toward the target" and lets the environment clamp it at the
+wall every tick. Recorded as a new item in CLAUDE.md's "Future steps (maybe)" list.
+
+Verified: `python -m unittest discover -s tests` — 307 tests, exit code 0, no crash
+(up from 260 before this session; new/updated: `test_ground_map.py`,
+`test_ground_plane_env.py`, `test_bicycle_hardware.py`, `test_plane_plotter.py`,
+`test_mission_dashboard.py`, `test_missions.py`, `test_bicycle_frontseater.py`).
+Smoke-tested `main.py` directly (both the `blank`-map WAIT mission and the new
+VILLAGE mission against `simple_village`) — user confirmed the map renders
+correctly, layer toggles + legend work, blocking/speed-multiplier behavior is
+visible (ugv1 stops at the wall then gives up after ~10s; ugv2 visibly speeds up on
+the road), scroll-zoom/drag-pan work without the toolbar, the heading marker stays a
+constant size across zoom, and the off-map area reads as gray.
+
 
 ## 1 Sep 26 - Update to CLAUDE.md plan
 

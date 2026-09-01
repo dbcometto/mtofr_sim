@@ -21,9 +21,11 @@ class BicycleHardware(Hardware):
         self.state = initial_state or WorldState()
         self._pending_controls = {"vel": 0.0, "steer": 0.0}
 
-    def calculate_dynamics(self, state: WorldState, controls: dict, dt: float) -> WorldState:
+    def calculate_dynamics(self, state: WorldState, controls: dict, dt: float,
+                            max_speed_multiplier: float = 1.0) -> WorldState:
         x, y, theta, vx, vy, vtheta = bicycle_step(
             state.x, state.y, state.theta, controls["vel"], controls["steer"],
-            self.wheelbase, self.min_speed, self.max_speed, self.min_steer, self.max_steer, dt,
+            self.wheelbase, self.min_speed, self.max_speed * max_speed_multiplier,
+            self.min_steer, self.max_steer, dt,
         )
         return WorldState(t=state.t + dt, x=x, y=y, theta=theta, vx=vx, vy=vy, vtheta=vtheta)

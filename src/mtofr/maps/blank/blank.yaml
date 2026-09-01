@@ -1,0 +1,16 @@
+map:
+  name: "blank"
+  cosmetic_image_path: "blank_cosmetic"
+  traversability_image_path: "blank_traversability"
+  regions_image_path: "blank_regions"
+  meters_per_pixel: 0.5
+
+traversability:
+  # Color: {name, blocking, speed_multiplier}
+  "#0000ff":
+    name: "clear"
+    blocking: false
+    speed_multiplier: 1.0
+
+regions:
+  # Color: {name, center_x, center_y (pixel coords from top left)}

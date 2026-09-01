@@ -116,6 +116,41 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
         controls = self.frontseater.compute_controls(self.hardware.read_state())
         self.assertEqual(controls, {"vel": 0.0, "steer": 0.0})
 
+    def _start_stopwatch(self, with_output=True):
+        outputs = {"elapsed_time": "elapsed_time"} if with_output else {}
+        return self.frontseater.start_capability("stopwatch", {}, outputs)
+
+    def test_capabilities_advertises_stopwatch(self):
+        self.assertIsNotNone(self.frontseater.capabilities().get("stopwatch"))
+
+    def test_stopwatch_reports_zero_elapsed_time_right_after_starting(self):
+        handle = self._start_stopwatch()
+        self.assertAlmostEqual(self.frontseater.poll_status(handle)["outputs"]["elapsed_time"], 0.0)
+
+    def test_stopwatch_elapsed_time_advances_with_simulation_time(self):
+        handle = self._start_stopwatch()
+        self.hardware.state.t += 5.0
+        self.assertAlmostEqual(self.frontseater.poll_status(handle)["outputs"]["elapsed_time"], 5.0)
+
+    def test_stopwatch_status_stays_in_progress_and_never_completes_on_its_own(self):
+        handle = self._start_stopwatch()
+        self.hardware.state.t += 100.0
+        self.assertEqual(self.frontseater.poll_status(handle)["status"], "in_progress")
+
+    def test_stopwatch_publishes_elapsed_time_to_its_bound_knowledge_key(self):
+        handle = self._start_stopwatch()
+        self.hardware.state.t += 3.0
+        self.frontseater.poll_status(handle)
+        self.assertAlmostEqual(self.knowledge["elapsed_time"], 3.0)
+
+    def test_restarting_the_stopwatch_resets_elapsed_time_to_zero(self):
+        first_handle = self._start_stopwatch()
+        self.hardware.state.t += 10.0
+        self.frontseater.poll_status(first_handle)
+
+        second_handle = self._start_stopwatch()
+        self.assertAlmostEqual(self.frontseater.poll_status(second_handle)["outputs"]["elapsed_time"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

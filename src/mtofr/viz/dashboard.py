@@ -73,6 +73,10 @@ class MissionDashboard:
         self.selected_id = tk.StringVar(value=MISSION_OVERVIEW_ID)
         self.show_edge_labels = tk.BooleanVar(value=False)
         self.side_panel_choice = tk.StringVar(value="Knowledge")
+        # Ignored by an EnvironmentViewer with no map layers to toggle.
+        self.show_traversability = tk.BooleanVar(value=False)
+        self.show_regions = tk.BooleanVar(value=False)
+        self._environment_pan_anchor = None   # (display_x, display_y) while a left-drag pan is in progress
 
         self._build_layout(entity_ids)
         self._refresh()
@@ -145,17 +149,32 @@ class MissionDashboard:
         environment_labelframe = ttk.LabelFrame(parent, text="Environment")
         environment_labelframe.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
+        layer_toggles = ttk.Frame(environment_labelframe)
+        layer_toggles.pack(side=tk.TOP, fill=tk.X)
+        ttk.Checkbutton(layer_toggles, text="Show traversability", variable=self.show_traversability,
+                         command=self._refresh).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(layer_toggles, text="Show regions", variable=self.show_regions,
+                         command=self._refresh).pack(side=tk.LEFT, padx=4)
+
         self.environment_fig, self.environment_ax = plt.subplots(figsize=(5, 5))
         self.environment_fig.patch.set_facecolor(PLOT_BACKGROUND)
+        # Default margins leave room for a title/labels this plot doesn't have;
+        # tightening them lets the map itself fill most of the panel instead.
+        self.environment_fig.subplots_adjust(left=0.07, right=0.98, top=0.98, bottom=0.06)
         self.environment_viewer.configure_ax(self.environment_ax)
         self.environment_canvas = FigureCanvasTkAgg(self.environment_fig, master=environment_labelframe)
 
-        # NavigationToolbar2Tk provides pan (hand tool) and zoom (rectangle-select)
-        # out of the box; it auto-packs itself at the bottom before the canvas below
-        # claims the remaining space.
+        # NavigationToolbar2Tk still provides Home/Save/its own toggleable pan+zoom
+        # tools; it auto-packs itself at the bottom before the canvas below claims
+        # the remaining space. Scroll-to-zoom and left-drag-to-pan below work
+        # directly, without needing to toggle any of the toolbar's own tools first.
         toolbar = NavigationToolbar2Tk(self.environment_canvas, environment_labelframe)
         toolbar.update()
         self.environment_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.environment_canvas.mpl_connect("scroll_event", self._on_environment_scroll)
+        self.environment_canvas.mpl_connect("button_press_event", self._on_environment_pan_start)
+        self.environment_canvas.mpl_connect("motion_notify_event", self._on_environment_pan_move)
+        self.environment_canvas.mpl_connect("button_release_event", self._on_environment_pan_end)
 
     def _build_side_panels(self, parent) -> None:
         side = ttk.Frame(parent)
@@ -233,6 +252,47 @@ class MissionDashboard:
             self.knowledge_frame.pack(fill=tk.BOTH, expand=True)
         else:
             self.capabilities_frame.pack(fill=tk.BOTH, expand=True)
+
+    #=====# Environment pan/zoom #=====#
+    ZOOM_FACTOR_PER_SCROLL_STEP = 0.9
+
+    def _on_environment_scroll(self, event) -> None:
+        """Scroll wheel zooms in/out centered on the cursor, without needing the
+        toolbar's own zoom-rectangle tool toggled on first."""
+        if event.inaxes != self.environment_ax or event.xdata is None:
+            return
+        factor = self.ZOOM_FACTOR_PER_SCROLL_STEP if event.step > 0 else 1 / self.ZOOM_FACTOR_PER_SCROLL_STEP
+        xlim, ylim = self.environment_ax.get_xlim(), self.environment_ax.get_ylim()
+        self.environment_ax.set_xlim(
+            event.xdata - (event.xdata - xlim[0]) * factor, event.xdata + (xlim[1] - event.xdata) * factor
+        )
+        self.environment_ax.set_ylim(
+            event.ydata - (event.ydata - ylim[0]) * factor, event.ydata + (ylim[1] - event.ydata) * factor
+        )
+        self.environment_canvas.draw_idle()
+
+    def _on_environment_pan_start(self, event) -> None:
+        """Left-click-drag pans the view directly, without needing the toolbar's
+        own pan tool toggled on first."""
+        if event.inaxes == self.environment_ax and event.button == 1:
+            self._environment_pan_anchor = (event.x, event.y)
+
+    def _on_environment_pan_move(self, event) -> None:
+        if self._environment_pan_anchor is None or event.x is None or event.y is None:
+            return
+        inverse = self.environment_ax.transData.inverted()
+        anchor_data_x, anchor_data_y = inverse.transform(self._environment_pan_anchor)
+        current_data_x, current_data_y = inverse.transform((event.x, event.y))
+        delta_x, delta_y = current_data_x - anchor_data_x, current_data_y - anchor_data_y
+
+        xlim, ylim = self.environment_ax.get_xlim(), self.environment_ax.get_ylim()
+        self.environment_ax.set_xlim(xlim[0] - delta_x, xlim[1] - delta_x)
+        self.environment_ax.set_ylim(ylim[0] - delta_y, ylim[1] - delta_y)
+        self._environment_pan_anchor = (event.x, event.y)
+        self.environment_canvas.draw_idle()
+
+    def _on_environment_pan_end(self, event) -> None:
+        self._environment_pan_anchor = None
 
     #=====# Hover / click #=====#
     def _on_graph_hover(self, event) -> None:
@@ -329,7 +389,7 @@ class MissionDashboard:
         view_limits = (self.environment_ax.get_xlim(), self.environment_ax.get_ylim())
 
         self.environment_ax.clear()
-        self.environment_ax.set_facecolor(PLOT_BACKGROUND)
+        self.environment_ax.set_facecolor(self.environment_viewer.background_color)
         if self._environment_view_initialized:
             self.environment_ax.set_xlim(view_limits[0])
             self.environment_ax.set_ylim(view_limits[1])
@@ -337,7 +397,10 @@ class MissionDashboard:
         else:
             self.environment_viewer.configure_ax(self.environment_ax)
             self._environment_view_initialized = True
-        self.environment_viewer.render(self.environment_ax, states, selected_id=self.selected_id.get())
+        self.environment_viewer.render(
+            self.environment_ax, states, selected_id=self.selected_id.get(),
+            show_traversability=self.show_traversability.get(), show_regions=self.show_regions.get(),
+        )
         self.environment_canvas.draw_idle()
 
     def _refresh_capability_tree(self, backseater, status: dict) -> None:

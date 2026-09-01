@@ -1,29 +1,25 @@
 """The main simulator entry point"""
 import time
+from pathlib import Path
 
+import mtofr.maps as maps_package
 from mtofr.viz.dashboard import MissionDashboard
 from mtofr.world.world import World
 from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
 from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
 from mtofr.backseater.backseater import Backseater
 from mtofr.database import KnowledgeDatabase
-from mtofr.missions import (
-    MissionSet, mission_split_ugv1, mission_split_ugv2, mission_wait_ugv1, mission_wait_ugv2,
-)
+from mtofr.maps import GroundMap
+from mtofr.missions import MissionSet, MISSION_SETS
 
 
 #==========# Config #==========#
 DT = 0.1
 ENABLE_HEADLESS = False
 DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
-ACTIVE_MISSION_SET = MissionSet.WAIT   # SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via mesh sync.
-
-MISSION_SETS = {
-    MissionSet.SPLIT: (mission_split_ugv1, mission_split_ugv2),
-    MissionSet.WAIT: (mission_wait_ugv1, mission_wait_ugv2),
-}
+# SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via mesh sync. VILLAGE: exercises
+# simple_village's road speed boost and blocked-terrain hard stop.
+ACTIVE_MISSION_SET = MissionSet.VILLAGE
 
 
 # Setup and the main loop both live inside this guard, not just the loop: BicycleFrontseater
@@ -33,23 +29,24 @@ MISSION_SETS = {
 # worker processes) inside each worker, recursively.
 if __name__ == "__main__":
     #==========# Set up #==========#
-    mission_ugv1, mission_ugv2 = MISSION_SETS[ACTIVE_MISSION_SET]
+    mission_set = MISSION_SETS[ACTIVE_MISSION_SET]
 
-    ugv1_hardware = BicycleHardware()
-    ugv1_frontseater = BicycleFrontseater(hardware=ugv1_hardware, debug=DEBUG)
-    ugv1_knowledge = KnowledgeDatabase()
-    ugv1_backseater = Backseater(frontseater=ugv1_frontseater, knowledge_database=ugv1_knowledge,
-                                  mission_graph=mission_ugv1, platform_id="ugv1", debug=DEBUG)
+    frontseaters = {}   # platform_id -> Frontseater, kept around only for shutdown()
+    backseaters = {}    # platform_id -> Backseater, handed to World
+    for platform_id, build_frontseater in mission_set.platform_builders.items():
+        frontseater = build_frontseater(DEBUG)
+        knowledge = KnowledgeDatabase()
+        backseaters[platform_id] = Backseater(
+            frontseater=frontseater, knowledge_database=knowledge,
+            mission_graph=mission_set.mission_graphs[platform_id], platform_id=platform_id, debug=DEBUG,
+        )
+        frontseaters[platform_id] = frontseater
 
-    ugv2_hardware = BicycleHardware()
-    ugv2_frontseater = BicycleFrontseater(hardware=ugv2_hardware, debug=DEBUG)
-    ugv2_knowledge = KnowledgeDatabase()
-    ugv2_backseater = Backseater(frontseater=ugv2_frontseater, knowledge_database=ugv2_knowledge,
-                                  mission_graph=mission_ugv2, platform_id="ugv2", debug=DEBUG)
-
-    environment = GroundPlaneEnv()
-    world = World(environment, backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater}, debug=DEBUG)
-    vizualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter())
+    ground_map = None if mission_set.map_name is None \
+        else GroundMap.load(Path(maps_package.__file__).parent / mission_set.map_name)
+    environment = GroundPlaneEnv(ground_map=ground_map)
+    world = World(environment, backseaters=backseaters, debug=DEBUG)
+    vizualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter(ground_map=ground_map))
 
     #==========# Main #==========#
     accumulator = 0.0
@@ -108,5 +105,5 @@ if __name__ == "__main__":
 
     finally:
         print("Shutting down...")
-        ugv1_frontseater.shutdown()
-        ugv2_frontseater.shutdown()
+        for frontseater in frontseaters.values():
+            frontseater.shutdown()

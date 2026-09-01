@@ -44,11 +44,13 @@ class MissionDashboard:
     mission graph (active node highlighted, hover for details), and a combined
     capability-status/knowledge panel switchable via a selector. The dropdown's
     extra "Mission Overview" entry swaps the mission graph for a flat platform list
-    (hover shows each platform's active primitives) and the knowledge panel for
-    Relay's canonical cross-platform store, if a Relay is attached to the World.
-    Also owns the sim's pause state. Knows nothing about any specific environment or
-    platform type — it only calls World/Backseater/Knowledge/Relay's public query
-    methods and delegates spatial rendering to whatever EnvironmentViewer it's given."""
+    (hover shows each platform's active primitives); the knowledge panel has no
+    single-platform Knowledge to show in that mode (there is no canonical
+    cross-platform store — each platform's Knowledge is peer-to-peer mesh-synced,
+    not centralized), so it's left empty. Also owns the sim's pause state. Knows
+    nothing about any specific environment or platform type — it only calls
+    World/Backseater/Knowledge's public query methods and delegates spatial
+    rendering to whatever EnvironmentViewer it's given."""
 
     def __init__(self, world, environment_viewer, title: str = "MTOFR Mission Dashboard"):
         self.world = world
@@ -296,7 +298,7 @@ class MissionDashboard:
         if self.selected_id.get() == MISSION_OVERVIEW_ID:
             self.capability_tree.delete(*self.capability_tree.get_children())
             self._refresh_platform_overview()
-            self._refresh_knowledge_tree(self.world.relay)
+            self._refresh_knowledge_tree(None)   # no canonical cross-platform store to show
             return
 
         backseater = self.world.backseaters.get(self.selected_id.get())
@@ -306,7 +308,7 @@ class MissionDashboard:
         status = backseater.status()
         self._refresh_capability_tree(backseater, status)
         self._refresh_mission_graph(backseater, status)
-        self._refresh_knowledge_tree(backseater.knowledge)
+        self._refresh_knowledge_tree(backseater.knowledge_database)
 
     def _update_graph_panel_controls(self) -> None:
         """The edge-labels checkbox and "back to overview" button only make sense
@@ -342,7 +344,7 @@ class MissionDashboard:
         self.capability_tree.delete(*self.capability_tree.get_children())
         for name, info in status["primitives"].items():
             inputs_text = ", ".join(
-                f"{field_name}={backseater.knowledge.get(key)!r}"
+                f"{field_name}={backseater.knowledge_database.get(key)!r}"
                 for field_name, key in info["inputs"].items()
             )
             self.capability_tree.insert(
@@ -376,7 +378,8 @@ class MissionDashboard:
 
     def _refresh_knowledge_tree(self, knowledge_source) -> None:
         """`knowledge_source` is anything exposing `.all()` — a platform's own
-        Knowledge, or the Relay's canonical cross-platform store."""
+        Knowledge — or `None` when there is no single source to show (Mission
+        Overview mode)."""
         self.knowledge_tree.delete(*self.knowledge_tree.get_children())
         if knowledge_source is None:
             return

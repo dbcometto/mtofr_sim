@@ -1,12 +1,12 @@
 """Example mission graphs for main.py's demo platforms."""
 from enum import IntEnum
-from mtofr.knowledge.knowledge import Location
+from mtofr.database import Location
 
 
 class MissionSet(IntEnum):
     """Which pair of mission graphs main.py wires up for ugv1/ugv2."""
-    SPLIT = 0   # each platform runs its own independent loop, no relay/coordination
-    WAIT = 1    # ugv2 waits on a Relay-carried fact that originates on ugv1
+    SPLIT = 0   # each platform runs its own independent loop, no coordination
+    WAIT = 1    # ugv2 waits on a mesh-synced fact that originates on ugv1
 
 
 #==========# split: independent per-platform loops, no cross-platform coordination #==========#
@@ -76,7 +76,7 @@ mission_split_ugv2 = {
 }
 
 
-#==========# wait: ugv2 waits on a Relay-carried fact that originates on ugv1 #==========#
+#==========# wait: ugv2 waits on a mesh-synced fact that originates on ugv1 #==========#
 
 mission_wait_ugv1 = {
     "knowledge": {
@@ -101,8 +101,8 @@ mission_wait_ugv2 = {
         "ugv2/nav_tolerance": {"type": float, "value": 0.5},
         "ugv2/own_start": {"type": Location, "value": Location(0.0, 0.0)},
         "ugv2/destination": {"type": Location, "value": Location(-6.0, -6.0)},
-        # Foreign key: not written by ugv2 at all, only ever filled in by Relay once
-        # ugv1 writes it. Declaring it here (per Knowledge's declare-before-use
+        # Foreign key: not written by ugv2 at all, only ever filled in by mesh sync
+        # once ugv1 writes it. Declaring it here (per Knowledge's declare-before-use
         # discipline) is what lets ugv2's own edge condition reference it.
         "ugv1/arrived": {"type": bool, "value": False},
     },

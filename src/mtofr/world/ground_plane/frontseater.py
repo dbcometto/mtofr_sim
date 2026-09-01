@@ -6,7 +6,7 @@ from mtofr.world.base import Frontseater, WorldState
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.mpc import run_mpc_worker
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
-from mtofr.knowledge.knowledge import Location
+from mtofr.database import Location
 
 
 class BicycleFrontseater(Frontseater):
@@ -22,11 +22,14 @@ class BicycleFrontseater(Frontseater):
         self.nav_horizon = nav_horizon
         self.nav_dt = nav_dt
 
+        self.backseater = None   # set by Backseater's constructor
         self._active_handle = None
-        self._active_target = None   # Location
-        self._active_tolerance = None   # float
+        self._active_target = None   # Location, live-queried each poll while a move_to is active
+        self._active_tolerance = None   # float, live-queried each poll while a move_to is active
         self._task_status = {}     # handle -> status string
         self._task_capability = {}   # handle -> ipl_type, so poll_status knows which outputs to report
+        self._task_output_keys = {}   # handle -> {output field name -> knowledge key}
+        self._task_input_keys = {}    # handle -> {input field name -> knowledge key}
         self._arrived = {}         # handle -> bool, latest "arrived" output for a move_to task
 
         self._capability_registry = CapabilityRegistry([
@@ -69,22 +72,25 @@ class BicycleFrontseater(Frontseater):
     def capabilities(self) -> CapabilityRegistry:
         return self._capability_registry
 
-    def start_capability(self, capability: str, inputs: dict) -> str:
+    def start_capability(self, capability: str, inputs: dict, outputs: dict) -> str:
         handle = str(uuid.uuid4())
         if self.debug:
-            print(f"[Frontseater] start_capability('{capability}', {inputs}) -> handle {handle[:8]}")
+            print(f"[Frontseater] start_capability('{capability}', {inputs}, {outputs}) -> handle {handle[:8]}")
 
         self._task_capability[handle] = capability
+        self._task_input_keys[handle] = inputs
+        self._task_output_keys[handle] = outputs
 
         if capability == "move_to":
             self._active_handle = handle
-            self._active_target = inputs["target"]
-            self._active_tolerance = inputs["tolerance"]
+            self._active_target = self.backseater.query("knowledge", inputs["target"])
+            self._active_tolerance = self.backseater.query("knowledge", inputs["tolerance"])
             self._task_status[handle] = "received"
             self._arrived[handle] = False
 
         elif capability == "avoid":
-            point, radius = inputs["point"], inputs["radius"]
+            point = self.backseater.query("knowledge", inputs["point"])
+            radius = self.backseater.query("knowledge", inputs["radius"])
             self._request_queue.put({"type": "add_avoid_region", "point_x": point.x, "point_y": point.y, "radius": radius})
             self._task_status[handle] = "success"   # instantaneous, not a duration task
 
@@ -95,8 +101,12 @@ class BicycleFrontseater(Frontseater):
 
     def poll_status(self, handle: str) -> dict:
         status = self._task_status.get(handle, "fail")
+        output_keys = self._task_output_keys.get(handle, {})
 
         if handle == self._active_handle and status in ("received", "in_progress"):
+            input_keys = self._task_input_keys[handle]
+            self._active_target = self.backseater.query("knowledge", input_keys["target"])
+            self._active_tolerance = self.backseater.query("knowledge", input_keys["tolerance"])
             current_state = self.hardware.read_state()
             distance = np.hypot(current_state.x - self._active_target.x,
                                  current_state.y - self._active_target.y)
@@ -112,9 +122,15 @@ class BicycleFrontseater(Frontseater):
 
         capability = self._task_capability.get(handle)
         if capability == "move_to":
-            return {"status": status, "outputs": {"arrived": self._arrived[handle]}}
+            arrived = self._arrived[handle]
+            if "arrived" in output_keys:
+                self.backseater.publish("knowledge", output_keys["arrived"], arrived)
+            return {"status": status, "outputs": {"arrived": arrived}}
         if capability == "avoid":
-            return {"status": status, "outputs": {"registered": status == "success"}}
+            registered = status == "success"
+            if "registered" in output_keys:
+                self.backseater.publish("knowledge", output_keys["registered"], registered)
+            return {"status": status, "outputs": {"registered": registered}}
         return {"status": status, "outputs": {}}
 
     def cancel(self, handle: str) -> None:

@@ -2,7 +2,7 @@
 import unittest
 
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
-from mtofr.knowledge.knowledge import Location
+from mtofr.database import Location
 
 
 class TestParamSpec(unittest.TestCase):
@@ -27,31 +27,6 @@ class TestCapability(unittest.TestCase):
             inputs=(ParamSpec("target", Location, "Location to navigate to"),),
             outputs=(ParamSpec("arrived", bool, "True once within tolerance"),),
         )
-
-    def test_validate_inputs_accepts_correct_types(self):
-        self.move_to.validate_inputs({"target": Location(1.0, 2.0)})   # should not raise
-
-    def test_validate_inputs_rejects_missing_input(self):
-        with self.assertRaises(ValueError):
-            self.move_to.validate_inputs({})
-
-    def test_validate_inputs_rejects_wrong_type(self):
-        with self.assertRaises(ValueError):
-            self.move_to.validate_inputs({"target": (1.0, 2.0)})   # tuple, not a Location
-
-    def test_validate_outputs_accepts_correct_type(self):
-        self.move_to.validate_outputs({"arrived": True})   # should not raise
-
-    def test_validate_outputs_accepts_missing_output(self):
-        self.move_to.validate_outputs({})   # a capability may omit any output on a given poll
-
-    def test_validate_outputs_rejects_wrong_type(self):
-        with self.assertRaises(ValueError):
-            self.move_to.validate_outputs({"arrived": "yes"})   # str, not a bool
-
-    def test_validate_outputs_rejects_undeclared_output(self):
-        with self.assertRaises(ValueError):
-            self.move_to.validate_outputs({"not_a_real_output": True})
 
     def test_describe_includes_inputs_and_outputs(self):
         description = self.move_to.describe()

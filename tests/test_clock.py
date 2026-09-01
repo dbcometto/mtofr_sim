@@ -23,5 +23,26 @@ class TestClock(unittest.TestCase):
         self.assertAlmostEqual(clock.now(), time.time() - 50.0, delta=1.0)
 
 
+class TestPeerOffset(unittest.TestCase):
+    def test_unknown_peer_defaults_to_zero_offset(self):
+        clock = Clock()
+        self.assertEqual(clock.peer_offset("ugv2"), 0.0)
+
+    def test_set_peer_offset_is_scoped_to_that_peer(self):
+        clock = Clock()
+        clock.set_peer_offset("ugv2", 5.0)
+        self.assertEqual(clock.peer_offset("ugv2"), 5.0)
+        self.assertEqual(clock.peer_offset("ugv3"), 0.0)
+
+    def test_to_local_with_unknown_peer_is_identity(self):
+        clock = Clock()
+        self.assertEqual(clock.to_local("ugv2", 42.0), 42.0)
+
+    def test_to_local_subtracts_the_peer_offset(self):
+        clock = Clock()
+        clock.set_peer_offset("ugv2", 5.0)
+        self.assertEqual(clock.to_local("ugv2", 42.0), 37.0)
+
+
 if __name__ == "__main__":
     unittest.main()

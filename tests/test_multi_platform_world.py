@@ -4,30 +4,35 @@ supports more than one platform with no shared state or cross-platform coupling.
 import unittest
 
 from mtofr.backseater.backseater import Backseater
-from mtofr.knowledge.knowledge import Knowledge, Location
+from mtofr.database import KnowledgeDatabase, Location
 from mtofr.world.ground_plane.env import GroundPlaneEnv
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
 from mtofr.world.world import World
 
 
-def _build_platform(platform_id, target, tolerance_key, arrived_key):
+def _build_platform(test_case, platform_id, target, tolerance_key, arrived_key):
     hardware = BicycleHardware()
     frontseater = BicycleFrontseater(hardware=hardware)
-    knowledge = Knowledge()
-    knowledge.declare("target", Location, target)
+    test_case.addCleanup(frontseater.shutdown)
+    knowledge = KnowledgeDatabase()
+    # Target key is namespaced per platform, not shared as a bare "target" -- with
+    # World now mesh-syncing Knowledge between every pair of platforms, a shared key
+    # name would have one platform's target silently overwrite the other's.
+    target_key = f"{platform_id}/target"
+    knowledge.declare(target_key, Location, target)
     knowledge.declare(tolerance_key, float, 0.5)
     knowledge.declare(arrived_key, bool, False)
     mission_graph = {
         "knowledge": {},
         "nodes": {"n1": {"primitives": {
-            "nav": {"capability": "move_to", "inputs": {"target": "target", "tolerance": tolerance_key},
+            "nav": {"capability": "move_to", "inputs": {"target": target_key, "tolerance": tolerance_key},
                     "outputs": {"arrived": arrived_key}},
         }}},
         "edges": {},
         "start": "n1",
     }
-    backseater = Backseater(frontseater=frontseater, knowledge=knowledge,
+    backseater = Backseater(frontseater=frontseater, knowledge_database=knowledge,
                              mission_graph=mission_graph, platform_id=platform_id)
     return hardware, knowledge, backseater
 
@@ -35,9 +40,9 @@ def _build_platform(platform_id, target, tolerance_key, arrived_key):
 class TestMultiPlatformWorld(unittest.TestCase):
     def setUp(self):
         self.ugv1_hardware, self.ugv1_knowledge, ugv1_backseater = _build_platform(
-            "ugv1", Location(5.0, 0.0), "ugv1/tolerance", "ugv1/arrived")
+            self, "ugv1", Location(5.0, 0.0), "ugv1/tolerance", "ugv1/arrived")
         self.ugv2_hardware, self.ugv2_knowledge, ugv2_backseater = _build_platform(
-            "ugv2", Location(-5.0, 0.0), "ugv2/tolerance", "ugv2/arrived")
+            self, "ugv2", Location(-5.0, 0.0), "ugv2/tolerance", "ugv2/arrived")
 
         self.world = World(GroundPlaneEnv(), backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater})
 

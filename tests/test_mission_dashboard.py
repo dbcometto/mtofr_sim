@@ -13,8 +13,7 @@ except tk.TclError:
     TK_AVAILABLE = False
 
 from mtofr.backseater.backseater import Backseater
-from mtofr.knowledge.knowledge import Knowledge, Location
-from mtofr.relay.relay import Relay
+from mtofr.database import KnowledgeDatabase, Location
 from mtofr.world.ground_plane.env import GroundPlaneEnv
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
@@ -30,8 +29,8 @@ if TK_AVAILABLE:
 class TestMissionDashboard(unittest.TestCase):
     def setUp(self):
         hardware = BicycleHardware()
-        frontseater = BicycleFrontseater(hardware=hardware)
-        knowledge = Knowledge()
+        self.frontseater = BicycleFrontseater(hardware=hardware)
+        knowledge = KnowledgeDatabase()
         mission_graph = {
             "knowledge": {
                 "goal": {"type": Location, "value": Location(2.0, 0.0)},
@@ -43,7 +42,7 @@ class TestMissionDashboard(unittest.TestCase):
             "edges": {},
             "start": "n1",
         }
-        backseater = Backseater(frontseater=frontseater, knowledge=knowledge, mission_graph=mission_graph)
+        backseater = Backseater(frontseater=self.frontseater, knowledge_database=knowledge, mission_graph=mission_graph)
         self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
         # These tests exercise the single-platform mission-graph/capability view,
@@ -54,6 +53,7 @@ class TestMissionDashboard(unittest.TestCase):
 
     def tearDown(self):
         self.dashboard._on_close()
+        self.frontseater.shutdown()
 
     def test_update_after_a_sim_tick_does_not_raise(self):
         self.world.step(0.1)
@@ -158,13 +158,14 @@ class TestMissionDashboardDefaults(unittest.TestCase):
     a specific platform or side panel."""
     def setUp(self):
         hardware = BicycleHardware()
-        frontseater = BicycleFrontseater(hardware=hardware)
-        backseater = Backseater(frontseater=frontseater, knowledge=Knowledge(), platform_id="ugv1")
+        self.frontseater = BicycleFrontseater(hardware=hardware)
+        backseater = Backseater(frontseater=self.frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
         self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
 
     def tearDown(self):
         self.dashboard._on_close()
+        self.frontseater.shutdown()
 
     def test_defaults_to_mission_overview(self):
         self.assertEqual(self.dashboard.selected_id.get(), MISSION_OVERVIEW_ID)
@@ -201,10 +202,11 @@ class TestMissionDashboardDefaults(unittest.TestCase):
 @unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
 class TestMissionDashboardOverview(unittest.TestCase):
     """Covers the "Mission Overview" dropdown entry: a platform list (hover shows
-    active primitives) in place of a single platform's mission graph, and Relay's
-    canonical knowledge in place of a single platform's own Knowledge."""
+    active primitives) in place of a single platform's mission graph, and an empty
+    knowledge panel in place of a single platform's own Knowledge (there is no
+    canonical cross-platform store to show)."""
     def setUp(self):
-        knowledge = Knowledge()
+        knowledge = KnowledgeDatabase()
         mission_graph = {
             "knowledge": {"ugv1/arrived": {"type": bool, "value": False}},
             "nodes": {"n1": {"primitives": {
@@ -214,16 +216,16 @@ class TestMissionDashboardOverview(unittest.TestCase):
             "start": "n1",
         }
         hardware = BicycleHardware()
-        frontseater = BicycleFrontseater(hardware=hardware)
-        backseater = Backseater(frontseater=frontseater, knowledge=knowledge,
+        self.frontseater = BicycleFrontseater(hardware=hardware)
+        backseater = Backseater(frontseater=self.frontseater, knowledge_database=knowledge,
                                  mission_graph=mission_graph, platform_id="ugv1")
-        self.relay = Relay()
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater}, relay=self.relay)
+        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
         self.dashboard.selected_id.set(MISSION_OVERVIEW_ID)
 
     def tearDown(self):
         self.dashboard._on_close()
+        self.frontseater.shutdown()
 
     def test_selecting_mission_overview_does_not_raise(self):
         self.dashboard.update()
@@ -232,10 +234,10 @@ class TestMissionDashboardOverview(unittest.TestCase):
         self.dashboard.update()
         self.assertEqual(self.capability_tree_children(), ())
 
-    def test_knowledge_tree_reflects_relays_canonical_store(self):
+    def test_knowledge_tree_is_empty_in_overview_mode(self):
         self.world.step(0.1)
         self.dashboard.update()
-        self.assertIn("ugv1/arrived", self.dashboard.knowledge_tree.get_children())
+        self.assertEqual(self.dashboard.knowledge_tree.get_children(), ())
 
     def test_hovering_a_platform_row_shows_a_titled_tooltip(self):
         self.dashboard.update()

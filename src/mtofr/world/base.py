@@ -62,8 +62,11 @@ class Hardware(ABC):
 class Frontseater(ABC):
     """Platform-specific planning/control brain. Talks to its Hardware only
     through send_controls/read_state — never touches Hardware.state directly.
-    Backseater never sends controls, only capability requests."""
+    Backseater never sends controls, only capability requests. `backseater` is
+    set by Backseater's constructor (mirroring the platform_id cascade below) so a
+    running capability can call query()/publish() on its own Backseater at any time."""
     hardware: Hardware
+    backseater: object = None
     _platform_id: str | None = None
 
     @property
@@ -106,8 +109,11 @@ class Frontseater(ABC):
         (and eventually a planner) uses instead of assuming what the platform can do."""
 
     @abstractmethod
-    def start_capability(self, capability: str, inputs: dict) -> str:
-        """Start a capability task. Returns a handle. Status begins as 'received'."""
+    def start_capability(self, capability: str, inputs: dict, outputs: dict) -> str:
+        """Start a capability task. Returns a handle. Status begins as 'received'. `inputs`/
+        `outputs` are field-name -> Knowledge-key maps (the mission graph's initial binding),
+        not resolved values — the capability calls self.backseater.query()/publish() itself,
+        at start and at any later poll, to read/write the actual data."""
 
     @abstractmethod
     def poll_status(self, handle: str) -> dict:

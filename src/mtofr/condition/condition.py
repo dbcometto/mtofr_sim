@@ -23,6 +23,12 @@ class ConditionNode(ABC):
     def evaluate(self, knowledge) -> bool:
         """Evaluates this node against the current Knowledge store."""
 
+    @abstractmethod
+    def keys(self) -> set[str]:
+        """Every Knowledge key referenced anywhere in this node's subtree — the
+        structural-verify gate on a Mission write uses this to check every edge
+        condition's keys are declared in the new graph's own "knowledge" section."""
+
 
 @dataclass(frozen=True)
 class Comparison(ConditionNode):
@@ -33,6 +39,9 @@ class Comparison(ConditionNode):
 
     def evaluate(self, knowledge) -> bool:
         return _COMPARISON_OPERATORS[self.operator](knowledge.get(self.key), self.value)
+
+    def keys(self) -> set[str]:
+        return {self.key}
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,9 @@ class IsNone(ConditionNode):
         result = knowledge.get(self.key) is None
         return not result if self.negated else result
 
+    def keys(self) -> set[str]:
+        return {self.key}
+
 
 @dataclass(frozen=True)
 class And(ConditionNode):
@@ -52,6 +64,9 @@ class And(ConditionNode):
 
     def evaluate(self, knowledge) -> bool:
         return all(operand.evaluate(knowledge) for operand in self.operands)
+
+    def keys(self) -> set[str]:
+        return set().union(*(operand.keys() for operand in self.operands))
 
 
 @dataclass(frozen=True)
@@ -61,6 +76,9 @@ class Or(ConditionNode):
     def evaluate(self, knowledge) -> bool:
         return any(operand.evaluate(knowledge) for operand in self.operands)
 
+    def keys(self) -> set[str]:
+        return set().union(*(operand.keys() for operand in self.operands))
+
 
 @dataclass(frozen=True)
 class Not(ConditionNode):
@@ -68,6 +86,9 @@ class Not(ConditionNode):
 
     def evaluate(self, knowledge) -> bool:
         return not self.operand.evaluate(knowledge)
+
+    def keys(self) -> set[str]:
+        return self.operand.keys()
 
 
 #==========# Parser #==========#

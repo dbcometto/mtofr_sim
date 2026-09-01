@@ -1,11 +1,12 @@
-"""End-to-end tests: Backseater resolves Knowledge-key inputs against the Frontseater's
-CapabilityRegistry, commits capability outputs back to Knowledge, and drives a mission
-graph via knowledge-based edge conditions."""
+"""End-to-end tests: Backseater hands a capability the raw Knowledge-key bindings from
+the mission graph, the capability calls query()/publish() on its own Backseater to read
+inputs and write outputs, and the mission graph transitions on knowledge-based edge
+conditions driven by those published outputs."""
 import unittest
 
 from mtofr.backseater.backseater import Backseater
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
-from mtofr.knowledge.knowledge import Knowledge, Location
+from mtofr.database import KnowledgeDatabase, Location
 from mtofr.world.base import Frontseater
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
@@ -14,13 +15,13 @@ from mtofr.world.ground_plane.frontseater import BicycleFrontseater
 def _bicycle_setup():
     hardware = BicycleHardware()
     frontseater = BicycleFrontseater(hardware=hardware)
-    knowledge = Knowledge()
+    knowledge = KnowledgeDatabase()
     knowledge.declare("goal", Location, Location(2.0, 0.0))
     knowledge.declare("tolerance", float, 0.5)
     return hardware, frontseater, knowledge
 
 
-class TestBackseaterCapabilityResolution(unittest.TestCase):
+class TestBackseaterCapabilityExecution(unittest.TestCase):
     def setUp(self):
         self.hardware, self.frontseater, self.knowledge = _bicycle_setup()
 
@@ -34,12 +35,15 @@ class TestBackseaterCapabilityResolution(unittest.TestCase):
             "edges": {},
             "start": "n1",
         }
-        self.backseater = Backseater(frontseater=self.frontseater, knowledge=self.knowledge, mission_graph=mission_graph)
+        self.backseater = Backseater(frontseater=self.frontseater, knowledge_database=self.knowledge, mission_graph=mission_graph)
+
+    def tearDown(self):
+        self.frontseater.shutdown()
 
     def test_capabilities_passthrough_matches_frontseater(self):
         self.assertIs(self.backseater.capabilities(), self.frontseater.capabilities())
 
-    def test_reaches_target_by_resolving_knowledge_key(self):
+    def test_reaches_target_by_querying_knowledge_key(self):
         for _ in range(500):
             self.backseater.update()
             self.frontseater.update()
@@ -56,7 +60,21 @@ class TestBackseaterCapabilityResolution(unittest.TestCase):
             "edges": {},
             "start": "n1",
         }
-        backseater = Backseater(frontseater=self.frontseater, knowledge=self.knowledge, mission_graph=mission_graph)
+        backseater = Backseater(frontseater=self.frontseater, knowledge_database=self.knowledge, mission_graph=mission_graph)
+        backseater.update()
+        self.assertTrue(backseater._blocked)
+
+    def test_mistyped_knowledge_key_blocks_mission_without_crashing(self):
+        # "tolerance" is declared bool here, but move_to's ParamSpec for that field is float.
+        mission_graph = {
+            "knowledge": {"tolerance": {"type": bool, "value": False}},
+            "nodes": {"n1": {"primitives": {
+                "nav": {"capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"}},
+            }}},
+            "edges": {},
+            "start": "n1",
+        }
+        backseater = Backseater(frontseater=self.frontseater, knowledge_database=self.knowledge, mission_graph=mission_graph)
         backseater.update()
         self.assertTrue(backseater._blocked)
 
@@ -87,14 +105,14 @@ class TestBackseaterCapabilityResolution(unittest.TestCase):
             "edges": {},
             "start": "n1",
         }
-        backseater = Backseater(frontseater=self.frontseater, knowledge=self.knowledge, mission_graph=mission_graph)
+        backseater = Backseater(frontseater=self.frontseater, knowledge_database=self.knowledge, mission_graph=mission_graph)
         backseater.update()
         self.assertTrue(backseater.status()["blocked"])
 
 
 class TestBackseaterKnowledgeBasedTransition(unittest.TestCase):
     """A full run exercising a knowledge-based edge condition end to end: the mission
-    should transition off "n1" only once move_to's "arrived" output lands in Knowledge."""
+    should transition off "n1" only once move_to publishes "arrived" into Knowledge."""
     def test_transitions_when_arrived_output_satisfies_the_edge_condition(self):
         hardware, frontseater, knowledge = _bicycle_setup()
         mission_graph = {
@@ -115,7 +133,7 @@ class TestBackseaterKnowledgeBasedTransition(unittest.TestCase):
             "start": "n1",
         }
         knowledge.declare("goal", Location, Location(2.0, 0.0))
-        backseater = Backseater(frontseater=frontseater, knowledge=knowledge, mission_graph=mission_graph)
+        backseater = Backseater(frontseater=frontseater, knowledge_database=knowledge, mission_graph=mission_graph)
 
         for _ in range(500):
             backseater.update()
@@ -130,8 +148,9 @@ class TestBackseaterKnowledgeBasedTransition(unittest.TestCase):
 
 class _TwoOutputFrontseater(Frontseater):
     """Minimal fake Frontseater advertising one capability with two named outputs, for
-    testing that Backseater commits each bound output to its own Knowledge key by name."""
+    testing that a capability publishes each bound output to its own Knowledge key by name."""
     def __init__(self):
+        self.backseater = None
         self._registry = CapabilityRegistry([
             Capability(
                 ipl_type="scan",
@@ -140,6 +159,7 @@ class _TwoOutputFrontseater(Frontseater):
                          ParamSpec("count", int, "number of targets found")),
             ),
         ])
+        self._outputs_by_handle = {}
 
     def compute_controls(self, state) -> dict:
         return {}
@@ -147,20 +167,27 @@ class _TwoOutputFrontseater(Frontseater):
     def capabilities(self) -> CapabilityRegistry:
         return self._registry
 
-    def start_capability(self, capability: str, inputs: dict) -> str:
+    def start_capability(self, capability: str, inputs: dict, outputs: dict) -> str:
+        self._outputs_by_handle["handle-1"] = outputs
         return "handle-1"
 
     def poll_status(self, handle: str) -> dict:
-        return {"status": "in_progress", "outputs": {"found": True, "count": 3}}
+        output_keys = self._outputs_by_handle[handle]
+        found, count = True, 3
+        self.backseater.publish("knowledge", output_keys["found"], found)
+        self.backseater.publish("knowledge", output_keys["count"], count)
+        return {"status": "in_progress", "outputs": {"found": found, "count": count}}
 
     def cancel(self, handle: str) -> None:
         pass
 
 
 class _MistypedOutputFrontseater(_TwoOutputFrontseater):
-    """Reports a wrong-typed value for a declared output, to exercise Backseater's
+    """Publishes a wrong-typed value for a declared output, to exercise Backseater's
     runtime rejection of a bad Frontseater output write."""
     def poll_status(self, handle: str) -> dict:
+        output_keys = self._outputs_by_handle[handle]
+        self.backseater.publish("knowledge", output_keys["found"], "not-a-bool")
         return {"status": "in_progress", "outputs": {"found": "not-a-bool"}}
 
 
@@ -179,16 +206,16 @@ class TestBackseaterOutputCommitment(unittest.TestCase):
         }
 
     def test_multiple_named_outputs_are_committed_to_their_bound_keys(self):
-        knowledge = Knowledge()
-        backseater = Backseater(frontseater=_TwoOutputFrontseater(), knowledge=knowledge,
+        knowledge = KnowledgeDatabase()
+        backseater = Backseater(frontseater=_TwoOutputFrontseater(), knowledge_database=knowledge,
                                  mission_graph=self._mission_graph())
         backseater.update()
         self.assertEqual(knowledge.get("ugv1/found"), True)
         self.assertEqual(knowledge.get("ugv1/count"), 3)
 
     def test_wrong_typed_output_blocks_the_mission_without_crashing(self):
-        knowledge = Knowledge()
-        backseater = Backseater(frontseater=_MistypedOutputFrontseater(), knowledge=knowledge,
+        knowledge = KnowledgeDatabase()
+        backseater = Backseater(frontseater=_MistypedOutputFrontseater(), knowledge_database=knowledge,
                                  mission_graph=self._mission_graph())
         backseater.update()
         self.assertTrue(backseater._blocked)

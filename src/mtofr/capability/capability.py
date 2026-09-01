@@ -34,34 +34,6 @@ class Capability:
     inputs: tuple[ParamSpec, ...] = ()
     outputs: tuple[ParamSpec, ...] = ()
 
-    def validate_inputs(self, resolved_inputs: dict) -> None:
-        """Raises ValueError if resolved_inputs doesn't satisfy every ParamSpec.
-        Expects inputs already resolved (knowledge ids swapped for their entries)."""
-        for spec in self.inputs:
-            if spec.name not in resolved_inputs:
-                raise ValueError(f"Capability '{self.ipl_type}' missing required input '{spec.name}'")
-            value = resolved_inputs[spec.name]
-            if not isinstance(value, spec.type):
-                raise ValueError(
-                    f"Capability '{self.ipl_type}' input '{spec.name}' expected {spec.type.__name__}, "
-                    f"got {type(value).__name__}"
-                )
-
-    def validate_outputs(self, outputs: dict) -> None:
-        """Raises ValueError if any output present in `outputs` doesn't match its declared
-        ParamSpec type, or isn't a declared output at all. Missing outputs are fine —
-        a capability may only have something meaningful to report on some statuses."""
-        outputs_by_name = {spec.name: spec for spec in self.outputs}
-        for name, value in outputs.items():
-            spec = outputs_by_name.get(name)
-            if spec is None:
-                raise ValueError(f"Capability '{self.ipl_type}' has no declared output '{name}'")
-            if not isinstance(value, spec.type):
-                raise ValueError(
-                    f"Capability '{self.ipl_type}' output '{name}' expected {spec.type.__name__}, "
-                    f"got {type(value).__name__}"
-                )
-
     def describe(self) -> str:
         """Plaintext description of this capability, its inputs, and its outputs, for a planner LLM or human."""
         lines = [f"{self.ipl_type}: {self.description}"]

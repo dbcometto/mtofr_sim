@@ -81,8 +81,7 @@ def main() -> None:
     from mtofr.world.ground_plane.env import GroundPlaneEnv
     from mtofr.world.ground_plane.hardware import BicycleHardware
     from mtofr.backseater.backseater import Backseater
-    from mtofr.knowledge.knowledge import Knowledge
-    from mtofr.relay.relay import Relay
+    from mtofr.database import KnowledgeDatabase
     from mtofr.missions import mission_split_ugv1, mission_split_ugv2
 
     import tempfile
@@ -93,17 +92,16 @@ def main() -> None:
 
     ugv1_hardware = BicycleHardware()
     ugv1_frontseater = frontseater_module.BicycleFrontseater(hardware=ugv1_hardware)
-    ugv1_knowledge = Knowledge()
-    ugv1_backseater = Backseater(frontseater=ugv1_frontseater, knowledge=ugv1_knowledge,
+    ugv1_knowledge = KnowledgeDatabase()
+    ugv1_backseater = Backseater(frontseater=ugv1_frontseater, knowledge_database=ugv1_knowledge,
                                   mission_graph=mission_split_ugv1, platform_id="ugv1")
     ugv2_hardware = BicycleHardware()
     ugv2_frontseater = frontseater_module.BicycleFrontseater(hardware=ugv2_hardware)
-    ugv2_knowledge = Knowledge()
-    ugv2_backseater = Backseater(frontseater=ugv2_frontseater, knowledge=ugv2_knowledge,
+    ugv2_knowledge = KnowledgeDatabase()
+    ugv2_backseater = Backseater(frontseater=ugv2_frontseater, knowledge_database=ugv2_knowledge,
                                   mission_graph=mission_split_ugv2, platform_id="ugv2")
     environment = GroundPlaneEnv()
-    relay = Relay()
-    world = World(environment, backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater}, relay=relay)
+    world = World(environment, backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater})
 
     tick_times = []
     try:

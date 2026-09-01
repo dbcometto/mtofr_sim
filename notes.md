@@ -1,6 +1,472 @@
 # Notes
 
 
+
+## 1 Sep 26 - Update to CLAUDE.md plan
+
+Written by Ben
+
+Experiment plan: Just like SSRR, compare human teleoperation (convoy system?) to autonomy for logistics tasks, in sim and in hardware.  Human commander is responsible for accomplishing a variety of pick-up/drop-off missions that arrive in a scripted manner, and task performance is measured (in various ways) and analyzed.  Simulator will be able to have more powerful analysis tools (likely), but a hardware demo would reinforce.
+
+
+
+Details on mesh redesign process:
+Status: steps 1–2 done (knowledge-based edge conditions/capability outputs, and a narrow structural validation that `World`/`Backseater`/viz already support multiple independent platforms). Step 3 (the centralized `Relay`) was built and tested, then superseded by the 19 Aug 26 peer-to-peer mesh redesign — see `notes.md` — which folds Relay's job into Backseater/World as described in the architecture section above. That redesign is now done in full: all six increments (data model, privilege hierarchy + gated Mission writes, mission-change detection, continuous query()/publish() + capability migration, pairwise sync_with() + repurposed Clock, World integration + cleanup) are complete — `relay/relay.py` and its dedicated tests are deleted, `World.step()` drives pairwise `sync_with_stale_peers()` across every pair of `Backseater`s it holds (full-mesh, per "full connectivity assumed for now"), and `main.py`/`missions.py`/`viz/dashboard.py` no longer reference `Relay`. Step 3 as a whole is complete; step 4 (mission-authoring surface + LLM/operator platform) has not been started. The Foreman/Frontend/MissionBuilder ideas from earlier sessions are dropped/deferred per that same redesign; no LLM-facing graph-authoring surface is being built yet.
+
+3. Peer-to-peer mesh redesign, scoped into six increments (each independently implemented/tested before the next starts):
+   1. **Data model** — done: added `MissionDatabase`/`CapabilitiesDatabase`/`StatusDatabase` classes (originally in `database/database.py`, sharing a `PlatformKeyedDatabase` base) on `Backseater` alongside the existing `KnowledgeDatabase`; retrofitted `origin_platform_id` onto all four. No cross-platform behavior yet — that's increments 2–6. `CapabilitiesDatabase`/`StatusDatabase` were later merged into a single `PlatformDatabase` during increment 2 once privilege level needed a home too — see increment 2 below. The `database` package was subsequently split by file (`knowledge.py`, `knowledge_types.py`, `platform_keyed.py`) for organization; `database/database.py` no longer exists.
+   2. **Privilege hierarchy + gated Mission writes** — done: privilege level assigned at construction via `Backseater`'s `privilege_level` arg (default `1`); `write_mission()` gates Mission writes on a privilege check (skipped entirely for a platform writing its own Mission entry), a type check, and a structural verify (`verify_mission_structure()`, raising `MissionStructuralError`). Along the way, `CapabilitiesDatabase`/`StatusDatabase` were merged into one `PlatformDatabase` (`PlatformRecord(privilege_level, status, capabilities)`), since privilege level needed a per-platform home and gossiping one record per peer is simpler than three. Runtime privilege *reassignment* (one platform changing another's level) is specified but explicitly deferred, no method for it yet — see build order 2 above.
+   3. **Mission-change detection** — done: `Backseater._detect_mission_change()`, called at the top of every `update()`, compares `mission_database.get(platform_id)` against `self.mission_graph` by object identity (not deep equality, since not every `KnowledgeEntry` subclass defines `__eq__`); on a detected change it cancels every in-flight capability handle, re-declares/resets the new graph's knowledge keys to their declared defaults, swaps in the new graph and its parsed edge conditions, clears any blocked state, and jumps the active node to the new graph's declared start node — all before that same `update()` tick resolves/starts primitives, so the new node's primitives start immediately rather than on the next tick. No-ops until this platform's first Mission write lands. Tested via direct `write_mission()` calls, no networking yet.
+   4. **Continuous `query()`/`publish()` + capability migration (combined)** — done: `Backseater` gained `query(database_name, key)`/`publish(database_name, key, value, timestamp=None)` (generalized across all three databases via a `database_name` string) and `declare_knowledge_key(key, entry_type, value, timestamp=None)`, plus `frontseater.backseater = self` at construction so a capability can reach them; `ParamSpec` was already down to key+type+description from an earlier session. `move_to`/`avoid` migrated onto `query()`/`publish()`, and the old eager resolve-then-execute path (`Backseater._resolve_inputs()`/`_commit_outputs()`, `Capability.validate_inputs()`/`validate_outputs()`) was removed outright, no coexistence period. `Backseater._check_binding_types()` (added mid-increment, once removing eager resolution turned out to also remove the one place that used to catch a mismatched input/output type before a capability ran) checks a primitive's bound Knowledge keys against their capability's `ParamSpec` types once, at bind time.
+   5. **Pairwise `sync_with()` + repurposed Clock** — done: `Backseater.sync_with(peer)` reconciles Knowledge/Mission/Platform bidirectionally, last-write-wins by (locally-converted) timestamp, via a shared module-level `_reconcile_database()` helper called twice per database (once per direction); Mission/Platform entries bypass their normal write gates during sync (straight `declare()`/`set_or_declare()`, no `write_mission()` call), per "no receipt-side re-verification" — a self-record (a peer echoing back my own entry) is reconciled the same as any other, no special-casing. Opens with `_handshake_clock()`: each side independently computes its offset to the other (`peer.clock.now() - self.clock.now()`) and records it in `Clock`'s new per-peer `_peer_offsets` table (`set_peer_offset()`/`peer_offset()`/`to_local()`), separate from `Clock`'s existing single wall-clock offset — a real computation, not a hardcoded identity, though it evaluates to ~0 today since no network latency is simulated yet. `sync_with()` is symmetric and idempotent, which is what lets `Backseater.sync_with_stale_peers(peers)` be called from either side of a pair without a lock or initiator tie-break: it takes an explicit `list[Backseater]` (no `World` involved yet) and calls `sync_with()` only against a peer whose last completed sync (`Backseater._last_sync_time`, per peer) is older than this platform's own `sync_interval` constructor arg (default `1.0`). A checksum short-circuit (`Backseater._snapshot_checksum()`/`_last_snapshot_checksum`, mirroring the old Relay's own optimization) skips the clock handshake and full reconcile outright when neither side's combined three-database checksum has changed since the last sync between that pair. Tested with two/three `Backseater`s directly, no `World` involved — that's increment 6, which is also when a `World`-sourced peer list replaces the explicit list `sync_with_stale_peers()` takes today.
+   6. **World integration + cleanup** — done: `World.step()` calls `backseater.sync_with_stale_peers(peers)` for every `Backseater` it holds, passing every *other* backseater it holds as the peer list (full mesh, per "full connectivity assumed for now"), right after `environment.step_dynamics_all()` and before the tick ends — replacing the old `relay.sync()` call at the same point. `World.__init__` no longer takes a `relay=` kwarg. `relay/relay.py` and its dedicated tests (`test_relay.py`, `test_relay_mission_integration.py`) are deleted; `main.py`/`missions.py`/`scripts/mpc_profile.py` no longer construct or reference `Relay`. `viz/dashboard.py`'s "Mission Overview" knowledge panel, which used to read `Relay.all()`, is now left empty in that mode (see Visualization section above) since there is no longer a canonical cross-platform store — each platform's Knowledge is mesh-synced peer-to-peer instead. New `tests/test_multi_platform_mesh_integration.py` replaces `test_relay_mission_integration.py`: an end-to-end test with two/three real platform stacks in a `World` (no `Relay`), confirming a Knowledge fact written on one platform, and a Mission-database entry written via a privileged `write_mission()` call, both reach a peer purely through repeated `World.step()` calls.
+
+
+
+
+## Status 1 Sep 26 — mesh redesign increment 6: World integration + cleanup
+
+(Written by Claude)
+
+Implemented the sixth and final increment of the peer-to-peer mesh redesign scoped
+in the 19 Aug 26 entry below — "World integration + cleanup" in CLAUDE.md's build
+order. Increments 1–5 had already built `Backseater.sync_with()`/
+`sync_with_stale_peers()` but left `World.step()` still calling the old
+`relay.sync(self.backseaters)` untouched; this increment wires the new path in and
+deletes the old one outright, no coexistence period.
+
+`World.step()` (`world/world.py`) now calls, for every backseater it holds,
+`backseater.sync_with_stale_peers(peers)` where `peers` is every *other* backseater
+in `self.backseaters` — full mesh, per CLAUDE.md's "full connectivity assumed for
+now; real comms topology/partial connectivity explicitly deferred". This happens at
+the same point in the tick the old `relay.sync()` call did: last, after
+`environment.step_dynamics_all()`, so a synced fact lands in time for *next* tick's
+edge evaluation. `World.__init__` no longer takes a `relay=` kwarg at all — there is
+no longer any canonical cross-platform object for `World` to hold.
+
+Deleted outright: `relay/relay.py` (and the now-empty `relay/` package directory),
+`tests/test_relay.py`, `tests/test_relay_mission_integration.py`. Removed `Relay`
+imports/construction from `main.py` (dropped the `relay=` kwarg passed to `World`,
+updated a stale comment referring to "via Relay"), `scripts/mpc_profile.py` (same),
+and `missions.py` (two comments referencing Relay reworded to "mesh sync", no
+behavior change — these were just prose). `viz/dashboard.py`'s "Mission Overview"
+panel used to source its knowledge panel from `Relay.all()`, gated on "if a Relay is
+attached to the World"; per this session's interview answer, that panel is simply
+left empty in Mission Overview mode now (`_refresh_knowledge_tree(None)`) rather
+than trying to reconstruct a merged view — there is no longer a single canonical
+store to show, and Mission Overview's real job (the platform list) is unaffected.
+
+Tests: `tests/test_world.py`'s old `FakeRelay`/`TestWorldWithRelay` were replaced
+with a `sync_with_stale_peers_called_with` hook on `FakeBackseater` and a new
+`TestWorldMeshSync` case asserting each of three backseaters gets called with
+exactly the other two as peers. `tests/test_mission_dashboard.py`'s
+`TestMissionDashboardOverview` dropped its `Relay` setup and its
+`test_knowledge_tree_reflects_relays_canonical_store` case became
+`test_knowledge_tree_is_empty_in_overview_mode`. New
+`tests/test_multi_platform_mesh_integration.py` replaces
+`test_relay_mission_integration.py`: `TestMeshMissionIntegration` reruns the old
+"ugv2 waits on ugv1/arrived" scenario (mission_wait_ugv1/ugv2) purely through
+`World.step()`, no `Relay` involved, with each `Backseater` constructed with
+`sync_interval=0.0` so the test doesn't depend on real wall-clock time elapsing
+between ticks; `TestMeshMissionEntryGossipIntegration` covers a platform's Mission
+database entry (written via the existing gated `write_mission()`, called directly —
+there is still no networked "install a mission on a remote platform" RPC, that's a
+later step) reaching a peer's view of it purely through `World.step()`'s mesh sync.
+Incidentally exposed and fixed a latent bug in `tests/test_multi_platform_world.py`:
+its two platforms both declared a bare `"target"` Knowledge key (not
+platform-prefixed), which was harmless before mesh sync existed but caused one
+platform's target to silently clobber the other's now that `World.step()`
+mesh-syncs Knowledge by default — fixed by namespacing it `f"{platform_id}/target"`
+like the test's other keys already were.
+
+**Interview answers settled this session:**
+1. *Peer-list source* — full mesh: every backseater is handed every other backseater
+   in `World.backseaters` each tick, not a topology-aware subset (deferred).
+2. *Relay kwarg removal* — removed entirely, not kept as a deprecated no-op.
+3. *Dashboard Mission Overview knowledge panel* — left empty rather than
+   reconstructed as a display-only merge, since there's no real replacement for a
+   canonical store and the platform-list view is the panel's actual purpose.
+4. *Test scope* — the new end-to-end test covers both Knowledge and a privileged
+   Mission-database write propagating via `World.step()` alone.
+
+Verified: `python -m unittest discover -s tests -v` — 260 tests, exit code 0, no
+crash. Smoke-tested outside the test suite too: built the `mission_wait_ugv1`/
+`mission_wait_ugv2` stack directly (no `Relay`) and ran `World.step()` in a real
+wall-clock loop — `ugv2/active_node_id` flips from `stay_at_start` to
+`drive_elsewhere` once `sync_interval` (default `1.0`s) actually elapses, confirming
+the fact reaches ugv2 purely through `World`-driven mesh sync end-to-end, matching
+the old Relay-mediated demo. Build-order step 3 (peer-to-peer mesh redesign) is now
+complete in full.
+
+
+## Status 28 Aug 26 — test-infra fix: deterministic BicycleFrontseater shutdown in tests
+
+(Written by Claude)
+
+Not a build-order increment — a test-infrastructure fix raised by the user after increment
+5 landed, triggered by `python -m unittest discover -s tests` crashing the whole interpreter
+partway through the suite (`Fatal Python error: _PySemaphore_Wakeup: parking_lot:
+ReleaseSemaphore failed`), even though every test file passed cleanly when run individually.
+
+Root cause: `BicycleFrontseater.__init__` spawns a real OS subprocess plus two
+`multiprocessing.Queue`s for its MPC solver ( `frontseater.py`'s worker-process setup).
+It has a `shutdown()` method that stops the worker cleanly, but nothing in
+`World`/`Backseater`/the test suite called it explicitly — it only ever ran as a fallback
+from `__del__`. Under `discover`, all ~267 tests run in one long-lived process, so dozens
+of `BicycleFrontseater` instances accumulated and were torn down only whenever the garbage
+collector happened to notice them unreferenced — nondeterministic timing that let one
+test's worker-process cleanup race with another, unrelated test's execution and crash the
+interpreter outright (not a normal assertion failure/traceback, since a fatal Python error
+at this level kills the whole process).
+
+Fix: every test that constructs a `BicycleFrontseater` now explicitly shuts it down —
+via `tearDown()` where a class already has one/needed one, or `self.addCleanup(frontseater.shutdown)`
+right after construction where a helper function builds the stack per-test with no shared
+`setUp`. Updated 9 files: `test_backseater_query_publish.py`, `test_backseater_capability_execution.py`,
+`test_bicycle_frontseater.py`, `test_mission_privilege.py`, `test_database.py`,
+`test_relay_mission_integration.py`, `test_platform_identity.py`, `test_multi_platform_world.py`,
+`test_mission_dashboard.py` (all three of its test classes). Where a module-level helper
+function built the stack (`_make_backseater`, `_build_stack`, `_build_platform`), it now
+takes the `TestCase` (`self`) as its first parameter and registers the cleanup itself,
+rather than pushing that responsibility onto every call site.
+
+Verified: `python -m unittest discover -s tests -v` now runs all 268 tests to completion,
+exit code 0, no crash.
+
+**Standing convention going forward** (added to CLAUDE.md's Coding style): any test that
+constructs a `Frontseater` owning a real OS-level resource (currently only
+`BicycleFrontseater`'s MPC worker process) must explicitly tear it down — `tearDown()` or
+`addCleanup()` — rather than relying on `__del__`/garbage collection.
+
+
+## Status 21 Aug 26 (even later) — mesh redesign increment 5: pairwise sync_with() + repurposed Clock
+
+(Written by Claude)
+
+Implemented the fifth of the six increments scoped in the 19 Aug 26 entry below. Per
+CLAUDE.md's build order ("port the old Relay's pull/push/last-write-wins logic into a
+Backseater-to-Backseater method generalized across all three databases; add the
+per-peer clock-offset handshake as part of sync_with()"): `relay/relay.py` and
+`clock/clock.py`'s existing `now()`/`set_offset()` were read as reusable building
+blocks and left completely untouched — this increment adds new, currently-uncalled
+functionality on `Backseater`/`Clock`; `World` still drives the old `relay.sync()`
+path, and nothing here changes that. World integration (wiring `sync_with()` into
+`World.step()`, deleting `relay/relay.py`) is increment 6, not done here.
+
+`Clock` (`clock/clock.py`) gains a `_peer_offsets: dict[str, float]` table alongside
+its existing single wall-clock offset: `set_peer_offset(peer_id, offset)` /
+`peer_offset(peer_id)` (defaulting to `0.0` for an unsynced peer) / `to_local(peer_id,
+remote_timestamp)` (subtracts the peer offset, converting a timestamp from that peer's
+frame into this clock's own). The old global offset (still just a single scalar,
+`set_offset()`/`now()` unchanged) represents this platform's own clock drift from wall
+time; the new per-peer table is a separate, additional concept — the estimated
+difference between this platform's frame and each peer's, one entry per platform this
+Backseater has ever synced with. There is still no shared/authoritative clock anywhere:
+neither table is reset by anything external.
+
+`Backseater.sync_with(peer)` reconciles all three databases (Knowledge/Mission/Platform)
+against `peer`'s, bidirectionally, last-write-wins by (locally-converted) timestamp. It
+opens with a clock handshake (`_handshake_clock()`): each side independently computes
+its offset to the other as `peer.clock.now() - self.clock.now()` (and the mirror on
+peer's side) — a real computation, not a hardcoded identity placeholder, even though it
+evaluates to ~0 in practice since no network latency is simulated yet (deferred to
+build-order step 5, the "real comms boundary" step — a different, later step 5 than
+this increment, which is mesh-redesign step 3's increment 5; the numbering collision is
+coincidental). The actual reconciliation is done by a small module-level
+`_reconcile_database(destination_database, source_database, source_platform_id,
+destination_clock)` helper, called twice per database (once per direction) by
+`sync_with()` — generalized across Knowledge (`set_or_declare`) and Mission/Platform
+(`declare`, which turned out to already be an unconditional upsert on
+`PlatformKeyedDatabase`, so no new method was needed there), dispatched via `hasattr`
+duck-typing the same way `ParamSpec.describe()` already does. A pulled fact's timestamp
+is converted into the destination's local frame via `Clock.to_local()` and *that*
+converted value is stored (not "now") — preserved from the old Relay's identical
+anti-oscillation rationale ("re-stamping would make a pulled fact look freshly-written
+on the next sync, letting it out-race the platform that actually originated it").
+
+Mission and Platform entries bypass their normal write gates during sync — straight
+`declare()`/`set_or_declare()`, no `write_mission()` call — since CLAUDE.md's
+architecture section already specifies every check happens write-side only, once, at
+the originating platform's `publish()` call, with no receipt-side re-verification; the
+writer already passed the gate when it first published, so re-checking on every hop
+would be redundant. A Mission or Platform entry "about" the receiving platform itself
+(e.g. a peer echoing back a stale copy of my own record) is reconciled exactly the same
+as any other entry, no self-record special-casing — last-write-wins alone is enough to
+keep my own fresher self-published record from being clobbered by a stale echo, per this
+session's interview answer.
+
+`sync_with()` is symmetric (calling it from either side of a pair produces the same end
+state) and idempotent (calling it twice in a row, or once from each side in the same
+tick, converges to the same state the second time as a no-op) — this is what lets
+`Backseater.sync_with_stale_peers(peers)` be driven from *both* platforms in a pair
+without any lock or initiator tie-break between them, per this session's interview
+answer ("both backseaters should be capable of reaching out... idempotent design, don't
+prevent it, just make double-sync harmless"). `sync_with_stale_peers()` is the
+staleness gate a future `World.step()` will drive per tick (not built this increment):
+it takes an explicit list of peer `Backseater`s and calls `sync_with()` only against
+those whose last completed sync (tracked per-peer in
+`Backseater._last_sync_time`) is older than this platform's own `sync_interval`
+(a new constructor arg, default `1.0`), per this session's interview answer (peer list
+sourced from World is deferred to increment 6; for now callers — tests — pass the list
+directly, per CLAUDE.md's "Tested with two Backseaters directly, no World involved").
+
+A checksum short-circuit, requested mid-session by the user ("add a hash check at the
+beginning to ensure we don't waste work," mirroring the old Relay's own
+`_snapshot_checksum()`/`_last_snapshot_checksum` optimization), opens `sync_with()`:
+`Backseater._snapshot_checksum()` hashes every (database, key, value, timestamp) triple
+across all three of a platform's own databases; if neither side's checksum has changed
+since the last sync between that specific pair (tracked in
+`Backseater._last_snapshot_checksum`, keyed by peer id), the clock handshake and the
+full reconcile are both skipped outright — only `_last_sync_time` is refreshed, so the
+staleness timer doesn't immediately re-fire on the next check.
+
+**Interview answers settled this session** (asked directly since the codebase alone
+couldn't resolve them):
+1. *sync_with() signature/call pattern* — settled by the user's own design rather than
+   any of the offered options: each `Backseater` is (eventually, from `World`, in
+   increment 6) handed a list of peers in comms range; it reaches out on its own
+   initiative when a peer's data is stale beyond `sync_interval`, and either side of a
+   pair may initiate independently.
+2. *Clock offset computation* — a real (if currently trivial) computation now, not a
+   hardcoded identity placeholder — see above.
+3. *Self-record handling during sync* — uniform last-write-wins, no special-casing.
+4. *Mission-sync privilege gate* — bypassed; straight database writes, per "no
+   receipt-side re-verification."
+5. *Staleness tracking* — per-peer last-sync-completed time vs. a constructor-level
+   `sync_interval`, not a scan of the newest known timestamp per peer across all
+   databases.
+6. *Race-condition prevention between two independently-initiating peers* — none needed;
+   `sync_with()`'s idempotency makes a double-sync harmless rather than requiring a
+   lock or initiator tie-break.
+7. *Peer-list plumbing for this increment* — an explicit `list[Backseater]` parameter,
+   no `World` involved; that wiring is increment 6.
+
+Tests: new `tests/test_backseater_sync.py` (clock handshake records a per-peer offset on
+both sides; Knowledge/Mission/Platform reconciliation in both directions, including
+newer-wins and older-does-not-overwrite cases; Mission sync bypassing the privilege gate
+even from a lower- to a higher-privilege platform; a stale self-record echoed back by a
+peer losing to a fresher self-published one; symmetric convergence; the checksum
+short-circuit verified by corrupting a sentinel peer-offset value and confirming it
+survives an unchanged second sync but not a sync following a real intervening change;
+`sync_with_stale_peers()`'s staleness gating). Extended `tests/test_clock.py` with a
+`TestPeerOffset` class covering `set_peer_offset()`/`peer_offset()`/`to_local()`,
+including the unknown-peer identity default. `relay/relay.py` and its own tests
+(`tests/test_relay.py`, `tests/test_relay_mission_integration.py`) are unmodified.
+
+
+## Status 21 Aug 26 (still later) — mesh redesign increment 4: continuous query()/publish() + capability migration
+
+(Written by Claude)
+
+Implemented the fourth of the six increments scoped in the 19 Aug 26 entry below. Per
+CLAUDE.md's build order ("add the capability-facing query()/publish()/declare-new-key
+methods on Backseater; downgrade ParamSpec to key+type+description; migrate the existing
+capabilities (move_to, avoid) onto the new methods and remove the old static
+resolve-then-execute path in the same pass"): `ParamSpec` was already down to
+key+type+description from an earlier session, so nothing changed there.
+
+`Backseater` gains `frontseater.backseater = self`, set right after `self.frontseater`
+is stored in `__init__` — mirroring the existing `platform_id` cascade — so a capability
+running inside a Frontseater can reach its own Backseater without any change to
+`start_capability()`/`poll_status()`/`cancel()`'s call sites. On top of that: a
+generalized `query(database_name, key)` / `publish(database_name, key, value,
+timestamp=None)` pair dispatching across all three databases via a small
+`_database_for()` lookup (`"knowledge"`/`"mission"`/`"platform"` -> the matching database
+instance) — a `"mission"` publish always routes through the existing gated
+`write_mission()` rather than writing `mission_database` directly, since Mission has
+exactly one entry per platform and a capability publishing to it is always a self-write.
+`declare_knowledge_key(key, entry_type, value, timestamp=None)` is the dedicated
+"declare a brand-new key" path the build order calls out — Knowledge-only, since Mission
+and Platform entries are created per-platform through `write_mission()`/construction-time
+seeding, not ad hoc by a capability.
+
+`Backseater._resolve_inputs()`/`_commit_outputs()` are deleted. `update()` now passes a
+primitive's raw `inputs`/`outputs` key-name dicts straight through to
+`start_capability(capability.ipl_type, inputs, outputs)` — the mission graph's static
+binding is now just the *initial* key names a capability starts with, not resolved
+values, matching CLAUDE.md's "not the only data it will ever see" framing. `poll_status()`'s
+returned `outputs` dict is now read-only reporting only; a capability commits its own
+outputs to Knowledge by calling `publish()` itself. `Capability.validate_inputs()`/
+`validate_outputs()` were deleted outright (nothing called them once resolution moved
+into the capability itself).
+
+**Mid-session addition, raised by the user after the initial plan was approved:**
+Backseater now also runs `_check_binding_types()` once, at bind time (right before
+`start_capability()`), verifying that every Knowledge key a primitive binds to a
+capability's declared input/output field is itself *declared* with that field's exact
+`ParamSpec` type — e.g. a mission graph binding a `bool`-declared key to `move_to`'s
+`tolerance` (declared `float`) is now rejected the same way an undeclared key is,
+halting the mission without crashing. This was needed because handing a capability a key
+name instead of a resolved value removed the one place (`validate_inputs`, now deleted)
+that used to catch a type mismatch before a capability ran — `_check_binding_types()` is
+its replacement, just checking the key's declared type rather than a resolved value's
+runtime type.
+
+`BicycleFrontseater.move_to` now queries `target`/`tolerance` fresh on *every*
+`poll_status()` call (not just at start), so a mid-flight retarget — a new value written
+to the same Knowledge key while `move_to` is still running — takes effect on the next
+poll rather than being frozen at start time; `avoid` still queries `point`/`radius` once,
+since it's instantaneous. Both publish their outputs (`arrived`/`registered`) directly
+via `self.backseater.publish(...)` from inside `poll_status()`.
+
+**Interview answers settled this session:**
+1. *Backseater reference* — `frontseater.backseater = self` cascade at construction, not
+   passed as an argument on every call.
+2. *query()/publish() shape* — one generalized pair dispatching on a `database_name`
+   string, not three separate per-database method pairs; `ParamSpec` stays purely
+   descriptive and isn't consulted inside `query()`/`publish()` (Knowledge's own per-key
+   typing was judged sufficient there) — superseded partway through by the
+   `_check_binding_types()` addition above, which does consult `ParamSpec`, but only at
+   bind time, not on every `query()`/`publish()` call.
+3. *Inputs/outputs* — `start_capability()` receives raw Knowledge key names (its
+   signature gained an `outputs` dict alongside `inputs`, so a capability knows where to
+   publish its own outputs); `_resolve_inputs()`/`_commit_outputs()` both deleted, not
+   kept as a fallback.
+4. *Migration scope* — only `move_to`/`avoid` migrated; the old eager
+   resolve-then-execute path removed outright, no coexistence period.
+
+Tests: rewrote `tests/test_backseater_capability_resolution.py` ->
+`tests/test_backseater_capability_execution.py` (same end-to-end scenarios — reaching a
+target, output-driven edge transitions, blocking on a bad/undeclared/mistyped key — now
+driven through query()/publish()); updated `tests/test_bicycle_frontseater.py` to wire in
+a minimal fake backseater (plain dict-backed `query`/`publish`) so it stays independent
+of a real `Backseater`/`Knowledge`; updated `tests/test_capability.py` (removed the
+deleted `validate_inputs`/`validate_outputs` tests) and `tests/test_backseater_mission_change.py`
+(fake frontseater's `start_capability()` signature); added
+`tests/test_backseater_query_publish.py` (new) covering `query()`/`publish()`/
+`declare_knowledge_key()` across all three databases, including that a `"mission"`
+publish still goes through the privilege/structural gates. Full suite (250 tests) green;
+also smoke-tested headless against a real mission graph from `missions.py`
+(`mission_split_ugv1`) end-to-end, no GUI, confirming `move_to`/`avoid` reach/transition
+correctly through the new query/publish path.
+
+
+## Status 21 Aug 26 (later) — mesh redesign increment 3: mission-change detection
+
+(Written by Claude)
+
+Implemented the third of the six increments scoped in the 19 Aug 26 entry below. Per
+CLAUDE.md's architecture section ("when a Backseater detects its own Mission database
+entry has changed"), `Backseater` gains `_detect_mission_change()`, called at the very
+top of `update()` — before the existing blocked/active-node-id-None early return, so a
+mission change can un-block a previously halted mission the same tick it lands. It
+no-ops until this platform's first Mission write lands (leaving the constructor's
+initial mission graph, which never touches `mission_database`, untouched), then compares
+`mission_database.get(platform_id)` against `self.mission_graph` by object identity —
+not deep equality, since not every `KnowledgeEntry` subclass (e.g. `Location`) defines
+`__eq__`, so a deep compare would be both more expensive and not actually a full content
+check. On a detected change it cancels every handle in `self._handles`, re-declares every
+knowledge key in the new graph's `"knowledge"` section (always resetting to the new
+graph's declared default — the old graph's in-flight values are gone, matching
+"declares/sets" literally), swaps `self.mission_graph` and recomputes
+`self._parsed_conditions`, clears `self._blocked`, and calls the existing
+`_activate_node()` on the new graph's declared start node. Because all of this happens
+before `update()`'s per-primitive loop runs, the new node's primitives start within the
+same tick the change is detected, not the next one. The knowledge-declare and
+edge-condition-parsing logic (previously inline in `__init__`) was extracted into two
+small private helpers (`_declare_knowledge_keys()`, `_parse_edge_conditions()`) shared by
+construction and mission-change handling, to avoid duplicating them.
+
+**Interview answers settled this session:**
+1. *Trigger point* — detection in `update()`, not synchronous inside `write_mission()`,
+   per the user's framing ("it is upon receipt of the new mission on syncing") — this
+   generalizes cleanly to increment 5's mesh sync, which will write `mission_database`
+   directly without going through `write_mission()`.
+2. *Knowledge re-declaration semantics* — always reset to the new graph's declared
+   default, matching "declares/sets every knowledge key listed" literally.
+3. *Ordering* — the mission-change check (and its cancel/re-declare/swap/reactivate work)
+   runs before the active node's primitives are resolved each tick, so a just-swapped
+   node's primitives start the same tick, not the next one.
+4. *Comparison method* — object identity (`is not`), not `!=`, since a real change always
+   arrives as a distinct dict object and identity avoids relying on arbitrary
+   `KnowledgeEntry` subclasses implementing `__eq__`.
+
+Also renamed the method (mid-session, at the user's request) from an initial
+`_maybe_hot_swap()`/"hot-swap" framing to `_detect_mission_change()`/"mission change"
+throughout, including the `MissionDatabase` docstring in `database/platform_keyed.py`.
+
+Tests: `tests/test_backseater_mission_change.py` (new) — no-op before first Mission
+write and when `platform_id` is `None`; knowledge keys reset to new defaults; old
+capability handles cancelled; active node jumps to the new start and starts its
+primitives the same tick; a mission change un-blocks a previously blocked mission; no
+change detected when the same object is written back. Full suite (240 tests) green.
+
+
+## Status 21 Aug 26 — database package split into knowledge.py / knowledge_types.py / platform_keyed.py
+(Written by Claude)
+
+Follow-up to the increment 2 session below, at the user's request ("push knowledge under
+database also", then "keep the knowledge types in a different file... break that whole thing
+into several files"). `knowledge/knowledge.py` (the old standalone package) and
+`database/database.py` (which had grown to hold `MissionDatabase`/`PlatformDatabase` plus the
+freshly-added `MissionStructuralError`/`verify_mission_structure`) are both gone, replaced by
+three files under `database/`:
+- `database/knowledge.py` — `KnowledgeDatabase` only.
+- `database/knowledge_types.py` — `KnowledgeEntry` (the ABC) and `Location`, the one built-in
+  entry type. Kept separate from `knowledge.py` so the general typed-store framework doesn't
+  grow a new file every time a concrete entry type is added.
+- `database/platform_keyed.py` — `PlatformKeyedDatabase` (shared base), `MissionDatabase`,
+  `MissionStructuralError`, `verify_mission_structure`, `PlatformStatus`, `PlatformRecord`,
+  `PlatformDatabase` — the whole platform_id-keyed family stays together in one file.
+
+`database/__init__.py` re-exports everything from all three, so every external caller still
+imports from `mtofr.database` regardless of which file a class actually lives in — no call
+site needed to know about the split. Every import across `src/` and `tests/` that previously
+read `mtofr.knowledge.knowledge` or `mtofr.database.database` now reads `mtofr.database`. Pure
+reorganization, no behavior change; full suite (233 tests) still green.
+
+
+## Status 19 Aug 26 (later) — mesh redesign increment 2: privilege hierarchy + gated Mission writes
+(Written by Claude)
+
+Implemented the second of the six increments scoped in the 19 Aug 26 entry below. `Backseater`
+gains a `privilege_level: int` constructor arg (default `1`; `0` reserved) and
+`write_mission(mission_graph, writer_platform_id, timestamp=None)`, the single gated
+write point a write from another platform must go through: privilege check (skipped entirely
+for a self-write), type check, then structural verify via the new `verify_mission_structure()`
+(`database/platform_keyed.py` as of the 21 Aug 26 file split below; originally `database/database.py`), which raises `MissionStructuralError` (a `ValueError` subclass) if any
+edge condition references a Knowledge key not declared in that graph's own `"knowledge"`
+section — implemented by adding a `keys()` method to every `ConditionNode` in
+`condition/condition.py`. No hot-swap yet (increment 3); no `query()`/`publish()` capability API
+or mesh sync (increments 4-6) — a gated write just lands.
+
+**Interview answers settled this session:**
+1. *Where does privilege level live?* — A `Backseater` constructor arg, mirroring `platform_id`.
+2. *Runtime reassignment of another platform's privilege level* (the "may only assign
+   levels less-or-equal to its own, and can never modify its own level" rule) — explicitly
+   **deferred**; no method for it exists yet, to be added whenever actually needed (likely
+   alongside real mesh sync in increment 5).
+3. *How does a Mission write resolve both sides' privilege levels, given Backseaters hold no
+   references to each other?* — Both are looked up from the *target's own* `PlatformDatabase`
+   (see below): its own record (always present, self-declared at construction) and the
+   writer's record (present only if already known — for now, tests seed it directly via
+   `declare()`, standing in for "already arrived via mesh sync"; an unknown writer is
+   rejected with `PermissionError`, same as an underprivileged one). This keeps the "Backseater
+   doesn't know about other platforms" invariant intact.
+4. *Structural-verify failure shape* — a dedicated `MissionStructuralError(ValueError)`, not a
+   bare `ValueError`, so a caller can distinguish it from a privilege/type failure if it wants
+   to.
+
+**Mid-session addition, decided when it came up rather than planned upfront:** merged the
+increment-1 `CapabilitiesDatabase`/`StatusDatabase` into a single `PlatformDatabase`
+(`PlatformRecord(privilege_level, status, capabilities)`), once it became clear privilege level
+needed a per-platform home of its own — one gossiped record per platform is simpler than three,
+and it's what `write_mission()`'s privilege lookup reads from. `CapabilitiesDatabase`/
+`StatusDatabase` as separate classes no longer exist.
+
+**Also renamed** `Backseater.knowledge`/its `knowledge` constructor arg to
+`knowledge_database`/`knowledge_database`, to match the `mission_database`/`platform_database`
+naming convention now that Knowledge is one of several sibling databases rather than the only
+one. Cascaded through every caller (`main.py`, `scripts/mpc_profile.py`, `viz/dashboard.py`,
+`relay/relay.py`, and all affected tests).
+
+Tests: `tests/test_mission_privilege.py` (new — self-write bypass, privilege accept/reject,
+unknown-writer rejection, structural-verify accept/reject, type-check rejection) and
+`tests/test_database.py` (updated — `TestPlatformDatabase` replacing
+`TestCapabilitiesDatabase`/`TestStatusDatabase`, plus `TestVerifyMissionStructure`). Full suite
+(233 tests) green.
+
+
 ## Status 19 Aug 26 — peer-to-peer mesh redesign finalized (supersedes Foreman/Relay/Frontend and four-relay/MissionBuilder)
 (Written by Claude)
 

@@ -4,7 +4,7 @@ tree and evaluated without eval() or string parsing of literals."""
 import unittest
 
 from mtofr.condition.condition import parse_condition, ConditionSyntaxError, Comparison, IsNone, And, Or, Not
-from mtofr.knowledge.knowledge import Knowledge
+from mtofr.database import KnowledgeDatabase
 
 
 class TestParseCondition(unittest.TestCase):
@@ -76,7 +76,7 @@ class TestParseCondition(unittest.TestCase):
 
 class TestEvaluate(unittest.TestCase):
     def setUp(self):
-        self.knowledge = Knowledge()
+        self.knowledge = KnowledgeDatabase()
         self.knowledge.declare("ugv1/arrived", bool, True)
         self.knowledge.declare("ugv1/battery", float, 0.95)
         self.knowledge.declare("ugv1/target", object, None)

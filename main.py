@@ -8,8 +8,7 @@ from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
 from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
 from mtofr.backseater.backseater import Backseater
-from mtofr.knowledge.knowledge import Knowledge
-from mtofr.relay.relay import Relay
+from mtofr.database import KnowledgeDatabase
 from mtofr.missions import (
     MissionSet, mission_split_ugv1, mission_split_ugv2, mission_wait_ugv1, mission_wait_ugv2,
 )
@@ -19,7 +18,7 @@ from mtofr.missions import (
 DT = 0.1
 ENABLE_HEADLESS = False
 DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
-ACTIVE_MISSION_SET = MissionSet.SPLIT   # SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via Relay.
+ACTIVE_MISSION_SET = MissionSet.WAIT   # SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via mesh sync.
 
 MISSION_SETS = {
     MissionSet.SPLIT: (mission_split_ugv1, mission_split_ugv2),
@@ -38,19 +37,18 @@ if __name__ == "__main__":
 
     ugv1_hardware = BicycleHardware()
     ugv1_frontseater = BicycleFrontseater(hardware=ugv1_hardware, debug=DEBUG)
-    ugv1_knowledge = Knowledge()
-    ugv1_backseater = Backseater(frontseater=ugv1_frontseater, knowledge=ugv1_knowledge,
+    ugv1_knowledge = KnowledgeDatabase()
+    ugv1_backseater = Backseater(frontseater=ugv1_frontseater, knowledge_database=ugv1_knowledge,
                                   mission_graph=mission_ugv1, platform_id="ugv1", debug=DEBUG)
 
     ugv2_hardware = BicycleHardware()
     ugv2_frontseater = BicycleFrontseater(hardware=ugv2_hardware, debug=DEBUG)
-    ugv2_knowledge = Knowledge()
-    ugv2_backseater = Backseater(frontseater=ugv2_frontseater, knowledge=ugv2_knowledge,
+    ugv2_knowledge = KnowledgeDatabase()
+    ugv2_backseater = Backseater(frontseater=ugv2_frontseater, knowledge_database=ugv2_knowledge,
                                   mission_graph=mission_ugv2, platform_id="ugv2", debug=DEBUG)
 
     environment = GroundPlaneEnv()
-    relay = Relay()
-    world = World(environment, backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater}, relay=relay, debug=DEBUG)
+    world = World(environment, backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater}, debug=DEBUG)
     vizualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter())
 
     #==========# Main #==========#

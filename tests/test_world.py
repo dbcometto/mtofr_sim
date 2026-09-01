@@ -22,9 +22,13 @@ class FakeBackseater:
     def __init__(self, frontseater):
         self.frontseater = frontseater
         self.update_called = False
+        self.sync_with_stale_peers_called_with = None
 
     def update(self):
         self.update_called = True
+
+    def sync_with_stale_peers(self, peers):
+        self.sync_with_stale_peers_called_with = list(peers)
 
 
 class FakeHardware:
@@ -38,14 +42,6 @@ class FakeEnvironment:
 
     def step_dynamics_all(self, hardware, dt):
         self.step_dynamics_all_called_with = (dict(hardware), dt)
-
-
-class FakeRelay:
-    def __init__(self):
-        self.sync_called_with = None
-
-    def sync(self, backseaters):
-        self.sync_called_with = dict(backseaters)
 
 
 class TestWorld(unittest.TestCase):
@@ -71,22 +67,25 @@ class TestWorld(unittest.TestCase):
     def test_get_states_returns_each_hardware_state(self):
         self.assertEqual(self.world.get_states(), {"ugv1": "initial_state"})
 
-    def test_relay_defaults_to_none_and_step_does_not_require_one(self):
-        self.assertIsNone(self.world.relay)
-        self.world.step(0.1)   # must not raise with no relay attached
+    def test_step_syncs_with_no_peers_when_only_one_backseater(self):
+        self.world.step(0.1)   # must not raise with no peers to sync against
+        self.assertEqual(self.backseater.sync_with_stale_peers_called_with, [])
 
 
-class TestWorldWithRelay(unittest.TestCase):
-    def test_step_syncs_the_relay_after_stepping_dynamics(self):
-        hardware = FakeHardware()
-        frontseater = FakeFrontseater(hardware)
-        backseater = FakeBackseater(frontseater)
-        relay = FakeRelay()
-        world = World(FakeEnvironment(), backseaters={"ugv1": backseater}, relay=relay)
+class TestWorldMeshSync(unittest.TestCase):
+    def test_step_syncs_each_backseater_against_every_other_backseater(self):
+        backseater_a = FakeBackseater(FakeFrontseater(FakeHardware()))
+        backseater_b = FakeBackseater(FakeFrontseater(FakeHardware()))
+        backseater_c = FakeBackseater(FakeFrontseater(FakeHardware()))
+        world = World(FakeEnvironment(), backseaters={
+            "ugv1": backseater_a, "ugv2": backseater_b, "ugv3": backseater_c,
+        })
 
         world.step(0.1)
 
-        self.assertEqual(relay.sync_called_with, {"ugv1": backseater})
+        self.assertCountEqual(backseater_a.sync_with_stale_peers_called_with, [backseater_b, backseater_c])
+        self.assertCountEqual(backseater_b.sync_with_stale_peers_called_with, [backseater_a, backseater_c])
+        self.assertCountEqual(backseater_c.sync_with_stale_peers_called_with, [backseater_a, backseater_b])
 
 
 if __name__ == "__main__":

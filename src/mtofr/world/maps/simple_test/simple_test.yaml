@@ -1,0 +1,34 @@
+map:
+  name: "simple_test"
+  cosmetic_image_path: "simple_test_cosmetic"
+  traversability_image_path: "simple_test_traversability"
+  regions_image_path: "simple_test_regions"
+  meters_per_pixel: 0.5
+
+traversability:
+  # Color: status
+  "#ff0000": "blocked"
+  "#00ff00": "road"
+  "#0000ff": "clear"
+
+regions:
+  # Color: region name, region center (pixel coords from top left)
+  "#ff0000": # red
+    name: "A"
+    center_x: 30.0
+    center_y: 80.0
+
+  "#00ff00": # green
+    name: "B"
+    center_x: 170.0
+    center_y: 140.0
+
+  "#0000ff": # blue
+    name: "C"
+    center_x: 30.0
+    center_y: 210.0
+
+  "#ffff00": # yellow
+    name: "D"
+    center_x: 234.0
+    center_y: 140.0

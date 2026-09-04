@@ -35,14 +35,11 @@ class _FakeFrontseater(Frontseater):
     def capabilities(self) -> CapabilityRegistry:
         return self._registry
 
-    def start_capability(self, capability: str, inputs: dict, outputs: dict) -> str:
-        return "handle"
-
-    def poll_status(self, handle: str) -> dict:
-        return {"status": "in_progress", "outputs": {}}
-
-    def cancel(self, handle: str) -> None:
+    def set_active_primitives(self, primitives: dict) -> None:
         pass
+
+    def describe_status(self) -> dict:
+        return {"overall": "idle", "primitives": {}}
 
 
 _EMPTY_GRAPH = {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}

@@ -1,5 +1,5 @@
 """Example mission graphs for main.py's demo platforms."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Callable
 
@@ -7,13 +7,18 @@ from mtofr.database import Location
 from mtofr.world.base import Frontseater, WorldState
 from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.interface.hardware import ConsoleHardware
+from mtofr.world.interface.frontseater import MissionEditorFrontseater
 
 
 class MissionSet(IntEnum):
     """Which mission set main.py wires up."""
-    SPLIT = 0     # each platform runs its own independent loop, no coordination
-    WAIT = 1      # ugv2 waits on a mesh-synced fact that originates on ugv1
-    VILLAGE = 2   # exercises simple_village's road speed boost and blocked-terrain hard stop
+    SPLIT = 0            # each platform runs its own independent loop, no coordination
+    WAIT = 1             # ugv2 waits on a mesh-synced fact that originates on ugv1
+    VILLAGE = 2          # exercises simple_village's road speed boost and blocked-terrain hard stop
+    VILLAGE_DEFAULT = 3  # same map as VILLAGE, but every platform boots straight onto its own
+                         # default_mission_graph() -- including the interface platform, present
+                         # here so a live mission can be authored/pushed via the mission editor
 
 
 @dataclass
@@ -23,12 +28,15 @@ class MissionSetConfig:
     Frontseater builder plus mission graph, keyed by platform_id. Hardware/Frontseater
     construction lives here (not main.py) since different mission sets may want
     different platform types/hardware configs, not just BicycleHardware. main.py
-    builds one frontseater/backseater stack per key in platform_builders/
-    mission_graphs (which must share the same keys) rather than assuming exactly
-    two platforms of one hardcoded type."""
+    builds one frontseater/backseater stack per key in platform_builders (mission_graphs
+    need not cover every key -- a platform_id missing from mission_graphs boots onto its
+    own Frontseater.default_mission_graph() instead). privilege_levels likewise defaults
+    any platform_id it doesn't mention to 1 -- only the interface platform currently needs
+    to outrank that default, to push mission graphs onto other platforms."""
     map_name: str | None
-    platform_builders: dict   # platform_id -> Callable[[bool], Frontseater] (arg: debug)
-    mission_graphs: dict      # platform_id -> mission graph dict
+    platform_builders: dict            # platform_id -> Callable[[bool], Frontseater] (arg: debug)
+    mission_graphs: dict                # platform_id -> mission graph dict
+    privilege_levels: dict = field(default_factory=dict)   # platform_id -> int, default 1
 
 
 def _bicycle_platform(start_x: float, start_y: float) -> Callable[[bool], Frontseater]:
@@ -37,6 +45,15 @@ def _bicycle_platform(start_x: float, start_y: float) -> Callable[[bool], Fronts
     def build(debug: bool = False) -> Frontseater:
         hardware = BicycleHardware(initial_state=WorldState(x=start_x, y=start_y))
         return BicycleFrontseater(hardware=hardware, debug=debug)
+    return build
+
+
+def _interface_platform(start_x: float, start_y: float) -> Callable[[bool], Frontseater]:
+    """A platform_builders entry for the mission-editor "interface" platform,
+    fixed at (start_x, start_y) -- only safe on a map with no blocking terrain there."""
+    def build(debug: bool = False) -> Frontseater:
+        hardware = ConsoleHardware(initial_state=WorldState(x=start_x, y=start_y))
+        return MissionEditorFrontseater(hardware=hardware, debug=debug)
     return build
 
 
@@ -235,5 +252,22 @@ MISSION_SETS = {
         map_name="simple_village",
         platform_builders={"ugv1": _bicycle_platform(-3.0, -20.0), "ugv2": _bicycle_platform(45.0, -25.0)},
         mission_graphs={"ugv1": mission_village_ugv1, "ugv2": mission_village_ugv2},
+    ),
+    MissionSet.VILLAGE_DEFAULT: MissionSetConfig(
+        map_name="simple_village",
+        platform_builders={
+            "ugv1": _bicycle_platform(-3.0, -20.0),
+            "ugv2": _bicycle_platform(45.0, -25.0),
+            # (0, -30) is clear, unblocked terrain on simple_village's map -- verified
+            # against GroundMap.is_blocked()/speed_multiplier_at() directly.
+            "interface": _interface_platform(0.0, -30.0),
+        },
+        # No entries: every platform (ugv1/ugv2/interface) boots straight onto its own
+        # Frontseater.default_mission_graph() -- ugv1/ugv2 idle-loiter, interface shows
+        # its editor window -- until a mission is authored/pushed live via the editor.
+        mission_graphs={},
+        # interface must outrank the default privilege level (1) to push a mission
+        # graph onto ugv1/ugv2 via write_mission()'s privilege gate.
+        privilege_levels={"interface": 0},
     ),
 }

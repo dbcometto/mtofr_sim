@@ -201,6 +201,9 @@ class MissionDashboard:
         self.graph_canvas.mpl_connect("motion_notify_event", self._on_graph_hover)
         self.graph_canvas.mpl_connect("button_press_event", self._on_graph_click)
 
+        self.overall_status_label = ttk.Label(side, text="", anchor="w")
+        self.overall_status_label.pack(fill=tk.X, pady=(0, 4))
+
         panel_title = ttk.Frame(side)
         ttk.Label(panel_title, text="Panel:").pack(side=tk.LEFT)
         selector = ttk.Combobox(panel_title, values=["Capabilities", "Knowledge"],
@@ -357,6 +360,7 @@ class MissionDashboard:
 
         if self.selected_id.get() == MISSION_OVERVIEW_ID:
             self.capability_tree.delete(*self.capability_tree.get_children())
+            self.overall_status_label.config(text="")
             self._refresh_platform_overview()
             self._refresh_knowledge_tree(None)   # no canonical cross-platform store to show
             return
@@ -405,6 +409,7 @@ class MissionDashboard:
 
     def _refresh_capability_tree(self, backseater, status: dict) -> None:
         self.capability_tree.delete(*self.capability_tree.get_children())
+        self.overall_status_label.config(text=f"Status: {status['overall_status']}")
         for name, info in status["primitives"].items():
             inputs_text = ", ".join(
                 f"{field_name}={backseater.knowledge_database.get(key)!r}"
@@ -419,7 +424,8 @@ class MissionDashboard:
         self.graph_ax.set_facecolor(GRAPH_PLOT_BACKGROUND)
         self.mission_graph_viewer.render(
             self.graph_ax, backseater.mission_graph, status["active_node_id"],
-            primitive_statuses=status["primitives"], show_edge_labels=self.show_edge_labels.get(),
+            primitive_statuses=status["primitives"], overall_status=status["overall_status"],
+            show_edge_labels=self.show_edge_labels.get(),
         )
         self._graph_tooltip = self.graph_ax.annotate(
             "", xy=(0, 0), xytext=(15, 15), textcoords="offset points",

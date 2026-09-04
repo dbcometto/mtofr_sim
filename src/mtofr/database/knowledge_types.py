@@ -17,7 +17,7 @@ class KnowledgeEntry(ABC):
 
 class Location(KnowledgeEntry):
     """A location knowledge entry (2D)"""
-    def __init__(self, x, y):
+    def __init__(self, x: float, y: float):
         self.x = x
         self.y = y
 

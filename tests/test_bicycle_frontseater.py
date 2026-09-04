@@ -1,7 +1,8 @@
-"""Tests for BicycleFrontseater's capability implementations (start_capability/poll_status/
-cancel) exercised directly, independent of any Backseater/mission-graph driving them. A
-capability now calls query()/publish() on its own Backseater, so these tests wire in a
-minimal fake backseater (a plain dict-backed query/publish) instead of a full Backseater."""
+"""Tests for BicycleFrontseater's capability implementations (set_active_primitives/
+_step_active_primitives/describe_status) exercised directly, independent of any
+Backseater/mission-graph driving them. A capability calls query()/publish() on its own
+Backseater, so these tests wire in a minimal fake backseater (a plain dict-backed
+query/publish) instead of a full Backseater."""
 import unittest
 
 from mtofr.database import Location
@@ -34,122 +35,140 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
     def tearDown(self):
         self.frontseater.shutdown()
 
-    def _start_move_to(self, target: Location, tolerance: float, with_output=True):
+    def _activate_move_to(self, target: Location, tolerance: float, with_output=True, name="nav"):
         self.knowledge["target"] = target
         self.knowledge["tolerance"] = tolerance
         outputs = {"arrived": "arrived"} if with_output else {}
-        return self.frontseater.start_capability("move_to", {"target": "target", "tolerance": "tolerance"}, outputs)
+        self.frontseater.set_active_primitives({
+            name: {"capability": "move_to", "inputs": {"target": "target", "tolerance": "tolerance"}, "outputs": outputs}
+        })
 
-    def _start_avoid(self, point: Location, radius: float, with_output=True):
+    def _activate_avoid(self, point: Location, radius: float, with_output=True, name="avoid"):
         self.knowledge["point"] = point
         self.knowledge["radius"] = radius
         outputs = {"registered": "registered"} if with_output else {}
-        return self.frontseater.start_capability("avoid", {"point": "point", "radius": "radius"}, outputs)
+        self.frontseater.set_active_primitives({
+            name: {"capability": "avoid", "inputs": {"point": "point", "radius": "radius"}, "outputs": outputs}
+        })
+
+    def _activate_stopwatch(self, with_output=True, name="watch"):
+        outputs = {"elapsed_time": "elapsed_time"} if with_output else {}
+        self.frontseater.set_active_primitives({name: {"capability": "stopwatch", "inputs": {}, "outputs": outputs}})
 
     def test_capabilities_advertises_move_to_and_avoid(self):
         registry = self.frontseater.capabilities()
         self.assertIsNotNone(registry.get("move_to"))
         self.assertIsNotNone(registry.get("avoid"))
 
-    def test_start_capability_move_to_returns_a_pollable_handle(self):
-        handle = self._start_move_to(Location(5.0, 0.0), 0.5)
-        self.assertIn(self.frontseater.poll_status(handle)["status"], ("in_progress", "success"))
+    def test_capabilities_advertises_stopwatch(self):
+        self.assertIsNotNone(self.frontseater.capabilities().get("stopwatch"))
 
-    def test_start_capability_avoid_is_instantaneous_success(self):
-        handle = self._start_avoid(Location(0.0, 0.0), 1.0)
-        self.assertEqual(self.frontseater.poll_status(handle)["status"], "success")
-
-    def test_start_capability_unknown_capability_raises(self):
+    def test_set_active_primitives_unknown_capability_raises(self):
         with self.assertRaises(ValueError):
-            self.frontseater.start_capability("fly", {}, {})
+            self.frontseater.set_active_primitives({"fly": {"capability": "fly", "inputs": {}, "outputs": {}}})
 
-    def test_poll_status_reports_in_progress_while_far_from_target(self):
-        handle = self._start_move_to(Location(100.0, 0.0), 0.5)
-        self.assertEqual(self.frontseater.poll_status(handle)["status"], "in_progress")
+    #==========# move_to #==========#
 
-    def test_poll_status_reports_arrived_false_while_far_from_target(self):
-        handle = self._start_move_to(Location(100.0, 0.0), 0.5)
-        self.assertEqual(self.frontseater.poll_status(handle)["outputs"]["arrived"], False)
+    def test_move_to_starts_en_route_while_far_from_target(self):
+        self._activate_move_to(Location(100.0, 0.0), 0.5)
+        self.frontseater._step_active_primitives()
+        self.assertEqual(self.frontseater.describe_status()["primitives"]["nav"], "en route")
 
-    def test_poll_status_reports_success_once_within_tolerance(self):
+    def test_move_to_reports_arrived_false_while_far_from_target(self):
+        self._activate_move_to(Location(100.0, 0.0), 0.5)
+        self.frontseater._step_active_primitives()
+        self.assertEqual(self.knowledge["arrived"], False)
+
+    def test_move_to_reports_arrived_once_within_tolerance(self):
         self.hardware.state.x, self.hardware.state.y = 0.0, 0.0
-        handle = self._start_move_to(Location(0.1, 0.0), 0.5)
-        self.assertEqual(self.frontseater.poll_status(handle)["status"], "success")
+        self._activate_move_to(Location(0.1, 0.0), 0.5)
+        self.frontseater._step_active_primitives()
+        self.assertEqual(self.frontseater.describe_status()["primitives"]["nav"], "arrived")
 
-    def test_poll_status_reports_arrived_true_once_within_tolerance(self):
+    def test_move_to_publishes_arrived_to_its_bound_knowledge_key(self):
         self.hardware.state.x, self.hardware.state.y = 0.0, 0.0
-        handle = self._start_move_to(Location(0.1, 0.0), 0.5)
-        self.assertEqual(self.frontseater.poll_status(handle)["outputs"]["arrived"], True)
-
-    def test_poll_status_publishes_arrived_to_its_bound_knowledge_key(self):
-        self.hardware.state.x, self.hardware.state.y = 0.0, 0.0
-        handle = self._start_move_to(Location(0.1, 0.0), 0.5)
-        self.frontseater.poll_status(handle)
+        self._activate_move_to(Location(0.1, 0.0), 0.5)
+        self.frontseater._step_active_primitives()
         self.assertTrue(self.knowledge["arrived"])
 
-    def test_poll_status_reports_registered_true_for_avoid(self):
-        handle = self._start_avoid(Location(0.0, 0.0), 1.0)
-        self.assertEqual(self.frontseater.poll_status(handle)["outputs"]["registered"], True)
-
-    def test_poll_status_publishes_registered_to_its_bound_knowledge_key(self):
-        handle = self._start_avoid(Location(0.0, 0.0), 1.0)
-        self.frontseater.poll_status(handle)
-        self.assertTrue(self.knowledge["registered"])
-
-    def test_poll_status_for_unknown_handle_reports_fail(self):
-        self.assertEqual(self.frontseater.poll_status("nonexistent-handle")["status"], "fail")
-
-    def test_move_to_reads_a_retargeted_knowledge_key_on_the_next_poll(self):
-        handle = self._start_move_to(Location(100.0, 0.0), 0.5)
-        self.frontseater.poll_status(handle)
+    def test_move_to_reads_a_retargeted_knowledge_key_on_the_next_step(self):
+        self._activate_move_to(Location(100.0, 0.0), 0.5)
+        self.frontseater._step_active_primitives()
         self.knowledge["target"] = Location(0.0, 0.0)
         self.hardware.state.x, self.hardware.state.y = 0.0, 0.0
-        self.assertEqual(self.frontseater.poll_status(handle)["status"], "success")
+        self.frontseater._step_active_primitives()
+        self.assertEqual(self.frontseater.describe_status()["primitives"]["nav"], "arrived")
 
-    def test_cancel_active_move_to_marks_it_failed_and_clears_target(self):
-        handle = self._start_move_to(Location(5.0, 0.0), 0.5)
-        self.frontseater.cancel(handle)
-        self.assertEqual(self.frontseater.poll_status(handle)["status"], "fail")
+    def test_deactivating_a_move_to_clears_its_target(self):
+        self._activate_move_to(Location(5.0, 0.0), 0.5)
+        self.frontseater.set_active_primitives({})
         self.assertIsNone(self.frontseater._active_target)
 
     def test_compute_controls_is_idle_with_no_active_target(self):
         controls = self.frontseater.compute_controls(self.hardware.read_state())
         self.assertEqual(controls, {"vel": 0.0, "steer": 0.0})
 
-    def _start_stopwatch(self, with_output=True):
-        outputs = {"elapsed_time": "elapsed_time"} if with_output else {}
-        return self.frontseater.start_capability("stopwatch", {}, outputs)
+    #==========# avoid #==========#
 
-    def test_capabilities_advertises_stopwatch(self):
-        self.assertIsNotNone(self.frontseater.capabilities().get("stopwatch"))
+    def test_avoid_reports_registered(self):
+        self._activate_avoid(Location(0.0, 0.0), 1.0)
+        self.frontseater._step_active_primitives()
+        self.assertEqual(self.frontseater.describe_status()["primitives"]["avoid"], "registered")
+
+    def test_avoid_publishes_registered_to_its_bound_knowledge_key(self):
+        self._activate_avoid(Location(0.0, 0.0), 1.0)
+        self.frontseater._step_active_primitives()
+        self.assertTrue(self.knowledge["registered"])
+
+    #==========# stopwatch #==========#
 
     def test_stopwatch_reports_zero_elapsed_time_right_after_starting(self):
-        handle = self._start_stopwatch()
-        self.assertAlmostEqual(self.frontseater.poll_status(handle)["outputs"]["elapsed_time"], 0.0)
+        self._activate_stopwatch()
+        self.frontseater._step_active_primitives()
+        self.assertAlmostEqual(self.knowledge["elapsed_time"], 0.0)
 
     def test_stopwatch_elapsed_time_advances_with_simulation_time(self):
-        handle = self._start_stopwatch()
+        self._activate_stopwatch()
         self.hardware.state.t += 5.0
-        self.assertAlmostEqual(self.frontseater.poll_status(handle)["outputs"]["elapsed_time"], 5.0)
-
-    def test_stopwatch_status_stays_in_progress_and_never_completes_on_its_own(self):
-        handle = self._start_stopwatch()
-        self.hardware.state.t += 100.0
-        self.assertEqual(self.frontseater.poll_status(handle)["status"], "in_progress")
+        self.frontseater._step_active_primitives()
+        self.assertAlmostEqual(self.knowledge["elapsed_time"], 5.0)
 
     def test_stopwatch_publishes_elapsed_time_to_its_bound_knowledge_key(self):
-        handle = self._start_stopwatch()
+        self._activate_stopwatch()
         self.hardware.state.t += 3.0
-        self.frontseater.poll_status(handle)
+        self.frontseater._step_active_primitives()
         self.assertAlmostEqual(self.knowledge["elapsed_time"], 3.0)
 
     def test_restarting_the_stopwatch_resets_elapsed_time_to_zero(self):
-        first_handle = self._start_stopwatch()
+        self._activate_stopwatch(name="watch")
         self.hardware.state.t += 10.0
-        self.frontseater.poll_status(first_handle)
+        self.frontseater._step_active_primitives()
 
-        second_handle = self._start_stopwatch()
-        self.assertAlmostEqual(self.frontseater.poll_status(second_handle)["outputs"]["elapsed_time"], 0.0)
+        self.frontseater.set_active_primitives({})   # stop it
+        self._activate_stopwatch(name="watch")        # start a fresh instance
+        self.frontseater._step_active_primitives()
+        self.assertAlmostEqual(self.knowledge["elapsed_time"], 0.0)
+
+    #==========# default mission graph #==========#
+
+    def test_default_mission_graph_starts_on_a_stopwatch_only_startup_node(self):
+        graph = self.frontseater.default_mission_graph()
+        self.assertEqual(graph["start"], "startup")
+        primitives = graph["nodes"]["startup"]["primitives"]
+        self.assertEqual(len(primitives), 1)
+        loiter = next(iter(primitives.values()))
+        self.assertEqual(loiter["capability"], "stopwatch")
+
+    def test_default_mission_graph_declares_its_own_output_knowledge_key(self):
+        graph = self.frontseater.default_mission_graph()
+        loiter = graph["nodes"]["startup"]["primitives"]["loiter"]
+        output_key = loiter["outputs"]["elapsed_time"]
+        self.assertIn(output_key, graph["knowledge"])
+        self.assertEqual(graph["knowledge"][output_key]["type"], float)
+
+    def test_default_mission_graph_has_no_edges(self):
+        graph = self.frontseater.default_mission_graph()
+        self.assertEqual(graph["edges"], {})
 
 
 if __name__ == "__main__":

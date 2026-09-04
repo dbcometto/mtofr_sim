@@ -223,6 +223,39 @@ class TestMissionGraphViewerRender(unittest.TestCase):
         self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1")
         self.assertFalse(self.ax.collections[-1].get_clip_on())
 
+    def test_a_reverse_edge_pair_does_not_share_the_same_midpoint(self):
+        # Regression test: LINEAR_GRAPH's n1->n2 and n2->n1 edges are the same
+        # chord in opposite directions -- drawn as two straight lines they'd be
+        # visually indistinguishable (and share one hover point). The second one
+        # sharing that pair must be curved away from the first.
+        self.viewer.render(self.ax, LINEAR_GRAPH, active_node_id="n1")
+        forward_midpoint = self.viewer._edges[0]["midpoint"]
+        reverse_midpoint = self.viewer._edges[1]["midpoint"]
+        self.assertNotEqual(forward_midpoint, reverse_midpoint)
+
+    def test_the_first_edge_between_a_pair_stays_on_the_straight_chord(self):
+        self.viewer.render(self.ax, LINEAR_GRAPH, active_node_id="n1")
+        source_position, target_position = self.viewer._nodes[0]["position"], self.viewer._nodes[1]["position"]
+        expected_midpoint = ((source_position[0] + target_position[0]) / 2,
+                              (source_position[1] + target_position[1]) / 2)
+        forward_midpoint = self.viewer._edges[0]["midpoint"]
+        self.assertAlmostEqual(forward_midpoint[0], expected_midpoint[0], places=6)
+        self.assertAlmostEqual(forward_midpoint[1], expected_midpoint[1], places=6)
+
+    def test_edges_between_unrelated_node_pairs_all_stay_straight(self):
+        # No overlap risk in a triangle where every edge connects a different pair
+        # of nodes -- every one should stay on its own straight chord (curvature 0).
+        self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1")
+        positions_by_node_id = {node_id: position for node_id, position in
+                                 zip(CYCLE_GRAPH["nodes"], (node["position"] for node in self.viewer._nodes))}
+        for edge in self.viewer._edges:
+            source_id, target_id = edge["label"].split("Edge: ")[1].split("\n")[0].split(" -> ")
+            source_position, target_position = positions_by_node_id[source_id], positions_by_node_id[target_id]
+            expected_midpoint = ((source_position[0] + target_position[0]) / 2,
+                                  (source_position[1] + target_position[1]) / 2)
+            self.assertAlmostEqual(edge["midpoint"][0], expected_midpoint[0], places=6)
+            self.assertAlmostEqual(edge["midpoint"][1], expected_midpoint[1], places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

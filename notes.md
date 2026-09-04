@@ -1,6 +1,313 @@
 # Notes
 
 
+## Status 3 Sep 26 (latest, second follow-up) — Knowledge key rename, cascaded
+
+(Written by Claude)
+
+The previous entry deliberately left Knowledge-key renaming out of the Edit
+Knowledge Key dialog, reasoning that a plain rename would silently break every
+primitive input/output binding and edge condition already referencing the old
+key string (both are just plain strings with no back-reference to update).
+Asked directly for rename support anyway, so implemented it properly rather than
+dropping the safety concern: `graph_draft.rename_knowledge_key(draft, old_key,
+new_key)` moves the key's own declaration *and* walks every node's primitives
+(replacing any input/output binding equal to `old_key`) *and* every edge's
+condition token list, so nothing is left dangling.
+
+The tricky part is condition token lists: a token equal to `old_key` might be a
+genuine key reference (`["arrived", "==", True]`) or a coincidentally-matching
+*literal value* being compared against a key (`["status", "==", "arrived"]` --
+here "arrived" is a string literal, not a key). Resolved this positionally
+rather than by writing a partial reparse: per the condition grammar (`mtofr.
+condition.condition`), a key token is *always* immediately followed by a
+comparison operator or `"is"` — the grammar never places a literal value there,
+since after `key operator value` the next token must be `"and"`/`"or"`/`")"`/end.
+So `_rename_key_in_condition()` just checks `tokens[index] == old_key and
+tokens[index + 1] in {comparison operators, "is"}` — exactly identifies key
+positions, provably no false positives on a same-valued literal.
+
+`_KnowledgeDialog`'s key field is no longer locked during Edit; `MissionEditorWindow._on_edit_knowledge_key()`
+calls `rename_knowledge_key()` first (only when the key actually changed) before
+`edit_knowledge_key()` applies the type/value change at the new key — composing
+the two rather than growing `edit_knowledge_key()`'s own responsibility.
+
+Tests: added rename cases to `test_graph_draft.py` (declaration moves, input/
+output bindings update, edge condition key token updates, a literal-value
+false-positive regression case, duplicate-name and unknown-key rejection) and a
+window-level case in `test_mission_editor_window.py` confirming the dialog-driven
+rename cascades to a primitive binding. Full suite passes.
+
+
+## Status 3 Sep 26 (latest, follow-up) — mission editor UX fixes from first hands-on pass
+
+(Written by Claude)
+
+First real usage of the mission editor (previous entry) surfaced five issues, fixed
+in this pass:
+
+1. **Modal dialogs sometimes opened at the screen's top-left corner** instead of
+   near the window that spawned them. Added `_center_over_parent()` (in
+   `mission_editor/window.py`) and applied it to every dialog, including replacing
+   `tkinter.simpledialog.askstring` (used for Add/Rename Node) with a small custom
+   `_TextInputDialog` so every dialog in the window centers the same reliable way.
+2. **Knowledge type handling was Location-hardcoded.** Replaced the single
+   "default value" text field (with a Location-specific hint comment below it)
+   with a generic per-field form: `mission_editor/serialization.py` gained
+   `constructor_fields()` (introspects a `KnowledgeEntry` subclass's `__init__`
+   signature via `inspect.signature`) and `is_compound_knowledge_type()`, used by
+   both the save/load encode/decode path and the Knowledge dialog's field
+   generator. `Location.__init__` gained type hints (`x: float, y: float`) purely
+   so this introspection has something to read. A future `KnowledgeEntry`
+   subclass now needs only one line in `KNOWLEDGE_TYPES_BY_NAME` to become fully
+   declarable/editable/serializable — no per-type parsing code anywhere.
+3. **Selection didn't survive a refresh.** Every draft mutation triggers
+   `_refresh_all()`, which used to rebuild every Treeview from scratch with no
+   memory of what was selected. `MissionEditorWindow` now tracks
+   `selected_node_id`/`selected_primitive_name` explicitly and re-applies them
+   (`nodes_tree.selection_set(...)`/`primitives_tree.selection_set(...)`) after
+   every rebuild, clearing to `None` only if the selected id no longer exists.
+   Adding a node now also auto-selects it (surfaced live: adding a node then
+   immediately clicking "Add Primitive" hit a "select a node first" popup, since
+   nothing was selected yet).
+4. **The draft preview didn't match Mission Overview's edge rendering, and lived
+   squeezed into a fourth column.** `viz/mission_graph_view.py` (shared by both
+   the dashboard and this editor) gained overlap handling: edges are grouped by
+   *unordered* endpoint pair, and every edge past the first sharing a pair curves
+   away from it along a quadratic bezier (`_bezier_control_and_midpoint()`) —
+   fixing the case that actually overlapped, a reverse-direction pair (A->B and
+   B->A render as the same straight line otherwise). The bezier's midpoint (not
+   the control point) is what hover/label logic anchors to; its tangent at t=0.5
+   is provably parallel to the straight chord regardless of curvature, so the
+   existing arrowhead math needed only a midpoint parameter, not a rewrite. The
+   editor's own preview moved out of the cramped fourth column into its own
+   Notebook tab ("Graph", alongside the tables under "Editor") — explicitly the
+   seed of the future graphical editor, not just a layout tweak — and its
+   background color now matches `MissionDashboard`'s graph panel
+   (`GRAPH_PLOT_BACKGROUND = "#808080"`) for visual consistency.
+5. **Only Add/Remove existed — editing meant delete and recreate.** Added
+   `graph_draft.edit_primitive()` (supports renaming), `edit_edge()` (can move an
+   edge to a different source/target, not just change its condition), and
+   `edit_knowledge_key()` (type/value only — deliberately does not support
+   renaming the key itself, since a rename would silently break every primitive
+   binding/edge condition already referencing the old key string, which are
+   plain strings with no back-reference to update). Each dialog
+   (`_PrimitiveDialog`/`_EdgeDialog`/`_KnowledgeDialog`) gained an optional
+   `existing` parameter that pre-fills every field; `MissionEditorWindow` gained
+   an "Edit" button next to Add/Remove for primitives, edges, and knowledge keys.
+   Nodes were left with Rename/Set Start as before, since a node has no other
+   editable property beyond its id and its primitives (already independently
+   editable).
+
+Tests: `test_mission_editor_window.py` is new — a Tk-display-gated smoke test
+(mirroring `test_mission_dashboard.py`'s `TK_AVAILABLE` skip guard) that patches
+the three modal dialog classes with a trivial stub returning a canned `.result`
+so each button handler's wiring is exercised without blocking on a real dialog's
+`wait_window()`. Added edit-helper and curvature-separation cases to
+`test_graph_draft.py`/`test_mission_graph_view.py`. Full suite (370 tests) passes.
+One early run of the full suite appeared to hang past a 120s timeout; turned out
+to be a stale process left over from an earlier buggy version of
+`test_mission_editor_window.py` (which had assumed the window's own blank draft
+starts on a node named `"n1"` — it's actually `"start"`, from
+`graph_draft.blank_graph()` — and so kept hitting an uncaught `ValueError` inside
+`_on_rename_node()`'s `messagebox.showerror` path); killing that stale process and
+rerunning confirmed the real suite runtime is ~79s, not a genuine deadlock.
+
+
+## Status 3 Sep 26 (latest) — mission-editor "interface" platform (build order step 6)
+
+(Written by Claude)
+
+Implemented build order step 6: a user-facing mission-authoring tool, built as the
+"interface platform" notes.md's 19 Aug 26 entry sketched (an ordinary Backseater +
+bespoke Frontseater, no special class) rather than a bolt-on tool that bypasses the
+mesh. Interviewed first; key decisions, in the order they were settled:
+
+- **Editing is not a capability.** The Frontseater (`MissionEditorFrontseater`, in
+  the new `world/interface/` package alongside a stationary `ConsoleHardware`)
+  advertises exactly one capability, `show_interface`, whose start/stop lifecycle
+  opens/closes a Tk window — everything the window actually lets you *do* (add a
+  node, bind a primitive, edit a condition) lives entirely outside the
+  capability/mission-graph machinery every other platform uses, in a new
+  `mission_editor` package the Frontseater talks to but never inspects the contents
+  of. `default_mission_graph()` is a single node with no edges running
+  `show_interface` unconditionally, so the window is always open once this platform
+  exists — the same "always active" pattern notes.md described for a future LLM
+  operator, minus the agentic loop (explicitly deferred to build order step 7).
+- **The window is a second Toplevel, not a second process.** `MissionDashboard`
+  already drives its own Tk root cooperatively (no `mainloop()` call — see 28 Aug 26
+  entry's context), so `MissionEditorWindow(dashboard.root, world, platform_id)`
+  rides the same event pump for free. A genuinely separate-process
+  backseater/frontseater story (raised as a "would be nice" during the interview) is
+  a bigger structural change than this step warranted and was explicitly deferred.
+- **Editing model: load-live-or-blank, edit a local draft, push explicitly.**
+  `mission_editor/graph_draft.py` holds pure mutation helpers over a plain draft
+  dict (add/remove/rename node, add/remove primitive/edge/knowledge key) — each
+  returns a *new* top-level dict object rather than mutating in place, since
+  `MissionGraphViewer`'s layout cache is keyed by `id(mission_graph)` and a stale
+  cached layout would otherwise survive an in-place edit. A draft is loaded via
+  `graph_draft.load_draft()` (deep-copies a live platform's `mission_graph`, or a
+  file loaded via `mission_editor/serialization.py`) or started blank, edited
+  freely with no effect on any live platform, then explicitly pushed via the
+  existing privilege-gated `Backseater.write_mission()` — no new push mechanism was
+  needed; the editor is just another writer_platform_id.
+- **Conditions are typed as raw tokens, not built structurally.** There is no
+  tree->token serializer anywhere in the codebase (`parse_condition()` only goes
+  token-list -> tree), and asked directly whether a structural builder was worth
+  writing, the answer was "the user can just type the conditions for now" — so an
+  edge's condition is a plain text field holding a Python literal (e.g.
+  `["ugv1/arrived", "==", True]`), parsed via `ast.literal_eval` then validated with
+  `parse_condition()` on submit. A future structural builder remains a clean
+  addition later since it wouldn't change the underlying token format.
+- **Form/table editor, not a drag-and-drop canvas.** Explicitly chosen over
+  extending `MissionGraphViewer` into an editable canvas, to avoid a fiddly custom
+  interaction layer eating the whole step; the existing viewer is reused read-only
+  for a live preview of the draft instead.
+- **Privilege**: `MissionSetConfig` gained a `privilege_levels: dict` field
+  (platform_id -> int, default 1) since the interface platform must outrank an
+  ordinary platform's default privilege (1) to push a mission onto it via
+  `write_mission()`'s existing gate — no change to the gate itself was needed, only
+  a way for `main.py` to assign a non-default level per platform.
+- **New mission set, `MissionSet.VILLAGE_DEFAULT`**: same `simple_village` map as
+  `VILLAGE`, but `mission_graphs={}` for every platform (including the new
+  `"interface"` platform) — `MissionSetConfig.mission_graphs` no longer needs to
+  cover every `platform_builders` key; a platform_id missing from it now boots onto
+  its own `Frontseater.default_mission_graph()`, which `main.py` implements by
+  changing `mission_set.mission_graphs[platform_id]` to `.get(platform_id)`
+  (previously always a required key, since every prior mission set gave every
+  platform an explicit graph). Made `VILLAGE_DEFAULT` the active set in `main.py`
+  so the editor is visible by default; the interface platform sits at a verified
+  clear, unblocked map coordinate (0, -30), checked directly against
+  `GroundMap.is_blocked()`/`speed_multiplier_at()` rather than guessed from the
+  cosmetic image.
+- Every `Frontseater` subclass must implement `shutdown()`: `main.py`'s teardown
+  loop calls it unconditionally on every frontseater it built, a pre-existing
+  assumption (only ever exercised by `BicycleFrontseater` before now) that
+  `MissionEditorFrontseater` also has to satisfy even though it owns no OS-level
+  resource — its `shutdown()` just closes the window if one is still open.
+
+Tests added: `test_console_hardware.py`, `test_mission_editor_frontseater.py`
+(window open/close lifecycle via an injected fake window factory, no real Tk),
+`test_graph_draft.py`, `test_mission_editor_serialization.py` (round-trips a
+Location-typed knowledge key through JSON), `test_mission_editor_push.py`
+(exercises the privilege gate directly at the level the editor's Push button calls
+it). Updated `test_missions.py` for the new mission set and the now-optional
+mission_graphs coverage. Full suite (349 tests) passes; smoke-tested `main.py`
+directly (not headless) — ran over 15s with no errors, dashboard and mission-editor
+window both open, sim stepping normally.
+
+
+## Status 3 Sep 26 (later) — Frontseater capability-lifecycle simplification: drop start/poll/cancel for one hand-off call
+
+(Written by Claude)
+
+Superseded the resolve-then-execute-successor design (Backseater calling
+`start_capability()`/`poll_status()`/`cancel()` against a per-primitive handle every
+tick) with a single hand-off: `Frontseater.set_active_primitives(primitives)`, called
+by Backseater only when the active node's primitive dict differs (by object identity)
+from what it last sent — a mission/node change naturally differs, since it's a
+different node's dict, so hot-swap needs no separate cancel step. Motivating question
+from this session's interview: capability status was already divorced from mission
+logic (edges only ever read Knowledge, never primitive status — true since the
+Condition rewrite), so polling for it every tick was pure overhead with no payoff;
+and the goal stated this session — "the frontseater is the only bespoke part of this
+system, but it is bespoke every time" — argues for shrinking that bespoke surface to
+one method instead of three-plus-handle-bookkeeping.
+
+**What Frontseater now owns entirely**: everything downstream of "here's what should
+be active." `set_active_primitives()` is responsible for diffing the incoming dict
+against what's currently running (new name -> start it, missing name -> stop it,
+unchanged -> leave it), and for deciding how "running" actually works — this tick's
+`update()`, a thread, real ROS nodes toggled on/off, whatever fits that platform.
+Backseater never polls for completion again; a primitive still decides for itself
+what to publish to Knowledge, on its own schedule, via the same `query()`/`publish()`
+capabilities already had (increment 4, per an earlier session).
+
+**Status introspection, added back deliberately**: dropping polling also drops
+Backseater's only visibility into "what is this platform actually doing," which used
+to feed the dashboard/debug prints. Rather than leave this purely to a by-convention
+Knowledge-key (considered and rejected this session as too easy to forget), added a
+required abstract method `Frontseater.describe_status() -> {"overall": str,
+"primitives": {name: str}}` — plain human-readable text, in the Frontseater's own
+words, purely for display; Backseater forwards it in `status()` but never reads it
+for logic. `MissionGraphViewer`/`PlatformOverviewViewer`/`MissionDashboard` all
+gained an `overall_status` line alongside the existing per-primitive text.
+
+**Crash isolation moved to `World.step()`**: with no `try/except` left around the
+hand-off call in `Backseater.update()` (nothing there could meaningfully fail that
+Backseater's own upstream checks — capability-exists, `_check_binding_types()` —
+haven't already caught), a genuine bespoke runtime fault inside a Frontseater's own
+`set_active_primitives()`/`begin_update()`/`finish_update()` would otherwise crash
+the whole simulation tick. `World.step()` now wraps each platform's three calls
+individually in `try/except Exception`, tracking a per-tick `failed` set so a broken
+platform is skipped for the rest of that tick while every other platform proceeds
+unaffected — matching how a real deployment would already isolate platforms by
+process/node boundary, per this session's discussion of what `begin_update()`/
+`finish_update()`'s worker-process split is actually for (a real concurrency
+optimization for the MPC solve, unrelated to this refactor, left untouched).
+
+**`BicycleFrontseater`** (`world/ground_plane/frontseater.py`) was rewritten as the
+reference implementation: `set_active_primitives()` does the name-keyed diff and
+calls `_start()`/`_stop()`; `_step_active_primitives()` (called every tick from
+`begin_update()`) runs whatever's active. Each is a plain if/elif over the three
+capabilities (`move_to`/`avoid`/`stopwatch`) — deliberately not a generic
+handler-dispatch abstraction (tried and rejected this session as unnecessary
+ceremony for a from-scratch example); `__init__` is organized into labeled
+subsections (construction parameters / admin state / MPC target state / capability
+bookkeeping / worker process) so a future platform author has a template to copy
+rather than a wall of unstructured `self.x = ...` lines.
+
+Tests: rewrote `tests/test_bicycle_frontseater.py` around the new
+`set_active_primitives()`/`_step_active_primitives()`/`describe_status()` surface;
+updated the fake Frontseaters in `tests/test_backseater_capability_execution.py`,
+`tests/test_backseater_mission_change.py`, `tests/test_backseater_sync.py`,
+`tests/test_default_mission.py`, and `tests/test_platform_overview_view.py` to the
+new interface. Full suite (310 tests) passes; smoke-tested headless `World.step()`
+over 50 ticks and a live `MissionDashboard` refresh with a selected platform.
+
+
+## Status 3 Sep 26 — default startup missions (build order step 5)
+
+(Written by Claude)
+
+Implemented build order step 5: every platform now has a hardcoded default mission
+graph it boots into, rather than the old bare empty-stub fallback ({"knowledge": {},
+"nodes": {}, "edges": {}, "start": None} — which had no start node, so update() was
+always a no-op). Interviewed first (where the default lives, what it does, whether
+main.py's existing wiring changes), then implemented incrementally with tests, per
+CLAUDE.md's process.
+
+**Where it lives**: `Frontseater.default_mission_graph()` (`world/base.py`) is a new
+concrete (not abstract) method — a platform's default content is platform-specific,
+so per this session's interview answer it belongs with the Frontseater, not baked
+into the platform-agnostic Backseater. The base implementation is an inert
+placeholder: a single `"startup"` node with no primitives and no edges — a safe
+"boots but does nothing" fallback any Frontseater subclass gets for free without
+overriding anything. Being concrete rather than abstract also meant none of the
+several test-only Frontseater subclasses across the test suite needed updating.
+
+**BicycleFrontseater's override** (`world/ground_plane/frontseater.py`) returns a
+real idle mission: one `"startup"` node running the existing `stopwatch` capability
+(no inputs, publishes `elapsed_time`), bound to a `"startup/elapsed_time"` Knowledge
+key it declares itself — a UGV-appropriate "loiter and do nothing physically" analog
+to the eventual "hover in place" a UAV's own override would use instead.
+
+**Wiring**: `Backseater.__init__` (`backseater/backseater.py`) now falls back to
+`self.frontseater.default_mission_graph()` when constructed with
+`mission_graph=None`, instead of the old bare literal. Per this session's interview
+answer, `main.py`/`missions.py` were deliberately left unchanged — every platform in
+the existing SPLIT/WAIT/VILLAGE mission sets still gets an explicit real mission
+graph passed at construction, same as before; the default is purely a fallback path
+for a platform built without one (relevant later for build order steps 6/7's
+interface platform, and any future "unexpected restart" story).
+
+Tests: `tests/test_default_mission.py` (base-class placeholder shape, Backseater's
+None-fallback wiring, an end-to-end BicycleFrontseater run confirming
+`elapsed_time` actually advances) plus three new cases in
+`tests/test_bicycle_frontseater.py` for the override's own structure. Full suite
+(315 tests) passes; `main.py`'s existing mission sets were smoke-tested unaffected.
+
+
 ## Status 1 Sep 26 (later) — image-based map system hooked up (build order step 4)
 
 (Written by Claude)

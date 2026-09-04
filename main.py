@@ -11,6 +11,15 @@ from mtofr.backseater.backseater import Backseater
 from mtofr.database import KnowledgeDatabase
 from mtofr.maps import GroundMap
 from mtofr.missions import MissionSet, MISSION_SETS
+from mtofr.world.interface.frontseater import MissionEditorFrontseater
+from mtofr.mission_editor.window import MissionEditorWindow
+
+
+class _NullWindow:
+    """Stand-in for MissionEditorWindow when running headless (no Tk root exists) --
+    lets show_interface start/stop without crashing, with nothing actually shown."""
+    def close(self) -> None:
+        pass
 
 
 #==========# Config #==========#
@@ -18,8 +27,10 @@ DT = 0.1
 ENABLE_HEADLESS = False
 DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
 # SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via mesh sync. VILLAGE: exercises
-# simple_village's road speed boost and blocked-terrain hard stop.
-ACTIVE_MISSION_SET = MissionSet.VILLAGE
+# simple_village's road speed boost and blocked-terrain hard stop. VILLAGE_DEFAULT: same
+# map, but every platform (including the mission-editor "interface" platform) boots onto
+# its own default_mission_graph() -- author/push a real mission live via its window.
+ACTIVE_MISSION_SET = MissionSet.VILLAGE_DEFAULT
 
 
 # Setup and the main loop both live inside this guard, not just the loop: BicycleFrontseater
@@ -38,7 +49,8 @@ if __name__ == "__main__":
         knowledge = KnowledgeDatabase()
         backseaters[platform_id] = Backseater(
             frontseater=frontseater, knowledge_database=knowledge,
-            mission_graph=mission_set.mission_graphs[platform_id], platform_id=platform_id, debug=DEBUG,
+            mission_graph=mission_set.mission_graphs.get(platform_id), platform_id=platform_id,
+            privilege_level=mission_set.privilege_levels.get(platform_id, 1), debug=DEBUG,
         )
         frontseaters[platform_id] = frontseater
 
@@ -47,6 +59,18 @@ if __name__ == "__main__":
     environment = GroundPlaneEnv(ground_map=ground_map)
     world = World(environment, backseaters=backseaters, debug=DEBUG)
     vizualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter(ground_map=ground_map))
+
+    # Any mission-editor "interface" platform needs a window_factory, supplied only
+    # now since it needs World/the dashboard's Tk root, neither of which existed
+    # when its Frontseater was built above.
+    for platform_id, frontseater in frontseaters.items():
+        if isinstance(frontseater, MissionEditorFrontseater):
+            if vizualizer is not None:
+                frontseater.set_window_factory(
+                    lambda platform_id=platform_id: MissionEditorWindow(vizualizer.root, world, platform_id)
+                )
+            else:
+                frontseater.set_window_factory(_NullWindow)
 
     #==========# Main #==========#
     accumulator = 0.0

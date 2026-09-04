@@ -10,20 +10,43 @@ class World:
         self.debug = debug
 
     def step(self, dt: float) -> None:
+        # Each phase is isolated per platform: a bespoke Frontseater raising (e.g. a
+        # broken set_active_primitives() implementation, or a real hardware fault a
+        # future deployment would see) skips only that platform for the rest of this
+        # tick, rather than crashing the whole simulation step. In a real deployment
+        # each platform's stack runs in its own process/node, so this mirrors that
+        # isolation rather than inventing new behavior.
+        failed_entity_ids = set()
+
         for entity_id, backseater in self.backseaters.items():
             if self.debug:
                 print(f"[World] Updating backseater '{entity_id}'")
-            backseater.update()
+            try:
+                backseater.update()
+            except Exception as error:
+                print(f"[World] Backseater '{entity_id}' update() failed: {error} — skipping this tick.")
+                failed_entity_ids.add(entity_id)
 
         # Split across all platforms rather than looping backseater-by-backseater:
         # begin_update() lets a Frontseater dispatch its (possibly expensive) control
         # computation to a worker process without blocking, so every platform's work
         # is in flight before finish_update() collects any one of them -- letting
         # independent platforms' solves overlap instead of serializing.
-        for backseater in self.backseaters.values():
-            backseater.frontseater.begin_update()
-        for backseater in self.backseaters.values():
-            backseater.frontseater.finish_update()
+        for entity_id, backseater in self.backseaters.items():
+            if entity_id in failed_entity_ids:
+                continue
+            try:
+                backseater.frontseater.begin_update()
+            except Exception as error:
+                print(f"[World] Frontseater '{entity_id}' begin_update() failed: {error} — skipping this tick.")
+                failed_entity_ids.add(entity_id)
+        for entity_id, backseater in self.backseaters.items():
+            if entity_id in failed_entity_ids:
+                continue
+            try:
+                backseater.frontseater.finish_update()
+            except Exception as error:
+                print(f"[World] Frontseater '{entity_id}' finish_update() failed: {error} — skipping this tick.")
 
         self.environment.step_dynamics_all(
             {entity_id: backseater.frontseater.hardware for entity_id, backseater in self.backseaters.items()}, dt

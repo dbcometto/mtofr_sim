@@ -93,6 +93,39 @@ NODE_HOVER_TOLERANCE_POINTS = NODE_MARKER_RADIUS_POINTS
 EDGE_HOVER_TOLERANCE_POINTS = 12.0
 LABEL_Y_OFFSET = 0.18   # keeps edge labels clear of the line itself, in data units
 LAYOUT_PADDING = 0.6   # data units of empty space kept around the node grid on every side
+CURVE_UNIT = 0.35   # data units of perpendicular offset per curvature step, spreading apart
+                      # multiple edges that share the same pair of endpoints (in either
+                      # direction) so they don't render as visually-coincident straight lines
+
+
+def _curvature_for_group_index(index: int) -> float:
+    """Maps 0, 1, 2, 3, ... to 0, +1, -1, +2, -2, ... (in curvature-step units) --
+    the first edge between a given pair of nodes stays straight, every later one
+    (including the reverse direction) spreads alternately outward from it."""
+    if index == 0:
+        return 0.0
+    magnitude = (index + 1) // 2
+    return float(magnitude) if index % 2 == 1 else -float(magnitude)
+
+
+def _bezier_control_and_midpoint(source: tuple, target: tuple, curvature: float) -> tuple:
+    """Returns (control_point, curve_midpoint) for a quadratic bezier from source to
+    target bowed by `curvature` (data units, perpendicular to the chord). At
+    curvature 0 both points collapse to the ordinary straight-line midpoint."""
+    x1, y1 = source
+    x2, y2 = target
+    chord_midpoint = ((x1 + x2) / 2, (y1 + y2) / 2)
+    if curvature == 0.0:
+        return chord_midpoint, chord_midpoint
+
+    dx, dy = x2 - x1, y2 - y1
+    length = float(np.hypot(dx, dy)) or 1.0
+    perpendicular = (-dy / length, dx / length)
+    control = (chord_midpoint[0] + perpendicular[0] * curvature, chord_midpoint[1] + perpendicular[1] * curvature)
+    # A quadratic bezier's midpoint (t=0.5) sits halfway between the chord midpoint
+    # and the control point -- B(0.5) = 0.25*P0 + 0.5*C + 0.25*P2 = 0.5*(midpoint + C).
+    curve_midpoint = ((chord_midpoint[0] + control[0]) / 2, (chord_midpoint[1] + control[1]) / 2)
+    return control, curve_midpoint
 
 
 class MissionGraphViewer:
@@ -111,16 +144,21 @@ class MissionGraphViewer:
         self._edges = []   # [{"midpoint": (x, y) in data coords, "label": str}, ...] from the last render()
 
     def render(self, ax, mission_graph: dict, active_node_id, primitive_statuses: dict = None,
-               show_edge_labels: bool = False) -> None:
+               overall_status: str = None, show_edge_labels: bool = False) -> None:
         """Draws every node (active node highlighted) and edge (optionally labeled).
         `primitive_statuses` (from Backseater.status()["primitives"]) supplies live
         status/handle for the active node's primitives in the hover text; other nodes
-        show only their statically-defined primitive types."""
+        show only their statically-defined primitive types. `overall_status` (from
+        Backseater.status()["overall_status"]) is shown only on the active node's hover."""
         self._ax = ax
         positions = compute_graph_layout(mission_graph)
         self._edges = []
         self._nodes = []
 
+        # Grouped by unordered endpoint pair (not by direction), so an edge and its
+        # reverse (or a plain duplicate) are recognized as sharing the same chord
+        # and curved apart from each other instead of overlapping.
+        edge_group_indices = {}
         for node_id, edge_list in mission_graph.get("edges", {}).items():
             if node_id not in positions:
                 continue
@@ -128,11 +166,15 @@ class MissionGraphViewer:
                 target = edge["to"]
                 if target not in positions:
                     continue
+                group_key = frozenset((node_id, target))
+                group_index = edge_group_indices.get(group_key, 0)
+                edge_group_indices[group_key] = group_index + 1
+                curvature = _curvature_for_group_index(group_index) * CURVE_UNIT
                 self._render_edge(ax, node_id, target, positions[node_id], positions[target],
-                                   edge.get("condition", []), show_edge_labels)
+                                   edge.get("condition", []), show_edge_labels, curvature)
 
         for node_id, position in positions.items():
-            self._render_node(ax, mission_graph, node_id, position, active_node_id, primitive_statuses)
+            self._render_node(ax, mission_graph, node_id, position, active_node_id, primitive_statuses, overall_status)
 
         self._set_padded_limits(ax, positions.values())
         ax.set_xticks([])
@@ -153,49 +195,59 @@ class MissionGraphViewer:
         ax.set_ylim(min(ys) - LAYOUT_PADDING, max(ys) + LAYOUT_PADDING)
 
     def _render_edge(self, ax, source_id: str, target_id: str, source: tuple, target: tuple,
-                      condition: list, show_edge_labels: bool) -> None:
-        x1, y1 = source
-        x2, y2 = target
-        # A single annotate() spanning the whole edge would put the arrowhead
-        # exactly at the target node's center — completely hidden underneath that
-        # node's marker (drawn afterwards, on top). Draw a plain line for the full
-        # edge, then a separate short arrowhead centered at the midpoint instead.
-        ax.plot([x1, x2], [y1, y2], color="black", linewidth=1.2, zorder=1, clip_on=False)
-        self._draw_midpoint_arrowhead(ax, source, target)
+                      condition: list, show_edge_labels: bool, curvature: float = 0.0) -> None:
+        control, curve_midpoint = _bezier_control_and_midpoint(source, target, curvature)
+        if curvature == 0.0:
+            # A single annotate() spanning the whole edge would put the arrowhead
+            # exactly at the target node's center — completely hidden underneath
+            # that node's marker (drawn afterwards, on top). Draw a plain line for
+            # the full edge, then a separate short arrowhead at the midpoint instead.
+            ax.plot([source[0], target[0]], [source[1], target[1]], color="black",
+                     linewidth=1.2, zorder=1, clip_on=False)
+        else:
+            # Multiple edges between the same pair of nodes (including the reverse
+            # direction) would otherwise draw as visually-coincident straight lines;
+            # bow this one along a quadratic bezier through `control` instead.
+            steps = np.linspace(0.0, 1.0, 30)
+            bezier_x = (1 - steps) ** 2 * source[0] + 2 * (1 - steps) * steps * control[0] + steps ** 2 * target[0]
+            bezier_y = (1 - steps) ** 2 * source[1] + 2 * (1 - steps) * steps * control[1] + steps ** 2 * target[1]
+            ax.plot(bezier_x, bezier_y, color="black", linewidth=1.2, zorder=1, clip_on=False)
+        # A quadratic bezier's tangent at t=0.5 is parallel to the source->target
+        # chord regardless of curvature, so the straight-line arrowhead direction
+        # is still correct -- only its position (curve_midpoint) needs to move.
+        self._draw_midpoint_arrowhead(ax, source, target, curve_midpoint)
 
-        midpoint = ((x1 + x2) / 2, (y1 + y2) / 2)
-        label_position = (midpoint[0], midpoint[1] + LABEL_Y_OFFSET)
+        label_position = (curve_midpoint[0], curve_midpoint[1] + LABEL_Y_OFFSET)
         label = (f"Edge: {source_id} -> {target_id}\n{'-' * 20}\n"
                  f"Condition: {self._describe_condition(condition)}")
-        self._edges.append({"midpoint": midpoint, "label": label})
+        self._edges.append({"midpoint": curve_midpoint, "label": label})
         if show_edge_labels:
             ax.text(label_position[0], label_position[1], self._abbreviate_condition(condition),
                     fontsize=7, color="black", ha="center", va="center", clip_on=False)
 
     @staticmethod
-    def _draw_midpoint_arrowhead(ax, source: tuple, target: tuple) -> None:
-        """Draws a short arrowhead centered on the edge's midpoint, pointing from
-        source to target, independent of the full edge length."""
+    def _draw_midpoint_arrowhead(ax, source: tuple, target: tuple, midpoint: tuple) -> None:
+        """Draws a short arrowhead centered on `midpoint`, pointing in the
+        source->target direction, independent of the full edge length."""
         x1, y1 = source
         x2, y2 = target
         dx, dy = x2 - x1, y2 - y1
         length = float(np.hypot(dx, dy)) or 1.0
         direction = (dx / length, dy / length)
         half_span = min(0.15, length / 4)
-        midpoint = ((x1 + x2) / 2, (y1 + y2) / 2)
         start = (midpoint[0] - direction[0] * half_span, midpoint[1] - direction[1] * half_span)
         end = (midpoint[0] + direction[0] * half_span, midpoint[1] + direction[1] * half_span)
         ax.annotate("", xy=end, xytext=start, annotation_clip=False,
                     arrowprops=dict(arrowstyle="->", color="black", clip_on=False))
 
-    def _render_node(self, ax, mission_graph, node_id, position, active_node_id, primitive_statuses) -> None:
+    def _render_node(self, ax, mission_graph, node_id, position, active_node_id, primitive_statuses, overall_status) -> None:
         x, y = position
         color = "tab:orange" if node_id == active_node_id else "tab:blue"
         ax.scatter([x], [y], s=NODE_MARKER_SIZE, color=color, zorder=3, clip_on=False)
         ax.text(x, y, node_id, ha="center", va="center", zorder=4, color="white", fontsize=9, clip_on=False)
         self._nodes.append({
             "position": (x, y),
-            "label": self._describe_node(mission_graph, node_id, active_node_id, primitive_statuses),
+            "label": self._describe_node(mission_graph, node_id, active_node_id, primitive_statuses, overall_status),
         })
 
     def _to_display(self, data_position: tuple) -> tuple:
@@ -235,9 +287,11 @@ class MissionGraphViewer:
         return None
 
     @staticmethod
-    def _describe_node(mission_graph: dict, node_id: str, active_node_id, primitive_statuses: dict) -> str:
+    def _describe_node(mission_graph: dict, node_id: str, active_node_id, primitive_statuses: dict, overall_status: str) -> str:
         primitives = mission_graph.get("nodes", {}).get(node_id, {}).get("primitives", {})
         lines = [f"Node: {node_id}", "-" * 20]
+        if node_id == active_node_id and overall_status:
+            lines.append(overall_status)
         if not primitives:
             lines.append("(no primitives)")
         for name, primitive in primitives.items():

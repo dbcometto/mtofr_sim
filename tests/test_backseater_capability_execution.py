@@ -49,7 +49,7 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
             self.frontseater.update()
             self.hardware.step_dynamics(0.1)
 
-        self.assertEqual(self.backseater._statuses["nav"], "success")
+        self.assertEqual(self.frontseater.describe_status()["primitives"]["nav"], "arrived")
 
     def test_unknown_knowledge_key_blocks_mission_without_crashing(self):
         mission_graph = {
@@ -78,13 +78,13 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
         backseater.update()
         self.assertTrue(backseater._blocked)
 
-    def test_status_before_first_update_reports_pending(self):
+    def test_status_before_first_update_reports_unknown(self):
         status = self.backseater.status()
         self.assertEqual(status["active_node_id"], "n1")
         self.assertFalse(status["blocked"])
         self.assertEqual(
             status["primitives"],
-            {"nav": {"capability": "move_to", "status": "pending",
+            {"nav": {"capability": "move_to", "status": "unknown",
                       "inputs": {"target": "goal", "tolerance": "tolerance"}}},
         )
 
@@ -93,7 +93,7 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
         status = self.backseater.status()
         primitive_status = status["primitives"]["nav"]
         self.assertEqual(primitive_status["capability"], "move_to")
-        self.assertIn(primitive_status["status"], ("in_progress", "success"))
+        self.assertIn(primitive_status["status"], ("en route", "arrived"))
         self.assertEqual(primitive_status["inputs"], {"target": "goal", "tolerance": "tolerance"})
 
     def test_status_reflects_blocked_mission(self):
@@ -159,7 +159,6 @@ class _TwoOutputFrontseater(Frontseater):
                          ParamSpec("count", int, "number of targets found")),
             ),
         ])
-        self._outputs_by_handle = {}
 
     def compute_controls(self, state) -> dict:
         return {}
@@ -167,28 +166,25 @@ class _TwoOutputFrontseater(Frontseater):
     def capabilities(self) -> CapabilityRegistry:
         return self._registry
 
-    def start_capability(self, capability: str, inputs: dict, outputs: dict) -> str:
-        self._outputs_by_handle["handle-1"] = outputs
-        return "handle-1"
+    def set_active_primitives(self, primitives: dict) -> None:
+        for primitive in primitives.values():
+            output_keys = primitive.get("outputs", {})
+            found, count = self._found_value(), 3
+            self.backseater.publish("knowledge", output_keys["found"], found)
+            self.backseater.publish("knowledge", output_keys["count"], count)
 
-    def poll_status(self, handle: str) -> dict:
-        output_keys = self._outputs_by_handle[handle]
-        found, count = True, 3
-        self.backseater.publish("knowledge", output_keys["found"], found)
-        self.backseater.publish("knowledge", output_keys["count"], count)
-        return {"status": "in_progress", "outputs": {"found": found, "count": count}}
+    def describe_status(self) -> dict:
+        return {"overall": "idle", "primitives": {}}
 
-    def cancel(self, handle: str) -> None:
-        pass
+    def _found_value(self):
+        return True
 
 
 class _MistypedOutputFrontseater(_TwoOutputFrontseater):
     """Publishes a wrong-typed value for a declared output, to exercise Backseater's
     runtime rejection of a bad Frontseater output write."""
-    def poll_status(self, handle: str) -> dict:
-        output_keys = self._outputs_by_handle[handle]
-        self.backseater.publish("knowledge", output_keys["found"], "not-a-bool")
-        return {"status": "in_progress", "outputs": {"found": "not-a-bool"}}
+    def _found_value(self):
+        return "not-a-bool"
 
 
 class TestBackseaterOutputCommitment(unittest.TestCase):
@@ -213,12 +209,15 @@ class TestBackseaterOutputCommitment(unittest.TestCase):
         self.assertEqual(knowledge.get("ugv1/found"), True)
         self.assertEqual(knowledge.get("ugv1/count"), 3)
 
-    def test_wrong_typed_output_blocks_the_mission_without_crashing(self):
+    def test_wrong_typed_output_raises_from_the_frontseaters_own_publish_call(self):
+        # Backseater no longer isolates a Frontseater's runtime faults itself (see
+        # World.step(), which is where per-platform isolation now lives) -- calling
+        # update() directly propagates whatever the Frontseater's own publish() raises.
         knowledge = KnowledgeDatabase()
         backseater = Backseater(frontseater=_MistypedOutputFrontseater(), knowledge_database=knowledge,
                                  mission_graph=self._mission_graph())
-        backseater.update()
-        self.assertTrue(backseater._blocked)
+        with self.assertRaises(ValueError):
+            backseater.update()
 
 
 if __name__ == "__main__":

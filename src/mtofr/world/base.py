@@ -86,6 +86,15 @@ class Frontseater(ABC):
     def compute_controls(self, state: WorldState) -> dict:
         """Derive current controls from whatever tasks/avoid-state are active."""
 
+    def default_mission_graph(self) -> dict:
+        """The mission graph a Backseater falls back to when constructed with
+        mission_graph=None -- what a platform boots into before a real mission is
+        delegated to it. Base implementation is a bare, inert placeholder (a single
+        node with no primitives, no transitions); a concrete Frontseater overrides
+        this with whatever "safe idle" behavior actually suits its platform type
+        (e.g. loitering for a UGV, hovering for a UAV)."""
+        return {"knowledge": {}, "nodes": {"startup": {"primitives": {}}}, "edges": {}, "start": "startup"}
+
     def begin_update(self) -> None:
         """Starts this tick's control computation. Default: computes synchronously and
         stashes the result for finish_update(). A Frontseater whose compute_controls is
@@ -113,20 +122,30 @@ class Frontseater(ABC):
         (and eventually a planner) uses instead of assuming what the platform can do."""
 
     @abstractmethod
-    def start_capability(self, capability: str, inputs: dict, outputs: dict) -> str:
-        """Start a capability task. Returns a handle. Status begins as 'received'. `inputs`/
-        `outputs` are field-name -> Knowledge-key maps (the mission graph's initial binding),
-        not resolved values — the capability calls self.backseater.query()/publish() itself,
-        at start and at any later poll, to read/write the actual data."""
+    def set_active_primitives(self, primitives: dict) -> None:
+        """Tells this Frontseater which primitives should currently be running — the
+        active mission-graph node's `{name: {"capability", "inputs", "outputs"}}` dict,
+        called only when it differs from the last dict this Frontseater was given (a
+        mission/node change included, since the new node's dict simply differs from the
+        old one). `inputs`/`outputs` are field-name -> Knowledge-key maps, not resolved
+        values. This Frontseater is fully responsible for everything downstream: noticing
+        which primitive names are new (start them), which are no longer present (stop
+        them), and which are unchanged (leave them running); running each one however it
+        sees fit (this tick's update(), a thread, a state machine, real ROS nodes...); and
+        calling self.backseater.query()/publish() on its own schedule to read/write actual
+        data. There is no separate poll/status contract — introspection instead goes
+        through describe_status() below."""
 
     @abstractmethod
-    def poll_status(self, handle: str) -> dict:
-        """Returns {"status": "received"|"in_progress"|"success"|"fail"|"timeout",
-        "outputs": {name: value, ...}}. `outputs` may include any subset of the
-        capability's declared OutputSpecs, whichever are meaningful for the current status."""
-
-    @abstractmethod
-    def cancel(self, handle: str) -> None: ...
+    def describe_status(self) -> dict:
+        """Returns {"overall": str, "primitives": {name: str}} — human-readable status
+        text, entirely in this Frontseater's own words, for a visualization tool to
+        display. Required (not by-convention) so every Frontseater is guaranteed to offer
+        some introspection into what it's currently doing, however minimal (e.g.
+        {"overall": "idle", "primitives": {}} is a valid response). Purely for display —
+        Backseater never uses this for mission logic, only forwards it. `primitives`
+        need not cover every name Backseater currently considers active; a missing name
+        just means this Frontseater has nothing to say about it yet."""
 
 
 class Environment(ABC):

@@ -15,16 +15,28 @@ ALL_MISSION_GRAPHS = (
 
 
 class TestMissionSet(unittest.TestCase):
-    def test_mission_set_has_split_wait_and_village(self):
-        self.assertEqual({member.name for member in MissionSet}, {"SPLIT", "WAIT", "VILLAGE"})
+    def test_mission_set_has_split_wait_village_and_village_default(self):
+        self.assertEqual({member.name for member in MissionSet}, {"SPLIT", "WAIT", "VILLAGE", "VILLAGE_DEFAULT"})
 
     def test_every_mission_set_has_a_config_with_matching_platform_keys(self):
+        # mission_graphs need not cover every platform_builders key -- a platform_id
+        # missing from it boots onto its own Frontseater.default_mission_graph()
+        # instead (see MissionSetConfig's docstring; VILLAGE_DEFAULT exercises this).
         for mission_set in MissionSet:
             self.assertIn(mission_set, MISSION_SETS)
             config = MISSION_SETS[mission_set]
             self.assertIsInstance(config, MissionSetConfig)
-            self.assertEqual(set(config.platform_builders), {"ugv1", "ugv2"})
-            self.assertEqual(set(config.mission_graphs), set(config.platform_builders))
+            self.assertTrue(set(config.platform_builders))
+            self.assertTrue(set(config.mission_graphs) <= set(config.platform_builders))
+
+    def test_village_default_has_no_explicit_mission_graphs(self):
+        config = MISSION_SETS[MissionSet.VILLAGE_DEFAULT]
+        self.assertEqual(set(config.platform_builders), {"ugv1", "ugv2", "interface"})
+        self.assertEqual(config.mission_graphs, {})
+
+    def test_village_default_gives_the_interface_platform_higher_privilege(self):
+        config = MISSION_SETS[MissionSet.VILLAGE_DEFAULT]
+        self.assertLess(config.privilege_levels["interface"], config.privilege_levels.get("ugv1", 1))
 
     def test_platform_builders_produce_a_frontseater_per_platform(self):
         for mission_set in MissionSet:

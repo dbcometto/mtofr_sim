@@ -91,7 +91,7 @@ class PlatformOverviewViewer:
     @staticmethod
     def _describe_platform(platform_id: str, status: dict) -> str:
         primitives = status["primitives"]
-        lines = [f"Platform: {platform_id}", "-" * 20]
+        lines = [f"Platform: {platform_id}", "-" * 20, status["overall_status"]]
         if not primitives:
             lines.append("(no active primitives)")
         for name, info in primitives.items():

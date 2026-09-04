@@ -12,6 +12,7 @@ class _FakeBackseater:
         self._status = {
             "active_node_id": active_node_id,
             "blocked": False,
+            "overall_status": "idle",
             "primitives": primitives or {},
         }
 

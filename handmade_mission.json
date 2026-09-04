@@ -1,0 +1,63 @@
+{
+  "knowledge": {
+    "ugv1/nav_targ": {
+      "type": "Location",
+      "value": {
+        "x": 37.0,
+        "y": 18.0
+      }
+    },
+    "ugv1/nav_tol": {
+      "type": "float",
+      "value": 0.5
+    },
+    "ugv1/arrived": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv1/wait_time": {
+      "type": "float",
+      "value": 0.0
+    }
+  },
+  "nodes": {
+    "nav": {
+      "primitives": {
+        "nav": {
+          "capability": "move_to",
+          "inputs": {
+            "target": "ugv1/nav_targ",
+            "tolerance": "ugv1/nav_tol"
+          },
+          "outputs": {
+            "arrived": "ugv1/arrived"
+          }
+        }
+      }
+    },
+    "wait": {
+      "primitives": {
+        "stopwatch": {
+          "capability": "stopwatch",
+          "inputs": {},
+          "outputs": {
+            "elapsed_time": "ugv1/wait_time"
+          }
+        }
+      }
+    }
+  },
+  "edges": {
+    "nav": [
+      {
+        "condition": [
+          "ugv1/arrived",
+          "==",
+          true
+        ],
+        "to": "wait"
+      }
+    ]
+  },
+  "start": "nav"
+}

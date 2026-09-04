@@ -48,10 +48,11 @@ class Backseater:
     `condition` is a pre-tokenized boolean expression over Knowledge keys (see
     mtofr.condition.condition), parsed once at construction. Edges are checked in
     order; the first edge whose condition evaluates true against current Knowledge
-    is taken. Primitive `status` (waiting/success/fail/timeout) is comms-health
-    information between Backseater and Frontseater only — it never drives edges;
-    a capability decides for itself what, if anything, to write to Knowledge.
-    Backseater never touches WorldState directly.
+    is taken. A node's active primitives are handed to the Frontseater as a single
+    dict (see Frontseater.set_active_primitives) and run entirely under its own
+    control from there — Backseater never polls for completion; a primitive decides
+    for itself what, if anything, to write to Knowledge, and edges only ever read
+    Knowledge, never primitive status. Backseater never touches WorldState directly.
     """
 
     def __init__(self, frontseater, knowledge_database, mission_graph=None, platform_id: str = None,
@@ -59,7 +60,7 @@ class Backseater:
         self.frontseater = frontseater
         self.frontseater.backseater = self  # cascades down, mirrors the platform_id cascade below
         self.knowledge_database = knowledge_database
-        self.mission_graph = mission_graph or {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
+        self.mission_graph = mission_graph if mission_graph is not None else self.frontseater.default_mission_graph()
         self.clock = clock or Clock()
         self.debug = debug
         self.privilege_level = privilege_level
@@ -91,8 +92,7 @@ class Backseater:
         self._parsed_conditions = self._parse_edge_conditions(self.mission_graph)
 
         self.active_node_id = self.mission_graph.get("start")
-        self._handles = {}      # primitive name -> handle
-        self._statuses = {}     # primitive name -> last known status
+        self._last_sent_primitives = None   # last primitives dict handed to the Frontseater, for change detection
         self._blocked = False
 
     def capabilities(self):
@@ -102,17 +102,21 @@ class Backseater:
 
     def status(self) -> dict:
         """Read-only snapshot of mission progress — the query path a visualization tool
-        uses instead of reaching into private state. Primitive statuses default to
-        "pending" for primitives in the active node that haven't been actuated yet."""
+        uses instead of reaching into private state. Per-primitive and overall status
+        text is sourced fresh from the Frontseater's own describe_status() on every call,
+        since Backseater no longer tracks progress itself (see Frontseater.describe_status)."""
         node = self.mission_graph["nodes"].get(self.active_node_id, {}) if self.active_node_id else {}
         primitives = node.get("primitives", {})
+        frontseater_status = self.frontseater.describe_status()
+        primitive_statuses = frontseater_status.get("primitives", {})
         return {
             "active_node_id": self.active_node_id,
             "blocked": self._blocked,
+            "overall_status": frontseater_status.get("overall", ""),
             "primitives": {
                 name: {
                     "capability": primitive["capability"],
-                    "status": self._statuses.get(name, "pending"),
+                    "status": primitive_statuses.get(name, "unknown"),
                     "inputs": primitive.get("inputs", {}),
                 }
                 for name, primitive in primitives.items()
@@ -245,8 +249,6 @@ class Backseater:
 
     def _activate_node(self, node_id):
         self.active_node_id = node_id
-        self._handles = {}
-        self._statuses = {}
 
     def _detect_mission_change(self) -> None:
         """Detects whether this platform's own Mission database entry is a different
@@ -266,14 +268,12 @@ class Backseater:
         if new_mission_graph is self.mission_graph:
             return
 
-        for handle in self._handles.values():
-            self.frontseater.cancel(handle)
-
         self._declare_knowledge_keys(new_mission_graph)
 
         self.mission_graph = new_mission_graph
         self._parsed_conditions = self._parse_edge_conditions(new_mission_graph)
         self._blocked = False
+        self._last_sent_primitives = None   # force a fresh set_active_primitives() call below, even on a coincidental match
         self._activate_node(new_mission_graph.get("start"))
 
         if self.debug:
@@ -357,6 +357,12 @@ class Backseater:
                                          origin_platform_id=self.platform_id)
 
     def update(self) -> None:
+        """Advances this platform's mission by one tick: detects a mission change, checks
+        the active node's primitives are all fulfillable and correctly bound, hands them to
+        the Frontseater only if they differ from what it was last given (see
+        Frontseater.set_active_primitives — a mission/node change naturally differs, since
+        it's a different node's dict), then evaluates edges. There is no polling here —
+        once handed off, running the primitives is entirely the Frontseater's own affair."""
         self._detect_mission_change()
         if self._blocked or self.active_node_id is None:
             return
@@ -369,48 +375,25 @@ class Backseater:
             capability = capability_registry.get(primitive["capability"])
             if capability is None:
                 print(f"[Backseater] Frontseater cannot fulfill IPL type '{primitive['capability']}' — halting mission.")
-                for handle in self._handles.values():
-                    self.frontseater.cancel(handle)
                 self._blocked = True
                 return
-
-            if name not in self._handles:
-                try:
-                    self._check_binding_types(capability, primitive)
-                    self._handles[name] = self.frontseater.start_capability(
-                        capability.ipl_type, primitive.get("inputs", {}), primitive.get("outputs", {})
-                    )
-                except (KeyError, ValueError) as error:
-                    print(f"[Backseater] Node '{self.active_node_id}' primitive '{name}' "
-                          f"({primitive['capability']}) -> failed to start: {error} — halting mission.")
-                    for handle in self._handles.values():
-                        self.frontseater.cancel(handle)
-                    self._blocked = True
-                    return
-                if self.debug:
-                    print(f"[Backseater] Node '{self.active_node_id}' primitive '{name}' ({primitive['capability']}) -> started")
-
-            # Poll immediately, including on the tick a primitive was just started: a
-            # resettable output (e.g. move_to's "arrived") must be recommitted to
-            # Knowledge the same tick it's reset, or a stale prior value could satisfy
-            # an edge condition for one extra tick before the fresh value lands. A capability
-            # now publishes its own outputs to Knowledge as part of poll_status(); the
-            # returned "outputs" dict here is read-only reporting, not a write path.
             try:
-                poll_result = self.frontseater.poll_status(self._handles[name])
+                self._check_binding_types(capability, primitive)
             except (KeyError, ValueError) as error:
                 print(f"[Backseater] Node '{self.active_node_id}' primitive '{name}' "
-                      f"({primitive['capability']}) -> polling failed: {error} — halting mission.")
-                for handle in self._handles.values():
-                    self.frontseater.cancel(handle)
+                      f"({primitive['capability']}) -> failed binding check: {error} — halting mission.")
                 self._blocked = True
                 return
-            status = poll_result["status"]
-            if self.debug and status != self._statuses.get(name):
-                print(f"[Backseater] Node '{self.active_node_id}' primitive '{name}' ({primitive['capability']}) -> {status}")
-            self._statuses[name] = status
-            if status in ("fail", "timeout"):
-                del self._handles[name]
+
+        # Object identity, not value equality: the active node's primitives dict is the
+        # same object every tick until the node changes, so this is a cheap no-op check
+        # rather than a deep dict comparison — and a node change always yields a
+        # different dict object, so it's never a false negative.
+        if primitives is not self._last_sent_primitives:
+            self.frontseater.set_active_primitives(primitives)
+            self._last_sent_primitives = primitives
+            if self.debug:
+                print(f"[Backseater] Node '{self.active_node_id}' -> active primitives: {list(primitives)}")
 
         for condition, target_node_id in self._parsed_conditions.get(self.active_node_id, []):
             if condition.evaluate(self.knowledge_database):

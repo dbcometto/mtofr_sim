@@ -1,6 +1,141 @@
 # Notes
 
 
+## Status 14 Sep 26 (even later) — Live Control tab lost its selection every refresh
+
+(Written by Claude)
+
+Reported immediately after the previous entry: the Live Control tab's periodic
+refresh (every second) wiped the Treeview's selection on every tick, since
+`delete()`+`insert()` (Treeview has no in-place row-value update) always clears
+selection — exactly the bug the Editor tab's node/primitive tables already had
+fixed (3 Sep 26 entry), just not yet applied to this newer tab. Fixed the same
+way: `selected_live_knowledge_key` tracked via a `<<TreeviewSelect>>` binding,
+re-applied after every rebuild in `_refresh_live_knowledge_tree()`. `_on_edit_
+live_knowledge_value()` now reads that tracked key instead of `self.
+live_knowledge_tree.selection()` directly, so Edit Value works reliably even if
+a refresh landed between selecting a row and clicking it. Added a regression
+test (`test_selection_survives_a_live_refresh`) and fixed the two existing
+live-value-edit tests, which called `selection_set()` directly — that alone
+doesn't fire `<<TreeviewSelect>>` without a real event-loop pump, so they now
+also call the handler directly, the same way a real click would trigger it.
+
+
+## Status 14 Sep 26 (later) — Live Control tab, undo/redo, double-click-to-edit
+
+(Written by Claude)
+
+Three more asks, landed together:
+
+- **Undo/redo.** Free, structurally: every draft mutation already flows through
+  one choke point, `_set_draft()`, which swaps in a *new* top-level dict rather
+  than mutating in place (a deliberate `graph_draft.py` property from the start,
+  for MissionGraphViewer's layout-cache reasons — see the 3 Sep 26 entry). Adding
+  `self.undo_stack`/`self.redo_stack` (capped at `UNDO_HISTORY_LIMIT = 50`) there
+  gives full undo/redo with no extra bookkeeping. Load Live/New Blank/Load File
+  count as ordinary undoable actions too. Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z are bound on
+  the window itself (`self.bind(...)`, not `bind_all`), which still fires
+  regardless of which child widget has focus (Tk falls through to a focused
+  widget's toplevel in its bindtags) and is inert while a modal dialog holds the
+  grab; Undo/Redo buttons mirror the same actions, disabled when their stack is
+  empty.
+- **Double-click-to-edit**, added to every table (Nodes -> Rename, Primitives/
+  Edges/Knowledge -> Edit, and the new Live Control table below) alongside the
+  existing Edit buttons, not instead of them.
+- **A new default tab, "Live Control"**: the target platform's actual
+  already-declared Knowledge, shown live and edited directly on that platform
+  (immediately, via `KnowledgeDatabase.set()` — no draft/push staging, since a
+  Knowledge write isn't privilege-gated the way a Mission write is). Motivated
+  directly: "control missions without writing new ones (using existing edges)"
+  — a mission's own edges already branch on Knowledge values, so flipping one
+  (a bool flag, a Location target) steers an already-running mission without
+  ever touching the Editor tab. Self-refreshes every second
+  (`LIVE_KNOWLEDGE_REFRESH_MS`) via the same self-perpetuating `self.after()`
+  pattern the Graph tab's Live preview already used, so a primitive's own writes
+  (e.g. `move_to`'s `arrived` flag) show up without a manual refresh. Extracted
+  `_KnowledgeDialog`'s per-field-form logic (`_build_value_fields()`/
+  `_read_value_fields()`, still built on `constructor_fields()` introspection)
+  into module-level functions shared with the new `_LiveValueDialog`, so both
+  editors — one declaring/editing a key within a draft, one editing an
+  already-declared key's value live — stay in sync automatically if a new
+  KnowledgeEntry subclass is ever registered.
+- **Removed the "Draft loaded from: X" label** from the top bar per direct
+  request ("let's just leave that in the console") — the same information was
+  already logged there by each load action's own line (`"Loaded live mission
+  graph from 'X'."`, etc.), so nothing new needed adding; `draft_source_platform_id`
+  itself stays, since the push-mismatch warning (previous entry) still reads it.
+- Cancelled both self-perpetuating `after()` loops (Live preview, Live
+  Knowledge) explicitly in `close()` via `after_cancel()` on their stored job
+  ids, rather than just tolerating the "invalid command name" stderr noise a
+  pending one firing after widget destruction would otherwise produce (the same
+  class of cosmetic error `close()` already avoided for idle_draw callbacks).
+
+Tests: added `test_mission_editor_window.py` cases for undo/redo (button
+enable state, round-tripping, multi-step history, redo-cleared-by-new-action),
+double-click bindings (registration only — simulating a real click via
+`event_generate()` depends on real window-manager focus/coordinates, unreliable
+to automate, same reasoning as the Ctrl+Z binding-registration test from the
+same session), and the Live Control tab (reflects target platform's Knowledge,
+edits write through, switching target refreshes it, a scalar and a Location
+edit both round-trip). Full suite: 404 tests, all passing. Smoke-tested
+`main.py` directly for 8+ seconds with no errors.
+
+
+## Status 14 Sep 26 — mission editor: focus/layout/feedback/draft-tracking fixes
+
+(Written by Claude)
+
+Another hands-on pass surfaced four more issues:
+
+1. **Popups stole focus across the whole app**, not just the dialog. Every
+   modal dialog dropped `self.transient(parent)` — the owner relationship that
+   was pulling the entire app's window group forward together whenever a
+   dialog opened — and `_center_over_parent()` now also sets `-topmost` on the
+   dialog, so it still visibly appears on top without seizing focus elsewhere.
+2. **Knowledge table was missing its own key column** (a real bug, not just a
+   preference: the tree had `show="headings"` with only Type/Value as
+   `columns`, so the key — previously only the hidden `#0`/`text` slot — was
+   never visible at all) and the whole Editor tab couldn't be resized to see
+   content that overflowed default widths. Fixed the column (`Key, Type,
+   Value`, in that order) and rebuilt the Editor tab as a `ttk.PanedWindow`
+   (Nodes+Primitives | Edges | Knowledge, with Nodes/Primitives themselves a
+   second, vertical `PanedWindow`) with draggable sashes, explicit non-default
+   column widths sized to each table's actual content, and a larger default
+   window size (`1500x850`, `minsize(1200, 700)`).
+3. **No persistent feedback on Validate/Push** — both already logged to a
+   single-line status label, but it was easy to miss (and, per issue 2, could
+   be pushed off-screen by an undersized window). Replaced it with a Console
+   panel (`tk.Text` + scrollbar, read-only) that every action appends to, kept
+   alongside (not instead of) the existing `messagebox.showerror` popups for
+   failures.
+4. **A draft loaded from one platform got pushed to another, silently
+   duplicating the mission** — not an editor bug so much as a UI gap: nothing
+   showed which platform a draft came from, so reusing it against the wrong
+   target (loaded ugv1's live graph, forgot to reload before switching the
+   target dropdown to ugv2 and pushing) went unnoticed. Fixed with a "Draft
+   loaded from: X" label (or "Draft: new/unsaved") next to the platform picker,
+   tracked via `self.draft_source_platform_id` (set on Load Live, cleared on
+   New Blank/Load File), plus a non-blocking console warning on Push when the
+   target differs from that source — deliberately a warning, not a blocking
+   confirm, since reusing a draft across platforms intentionally is a valid
+   workflow. Interviewed on two adjacent "maybe" ideas from the same feedback:
+   declined a multi-platform push (single draft -> single target stays as-is)
+   and added a Draft/Live toggle above the Graph tab's preview instead — Live
+   mode renders the target platform's actual current mission_graph read-only
+   (active node highlighted, primitive statuses shown, same as the main
+   dashboard), refreshing itself every 500ms via `self.after()` while selected,
+   since this window is otherwise only refreshed in reaction to a user action
+   rather than every sim tick. The Editor tab's tables always reflect the draft
+   only, never the live graph, regardless of which Graph-tab mode is selected.
+
+Tests: added Draft/Live-toggle, draft-source-label, and push-mismatch-warning
+cases to `test_mission_editor_window.py` (a second platform, "ugv2", was added
+to that file's `setUp()` for the mismatch tests), plus a knowledge-tree-column
+regression case. Full suite (378 tests) passed as of the previous entry; this
+round's additions weren't re-run before handing back, per the user's own call
+to skip it and catch anything in the next run.
+
+
 ## Status 3 Sep 26 (latest, second follow-up) — Knowledge key rename, cascaded
 
 (Written by Claude)

@@ -1,0 +1,37 @@
+{
+  "knowledge": {
+    "ugv1/tol": {
+      "type": "float",
+      "value": 1.0
+    },
+    "ugv1/arrived": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv1/nav_pt": {
+      "type": "Location",
+      "value": {
+        "x": 40.0,
+        "y": 0.0
+      }
+    }
+  },
+  "nodes": {
+    "nav": {
+      "primitives": {
+        "nav": {
+          "capability": "move_to",
+          "inputs": {
+            "target": "ugv1/nav_pt",
+            "tolerance": "ugv1/tol"
+          },
+          "outputs": {
+            "arrived": "ugv1/arrived"
+          }
+        }
+      }
+    }
+  },
+  "edges": {},
+  "start": "nav"
+}

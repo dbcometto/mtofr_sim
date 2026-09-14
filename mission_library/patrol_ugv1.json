@@ -1,0 +1,110 @@
+{
+  "knowledge": {
+    "ugv1/tol": {
+      "type": "float",
+      "value": 1.0
+    },
+    "ugv1/arrived": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv1/patrol_1": {
+      "type": "Location",
+      "value": {
+        "x": 40.0,
+        "y": 40.0
+      }
+    },
+    "ugv1/patrol_0": {
+      "type": "Location",
+      "value": {
+        "x": 37.0,
+        "y": 30.0
+      }
+    },
+    "ugv1/patrol_2": {
+      "type": "Location",
+      "value": {
+        "x": 35.0,
+        "y": 50.0
+      }
+    }
+  },
+  "nodes": {
+    "patrol_0": {
+      "primitives": {
+        "nav": {
+          "capability": "move_to",
+          "inputs": {
+            "target": "ugv1/patrol_0",
+            "tolerance": "ugv1/tol"
+          },
+          "outputs": {
+            "arrived": "ugv1/arrived"
+          }
+        }
+      }
+    },
+    "patrol_1": {
+      "primitives": {
+        "move_to": {
+          "capability": "move_to",
+          "inputs": {
+            "target": "ugv1/patrol_1",
+            "tolerance": "ugv1/tol"
+          },
+          "outputs": {
+            "arrived": "ugv1/arrived"
+          }
+        }
+      }
+    },
+    "patrol_2": {
+      "primitives": {
+        "move_to": {
+          "capability": "move_to",
+          "inputs": {
+            "target": "ugv1/patrol_2",
+            "tolerance": "ugv1/tol"
+          },
+          "outputs": {
+            "arrived": "ugv1/arrived"
+          }
+        }
+      }
+    }
+  },
+  "edges": {
+    "patrol_0": [
+      {
+        "condition": [
+          "ugv1/arrived",
+          "==",
+          true
+        ],
+        "to": "patrol_1"
+      }
+    ],
+    "patrol_2": [
+      {
+        "condition": [
+          "ugv1/arrived",
+          "==",
+          true
+        ],
+        "to": "patrol_0"
+      }
+    ],
+    "patrol_1": [
+      {
+        "condition": [
+          "ugv1/arrived",
+          "==",
+          true
+        ],
+        "to": "patrol_2"
+      }
+    ]
+  },
+  "start": "patrol_0"
+}

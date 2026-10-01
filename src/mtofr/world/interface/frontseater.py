@@ -10,8 +10,8 @@ class MissionEditorFrontseater(Frontseater):
     """Hosts the mission-editor GUI as a side effect of its one capability,
     show_interface, rather than modeling graph-editing itself as capabilities --
     editing is entirely user-driven, not part of the mission-graph/capability
-    machinery any other platform uses (see mtofr.mission_editor for the actual
-    editing logic and mtofr.mission_editor.window for the GUI it opens/closes).
+    machinery any other platform uses (see mtofr.world.interface.mission_editor for the actual
+    editing logic and mtofr.world.interface.mission_editor.window for the GUI it opens/closes).
     Never computes real controls; ConsoleHardware ignores them regardless."""
 
     def __init__(self, hardware: ConsoleHardware, debug: bool = False):

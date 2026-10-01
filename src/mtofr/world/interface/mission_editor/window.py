@@ -1,6 +1,6 @@
 """Defines MissionEditorWindow: the Tk Toplevel a MissionEditorFrontseater opens/
 closes as its show_interface capability starts/stops. Owns one draft mission-graph
-dict at a time (see mtofr.mission_editor.graph_draft for the mutation helpers it
+dict at a time (see mtofr.world.interface.mission_editor.graph_draft for the mutation helpers it
 calls), independent of any live platform until explicitly pushed via the
 privilege-gated Backseater.write_mission() path. Form/table-based (Treeviews plus
 small modal dialogs for adding/editing entries, each double-click-to-edit too),
@@ -22,8 +22,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mtofr.condition.condition import parse_condition, ConditionSyntaxError
 from mtofr.database import verify_mission_structure, MissionStructuralError
 from mtofr.viz.mission_graph_view import MissionGraphViewer
-from mtofr.mission_editor import graph_draft
-from mtofr.mission_editor.serialization import (
+from mtofr.world.interface.mission_editor import graph_draft
+from mtofr.world.interface.mission_editor.serialization import (
     KNOWLEDGE_TYPES_BY_NAME, KNOWLEDGE_TYPE_NAMES, SCALAR_CASTERS,
     is_compound_knowledge_type, constructor_fields, save_mission_graph, load_mission_graph,
 )
@@ -1013,7 +1013,7 @@ class _EdgeDialog(tk.Toplevel):
 
 class _KnowledgeDialog(tk.Toplevel):
     """Modal dialog for declaring or editing a Knowledge key: name, type (from
-    mtofr.mission_editor.serialization's type registry, the same set the editor
+    mtofr.world.interface.mission_editor.serialization's type registry, the same set the editor
     can round-trip to/from a saved file), and one labeled field per constructor
     parameter of the chosen type -- generic via constructor_fields() introspection
     rather than a hardcoded per-type form, so a future KnowledgeEntry subclass

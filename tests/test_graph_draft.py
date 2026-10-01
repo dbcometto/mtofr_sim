@@ -1,10 +1,10 @@
-"""Tests for mtofr.mission_editor.graph_draft: pure mutation helpers over a draft
+"""Tests for mtofr.world.interface.mission_editor.graph_draft: pure mutation helpers over a draft
 mission-graph dict, independent of the Tk window that calls them. Each mutator
 must return a *new* top-level dict object rather than mutating in place (see the
 module docstring for why -- MissionGraphViewer's layout cache is keyed by identity)."""
 import unittest
 
-from mtofr.mission_editor import graph_draft
+from mtofr.world.interface.mission_editor import graph_draft
 
 
 class TestBlankAndLoad(unittest.TestCase):

@@ -25,8 +25,8 @@ from mtofr.world.ground_plane.hardware import BicycleHardware
 from mtofr.world.ground_plane.frontseater import BicycleFrontseater
 
 if TK_AVAILABLE:
-    from mtofr.mission_editor.window import MissionEditorWindow
-    from mtofr.mission_editor import graph_draft
+    from mtofr.world.interface.mission_editor.window import MissionEditorWindow
+    from mtofr.world.interface.mission_editor import graph_draft
 
 
 class _StubDialog:
@@ -98,7 +98,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         # event loop pump -- call the handler directly, same as a real click would.
         self.window.live_knowledge_tree.selection_set("tolerance")
         self.window._on_live_knowledge_selected()
-        with patch("mtofr.mission_editor.window._LiveValueDialog", _StubDialog(1.5)):
+        with patch("mtofr.world.interface.mission_editor.window._LiveValueDialog", _StubDialog(1.5)):
             self.window._on_edit_live_knowledge_value()
         self.assertEqual(self.target_backseater.knowledge_database.get("tolerance"), 1.5)
 
@@ -107,7 +107,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         self.window._refresh_live_knowledge_tree()
         self.window.live_knowledge_tree.selection_set("goal")
         self.window._on_live_knowledge_selected()
-        with patch("mtofr.mission_editor.window._LiveValueDialog", _StubDialog(Location(9.0, -1.0))):
+        with patch("mtofr.world.interface.mission_editor.window._LiveValueDialog", _StubDialog(Location(9.0, -1.0))):
             self.window._on_edit_live_knowledge_value()
         new_goal = self.target_backseater.knowledge_database.get("goal")
         self.assertEqual((new_goal.x, new_goal.y), (9.0, -1.0))
@@ -210,14 +210,14 @@ class TestMissionEditorWindow(unittest.TestCase):
     #==========# Nodes #==========#
 
     def test_adding_a_node_adds_it_to_the_draft(self):
-        with patch("mtofr.mission_editor.window._TextInputDialog", _StubDialog("n2")):
+        with patch("mtofr.world.interface.mission_editor.window._TextInputDialog", _StubDialog("n2")):
             self.window._on_add_node()
         self.assertIn("n2", self.window.draft["nodes"])
 
     def test_renaming_the_selected_node_keeps_it_selected(self):
         self.window.selected_node_id = "start"
         self.window._refresh_nodes_tree()
-        with patch("mtofr.mission_editor.window._TextInputDialog", _StubDialog("renamed")):
+        with patch("mtofr.world.interface.mission_editor.window._TextInputDialog", _StubDialog("renamed")):
             self.window._on_rename_node()
         self.assertEqual(self.window.selected_node_id, "renamed")
         self.assertIn("renamed", self.window.nodes_tree.selection())
@@ -233,7 +233,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         self.window.selected_node_id = "start"
         self.window._refresh_nodes_tree()
         canned = ("nav", "move_to", {"target": "goal", "tolerance": "tolerance"}, {})
-        with patch("mtofr.mission_editor.window._PrimitiveDialog", _StubDialog(canned)):
+        with patch("mtofr.world.interface.mission_editor.window._PrimitiveDialog", _StubDialog(canned)):
             self.window._on_add_primitive()
         self.assertIn("nav", self.window.draft["nodes"]["start"]["primitives"])
         self.assertEqual(self.window.selected_primitive_name, "nav")
@@ -247,7 +247,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         self.window.selected_primitive_name = "nav"
         self.window._refresh_primitives_tree()
         canned = ("nav_renamed", "move_to", {"target": "goal", "tolerance": "tolerance"}, {})
-        with patch("mtofr.mission_editor.window._PrimitiveDialog", _StubDialog(canned)):
+        with patch("mtofr.world.interface.mission_editor.window._PrimitiveDialog", _StubDialog(canned)):
             self.window._on_edit_primitive()
         self.assertNotIn("nav", self.window.draft["nodes"]["start"]["primitives"])
         self.assertIn("nav_renamed", self.window.draft["nodes"]["start"]["primitives"])
@@ -257,7 +257,7 @@ class TestMissionEditorWindow(unittest.TestCase):
 
     def test_adding_an_edge(self):
         self.window._set_draft(graph_draft.add_node(self.window.draft, "n2"))
-        with patch("mtofr.mission_editor.window._EdgeDialog", _StubDialog(("start", "n2", []))):
+        with patch("mtofr.world.interface.mission_editor.window._EdgeDialog", _StubDialog(("start", "n2", []))):
             self.window._on_add_edge()
         self.assertEqual(self.window.draft["edges"]["start"], [{"condition": [], "to": "n2"}])
 
@@ -267,21 +267,21 @@ class TestMissionEditorWindow(unittest.TestCase):
         row_id = next(iter(self.window.edges_tree.get_children()))
         self.window.edges_tree.selection_set(row_id)
         canned = ("start", "n2", ["goal", "is", "not", None])
-        with patch("mtofr.mission_editor.window._EdgeDialog", _StubDialog(canned)):
+        with patch("mtofr.world.interface.mission_editor.window._EdgeDialog", _StubDialog(canned)):
             self.window._on_edit_edge()
         self.assertEqual(self.window.draft["edges"]["start"][0]["condition"], ["goal", "is", "not", None])
 
     #==========# Knowledge #==========#
 
     def test_adding_a_knowledge_key(self):
-        with patch("mtofr.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 1.0))):
+        with patch("mtofr.world.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 1.0))):
             self.window._on_add_knowledge_key()
         self.assertEqual(self.window.draft["knowledge"]["battery"], {"type": float, "value": 1.0})
 
     def test_editing_a_knowledge_key_changes_its_value(self):
         self.window._set_draft(graph_draft.add_knowledge_key(self.window.draft, "battery", float, 1.0))
         self.window.knowledge_tree.selection_set("battery")
-        with patch("mtofr.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 0.5))):
+        with patch("mtofr.world.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 0.5))):
             self.window._on_edit_knowledge_key()
         self.assertEqual(self.window.draft["knowledge"]["battery"]["value"], 0.5)
 
@@ -290,7 +290,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         draft = graph_draft.add_primitive(draft, "start", "nav", "move_to", {"tolerance": "battery"}, {})
         self.window._set_draft(draft)
         self.window.knowledge_tree.selection_set("battery")
-        with patch("mtofr.mission_editor.window._KnowledgeDialog", _StubDialog(("battery_level", float, 1.0))):
+        with patch("mtofr.world.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery_level", float, 1.0))):
             self.window._on_edit_knowledge_key()
         self.assertNotIn("battery", self.window.draft["knowledge"])
         self.assertEqual(self.window.draft["knowledge"]["battery_level"], {"type": float, "value": 1.0})

@@ -1,4 +1,4 @@
-"""Tests for mtofr.mission_editor.serialization: save/load a mission graph to/from
+"""Tests for mtofr.world.interface.mission_editor.serialization: save/load a mission graph to/from
 JSON, including the type-name round-trip for a graph's "knowledge" section (which
 stores real `type` objects) and Location's custom encode/decode."""
 import tempfile
@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from mtofr.database import Location
-from mtofr.mission_editor.serialization import save_mission_graph, load_mission_graph
+from mtofr.world.interface.mission_editor.serialization import save_mission_graph, load_mission_graph
 
 
 class TestMissionGraphSerialization(unittest.TestCase):

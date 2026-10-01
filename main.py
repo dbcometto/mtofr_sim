@@ -12,7 +12,7 @@ from mtofr.database import KnowledgeDatabase
 from mtofr.maps import GroundMap
 from mtofr.missions import MissionSet, MISSION_SETS
 from mtofr.world.interface.frontseater import MissionEditorFrontseater
-from mtofr.mission_editor.window import MissionEditorWindow
+from mtofr.world.interface.mission_editor.window import MissionEditorWindow
 
 
 class _NullWindow:

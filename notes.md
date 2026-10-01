@@ -1,6 +1,23 @@
 # Notes
 
 
+## Status 1 Oct 26 — `mission_editor` moved under `world/interface/`
+
+(Written by Claude)
+
+`mission_editor/` (`graph_draft.py`, `serialization.py`, `window.py`) moved from
+`src/mtofr/` to `src/mtofr/world/interface/mission_editor/`, since it is
+specific to the interface platform rather than a general-purpose package —
+mirroring how an environment's viewer lives under `world/<environment_name>/viz/`.
+Package name is unchanged, only its parent: imports are now
+`mtofr.world.interface.mission_editor...` (updated in the editor's own modules,
+`world/interface/frontseater.py`, `main.py`, and the three editor test files,
+including `patch(...)` target strings). `CLAUDE.md`'s paths updated to match;
+earlier entries above/below keep the old paths as written at the time. Moved
+with a plain filesystem move (no git tools), so git sees delete + untracked.
+Tests stay flat in `tests/`. Full suite passes (405).
+
+
 ## Status 14 Sep 26 (even later) — Live Control tab lost its selection every refresh
 
 (Written by Claude)

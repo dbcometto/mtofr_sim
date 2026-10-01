@@ -113,6 +113,18 @@ class TestVerifyMissionStructure(unittest.TestCase):
         with self.assertRaises(MissionStructuralError):
             verify_mission_structure(mission_graph)
 
+    def test_raises_on_a_primitive_binding_to_an_undeclared_key(self):
+        """Regression: Validate once passed a graph whose move_to bound an undeclared 'tolerance', which then halted the mission."""
+        def graph(inputs, outputs):
+            return {"knowledge": {"goal": {"type": float, "value": 0.0}},
+                    "nodes": {"n1": {"primitives": {"nav": {"capability": "move_to", "inputs": inputs, "outputs": outputs}}}},
+                    "edges": {}, "start": "n1"}
+        verify_mission_structure(graph({"target": "goal"}, {}))   # does not raise
+        with self.assertRaisesRegex(MissionStructuralError, "tolerance"):
+            verify_mission_structure(graph({"target": "goal", "tolerance": "tolerance"}, {}))
+        with self.assertRaisesRegex(MissionStructuralError, "arrived"):
+            verify_mission_structure(graph({"target": "goal"}, {"arrived": "arrived"}))
+
     def test_passes_for_a_graph_with_no_edges(self):
         mission_graph = {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
         verify_mission_structure(mission_graph)   # does not raise

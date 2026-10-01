@@ -64,6 +64,13 @@ class TestMissionDashboard(unittest.TestCase):
         self.dashboard.update()
         self.assertIn("nav", self.dashboard.capability_tree.get_children())
 
+    def test_capability_tree_shows_an_undeclared_binding_instead_of_crashing(self):
+        backseater = self.world.backseaters["ugv1"]
+        status = {"overall_status": "halted", "primitives": {
+            "nav": {"capability": "move_to", "status": "failed", "inputs": {"tolerance": "missing_key"}}}}
+        self.dashboard._refresh_capability_tree(backseater, status)
+        self.assertIn("undeclared key 'missing_key'", self.dashboard.capability_tree.item("nav", "values")[2])
+
     def test_knowledge_tree_lists_every_knowledge_entry(self):
         self.dashboard.update()
         self.assertIn("goal", self.dashboard.knowledge_tree.get_children())

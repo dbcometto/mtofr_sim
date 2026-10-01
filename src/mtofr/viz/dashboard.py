@@ -410,9 +410,11 @@ class MissionDashboard:
     def _refresh_capability_tree(self, backseater, status: dict) -> None:
         self.capability_tree.delete(*self.capability_tree.get_children())
         self.overall_status_label.config(text=f"Status: {status['overall_status']}")
+        entries = backseater.knowledge_database.all()
         for name, info in status["primitives"].items():
+            # A bad binding halts the mission but must never crash the viewer, so show it instead.
             inputs_text = ", ".join(
-                f"{field_name}={backseater.knowledge_database.get(key)!r}"
+                f"{field_name}={entries[key]!r}" if key in entries else f"{field_name}=<undeclared key '{key}'>"
                 for field_name, key in info["inputs"].items()
             )
             self.capability_tree.insert(

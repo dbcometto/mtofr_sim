@@ -84,18 +84,24 @@ class MissionDatabase(PlatformKeyedDatabase):
 
 
 class MissionStructuralError(ValueError):
-    """Raised when a mission graph references a Knowledge key, in an edge condition,
-    that isn't declared in that same graph's own "knowledge" section."""
+    """Raised when a mission graph references a Knowledge key, in an edge condition or a
+    primitive's inputs/outputs, that isn't declared in that same graph's own "knowledge" section."""
 
 
 def verify_mission_structure(mission_graph: dict) -> None:
-    """Raises MissionStructuralError if any edge condition in `mission_graph` references
-    a Knowledge key not declared in the graph's own "knowledge" section."""
+    """Raises MissionStructuralError if any edge condition or primitive input/output binding in
+    `mission_graph` references a Knowledge key not declared in the graph's own "knowledge" section.
+    Primitive bindings are checked here (not only at Backseater's bind time) so a bad graph is
+    rejected at push instead of being accepted and then halting the running mission."""
     declared_keys = set(mission_graph.get("knowledge", {}).keys())
     referenced_keys = set()
     for edges in mission_graph.get("edges", {}).values():
         for edge in edges:
             referenced_keys |= parse_condition(edge["condition"]).keys()
+    for node in mission_graph.get("nodes", {}).values():
+        for primitive in node.get("primitives", {}).values():
+            referenced_keys |= set(primitive.get("inputs", {}).values())
+            referenced_keys |= set(primitive.get("outputs", {}).values())
 
     missing_keys = referenced_keys - declared_keys
     if missing_keys:

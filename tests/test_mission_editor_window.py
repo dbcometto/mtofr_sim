@@ -296,6 +296,43 @@ class TestMissionEditorWindow(unittest.TestCase):
         self.assertEqual(self.window.draft["knowledge"]["battery_level"], {"type": float, "value": 1.0})
         self.assertEqual(self.window.draft["nodes"]["start"]["primitives"]["nav"]["inputs"]["tolerance"], "battery_level")
 
+    #==========# Validate #==========#
+
+    def _draft_binding_tolerance_to(self, key_declarations: dict) -> dict:
+        """A draft whose move_to binds tolerance to the key 'tolerance', with the given knowledge declared."""
+        draft = {"knowledge": key_declarations, "edges": {}, "start": "n1", "nodes": {"n1": {"primitives": {"go": {
+            "capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"}, "outputs": {}}}}}}
+        return draft
+
+    def test_validate_rejects_a_binding_to_an_undeclared_key(self):
+        """Regression: Validate used to pass a graph whose move_to bound an undeclared 'tolerance', which halted it on push."""
+        self.window.target_platform_id.set("ugv1")
+        self.window._set_draft(self._draft_binding_tolerance_to({"goal": {"type": Location, "value": Location(1.0, 2.0)}}))
+        with patch("mtofr.world.interface.mission_editor.window.messagebox.showerror") as showerror:
+            self.window._on_validate()
+        showerror.assert_called_once()
+        self.assertIn("undeclared knowledge key(s): ['tolerance']", self.window.console_text.get("1.0", tk.END))
+
+    def test_validate_reports_a_wrong_typed_binding_for_the_target_platform(self):
+        self.window.target_platform_id.set("ugv1")
+        self.window._set_draft(self._draft_binding_tolerance_to({
+            "goal": {"type": Location, "value": Location(1.0, 2.0)}, "tolerance": {"type": bool, "value": True}}))
+        with patch("mtofr.world.interface.mission_editor.window.messagebox.showerror") as showerror:
+            self.window._on_validate()
+        showerror.assert_called_once()
+        console = self.window.console_text.get("1.0", tk.END)
+        self.assertIn("Validation failed for 'ugv1'", console)
+        self.assertIn("expects float, but key 'tolerance' is declared bool", console)
+
+    def test_validate_passes_a_draft_the_target_platform_can_bind(self):
+        self.window.target_platform_id.set("ugv1")
+        self.window._set_draft(self._draft_binding_tolerance_to({
+            "goal": {"type": Location, "value": Location(1.0, 2.0)}, "tolerance": {"type": float, "value": 1.0}}))
+        with patch("mtofr.world.interface.mission_editor.window.messagebox.showerror") as showerror:
+            self.window._on_validate()
+        showerror.assert_not_called()
+        self.assertIn("binds on 'ugv1'", self.window.console_text.get("1.0", tk.END))
+
     #==========# Push #==========#
 
     def test_push_writes_the_draft_to_the_target_platforms_mission_database(self):

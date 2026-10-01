@@ -19,6 +19,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+from mtofr.capability.capability import find_binding_problems
 from mtofr.condition.condition import parse_condition, ConditionSyntaxError
 from mtofr.database import verify_mission_structure, MissionStructuralError
 from mtofr.viz.mission_graph_view import MissionGraphViewer
@@ -71,6 +72,9 @@ class MissionEditorWindow(tk.Toplevel):
         self.selected_live_knowledge_key = None
         self.undo_stack = []   # past drafts, most recent last
         self.redo_stack = []   # drafts undone away from, most recent last
+        self._undo_group_open = False       # True while the assistant is mid-turn: all its edits share one undo entry
+        self._undo_group_recorded = False   # whether the open group has already pushed its entry
+        self.assistant_window = None
         self.mission_graph_viewer = MissionGraphViewer()
         self._live_preview_refresh_job = None      # self.after() id, cancelled explicitly in close()
         self._live_knowledge_refresh_job = None    # self.after() id, cancelled explicitly in close()
@@ -139,6 +143,7 @@ class MissionEditorWindow(tk.Toplevel):
 
         ttk.Button(top, text="Validate", command=self._on_validate).pack(side=tk.LEFT, padx=(16, 4))
         ttk.Button(top, text="Push to Platform", command=self._on_push).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top, text="Assistant...", command=self._on_open_assistant).pack(side=tk.LEFT, padx=(16, 4))
 
     def _build_live_control_tab(self, parent) -> None:
         """The default tab: the *target* platform's already-running Knowledge --
@@ -310,11 +315,34 @@ class MissionEditorWindow(tk.Toplevel):
         dict rather than mutating in place, so recording the *old* self.draft
         object here -- no copying needed -- is enough for a full undo history;
         a fresh action always invalidates whatever was available to redo."""
-        self.undo_stack.append(self.draft)
-        del self.undo_stack[:-UNDO_HISTORY_LIMIT]
+        if not (self._undo_group_open and self._undo_group_recorded):
+            self.undo_stack.append(self.draft)
+            del self.undo_stack[:-UNDO_HISTORY_LIMIT]
+        self._undo_group_recorded = self._undo_group_open
         self.redo_stack.clear()
         self._apply_draft(new_draft)
         self._update_undo_redo_buttons()
+
+    def apply_draft_edit(self, new_draft: dict) -> None:
+        """Public entry point for non-GUI editors (the assistant) into the same _set_draft() choke point."""
+        self._set_draft(new_draft)
+
+    def begin_undo_group(self) -> None:
+        """Until end_undo_group(), every draft mutation shares one undo entry (one Ctrl+Z for the whole group)."""
+        self._undo_group_open = True
+        self._undo_group_recorded = False
+
+    def end_undo_group(self) -> None:
+        self._undo_group_open = False
+        self._undo_group_recorded = False
+
+    def _on_open_assistant(self) -> None:
+        """Opens the LLM assistant window, or raises it if already open."""
+        if self.assistant_window is not None and self.assistant_window.winfo_exists():
+            self.assistant_window.lift()
+            return
+        from mtofr.world.interface.mission_editor.assistant_window import AssistantWindow   # lazy: keeps the editor free of the assistant's imports until used
+        self.assistant_window = AssistantWindow(self)
 
     def _apply_draft(self, new_draft: dict) -> None:
         self.draft = new_draft
@@ -343,9 +371,11 @@ class MissionEditorWindow(tk.Toplevel):
         self.redo_button.config(state="normal" if self.redo_stack else "disabled")
 
     def _log(self, message: str) -> None:
+        at_bottom = self.console_text.yview()[1] >= 0.999   # only follow the output if the user hasn't scrolled up
         self.console_text.configure(state="normal")
         self.console_text.insert(tk.END, message + "\n")
-        self.console_text.see(tk.END)
+        if at_bottom:
+            self.console_text.see(tk.END)
         self.console_text.configure(state="disabled")
 
     def _on_load_live(self) -> None:
@@ -400,7 +430,18 @@ class MissionEditorWindow(tk.Toplevel):
             self._log(f"Validation failed: {error}")
             messagebox.showerror("Invalid mission graph", str(error), parent=self)
             return
-        self._log("Draft is structurally valid.")
+        # Also check the draft against what the target platform can actually bind (the same check a push enforces).
+        target_id = self.target_platform_id.get()
+        backseater = self.world.backseaters.get(target_id)
+        problems = find_binding_problems(self.draft, backseater.capabilities() if backseater is not None else None)
+        if problems:
+            self._log(f"Validation failed for '{target_id}':")
+            for problem in problems:
+                self._log(f"  - {problem}")
+            messagebox.showerror("Cannot bind on target platform", "\n".join(problems), parent=self)
+            return
+        self._log(f"Draft is structurally valid and binds on '{target_id}'." if backseater is not None
+                  else "Draft is structurally valid (no target platform selected to check bindings against).")
 
     def _on_push(self) -> None:
         target_id = self.target_platform_id.get()
@@ -776,6 +817,8 @@ class MissionEditorWindow(tk.Toplevel):
         mirroring MissionDashboard._on_close (which logs the same class of error
         for idle_draw callbacks if that flush is skipped)."""
         try:
+            if self.assistant_window is not None and self.assistant_window.winfo_exists():
+                self.assistant_window.close()
             if self._live_preview_refresh_job is not None:
                 self.after_cancel(self._live_preview_refresh_job)
             if self._live_knowledge_refresh_job is not None:

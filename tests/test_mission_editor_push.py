@@ -72,6 +72,21 @@ class TestMissionEditorPushPrivilege(unittest.TestCase):
         with self.assertRaises(MissionStructuralError):
             self.ugv1.write_mission(bad_graph, writer_platform_id="interface")
 
+    def test_graph_the_target_cannot_bind_is_rejected_and_not_stored(self):
+        """Regression: a primitive naming a capability the platform lacks used to be accepted, then halt the mission."""
+        before = self.ugv1.mission_database.all().get("ugv1")
+        graph = {"knowledge": {}, "edges": {}, "start": "n2",
+                 "nodes": {"n2": {"primitives": {"go": {"capability": "move_to", "inputs": {}, "outputs": {}}}}}}
+        with self.assertRaisesRegex(MissionStructuralError, "move_to.*does not exist"):
+            self.ugv1.write_mission(graph, writer_platform_id="interface")
+        self.assertIs(self.ugv1.mission_database.all().get("ugv1"), before)
+
+    def test_graph_using_a_capability_the_target_has_is_accepted(self):
+        graph = {"knowledge": {}, "edges": {}, "start": "n2",
+                 "nodes": {"n2": {"primitives": {"wait": {"capability": "idle", "inputs": {}, "outputs": {}}}}}}
+        self.ugv1.write_mission(graph, writer_platform_id="interface")
+        self.assertIs(self.ugv1.mission_database.get("ugv1"), graph)
+
 
 if __name__ == "__main__":
     unittest.main()

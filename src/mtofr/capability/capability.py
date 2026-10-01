@@ -64,3 +64,50 @@ class CapabilityRegistry:
     def describe(self) -> str:
         """Plaintext listing of every advertised capability, for a planner LLM or human."""
         return "\n".join(capability.describe() for capability in self._by_ipl_type.values())
+
+
+#==========# Binding check #==========#
+
+def find_primitive_problems(primitive: dict, declared_knowledge: dict, capability_registry) -> list:
+    """Every reason `primitive` (a mission-graph {"capability", "inputs", "outputs"} dict) could not be bound by
+    a platform advertising `capability_registry`: unknown capability, missing/unknown fields, undeclared keys,
+    or a key whose declared type differs from the field's. `declared_knowledge` is a mission graph's
+    "knowledge" section. Mirrors Backseater's bind-time check, but runs on the graph alone so a bad binding
+    is reported at edit/validate/push time instead of halting a running mission."""
+    capability = capability_registry.get(primitive["capability"])
+    if capability is None:
+        return [f"capability '{primitive['capability']}' does not exist on this platform. "
+                f"Available: {sorted(capability_registry.all())}"]
+
+    problems = []
+    for direction, specs, bindings in (("input", capability.inputs, primitive.get("inputs", {})),
+                                       ("output", capability.outputs, primitive.get("outputs", {}))):
+        specs_by_name = {spec.name: spec for spec in specs}
+        if direction == "input":   # outputs are optional; every input is required
+            problems += [f"{capability.ipl_type} is missing required input '{name}' ({spec.type.__name__}); "
+                         f"bind it to a declared {spec.type.__name__} key"
+                         for name, spec in specs_by_name.items() if name not in bindings]
+        for field_name, key in bindings.items():
+            spec = specs_by_name.get(field_name)
+            if spec is None:
+                problems.append(f"'{field_name}' is not an {direction} of {capability.ipl_type}. "
+                                f"Its {direction}s: {sorted(specs_by_name) or 'none'}")
+            elif key not in declared_knowledge:
+                problems.append(f"key '{key}' bound to {direction} '{field_name}' is not declared; declare it first")
+            elif declared_knowledge[key]["type"] != spec.type:
+                problems.append(f"{direction} '{field_name}' expects {spec.type.__name__}, but key '{key}' is declared "
+                                f"{declared_knowledge[key]['type'].__name__}")
+    return problems
+
+
+def find_binding_problems(mission_graph: dict, capability_registry) -> list:
+    """find_primitive_problems() over every primitive in `mission_graph`, each prefixed with where it is.
+    Empty when the registry is unknown (None) -- nothing to check against."""
+    if capability_registry is None:
+        return []
+    problems = []
+    for node_id, node in mission_graph.get("nodes", {}).items():
+        for name, primitive in node.get("primitives", {}).items():
+            problems += [f"node '{node_id}' primitive '{name}': {problem}" for problem in
+                         find_primitive_problems(primitive, mission_graph.get("knowledge", {}), capability_registry)]
+    return problems

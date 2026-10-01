@@ -1,6 +1,88 @@
 # Notes
 
 
+## Status 1 Oct 26 (end of day) — LLM assistant: current state
+
+(Written by Claude. The entry below is the running log of how we got here; where it disagrees with this
+one, this one wins -- e.g. the tools now do check bindings, and the live-Knowledge/TLP bullets are superseded.)
+
+**Built** (build order step 7, first cut -- the "Assistant..." button in the mission editor):
+- `world/interface/agent/`: `agent.py` is the streaming tool-call loop (tools and `run_tool` injected;
+  `should_stop` for the Stop button; thinking kept within a turn; `detect_stall` nudges, at most `MAX_NUDGES`;
+  per-call `num_predict` cap `MAX_REPLY_TOKENS`; per-call prompt/write/load timings). `config.py` holds
+  model (`qwen3.5:4b`), `NUM_CTX` 8192, `MAX_ITERATIONS` 12. The toy tools and CLI were deleted.
+- `world/interface/mission_editor/`: `assistant_tools.py` (14 tools, 1:1 with the `graph_draft.py`
+  mutators; argument coercion; `add_primitive`/`edit_primitive` refuse what the target platform can't
+  bind, with the fix in the error text), `assistant_prompt.py` (system prompt -- hand-edited by the user, don't
+  rewrite unasked -- plus the per-turn SITUATION/MISSION message: world frame, capabilities, draft, and the
+  running platform as information-only), `assistant_session.py` (history compaction, stall detection),
+  `assistant_window.py` (chat, its own target-platform dropdown, "Enable thinking" toggle, live wait counter
+  and progress bar, done-separator, Console mirroring, one undo step per message).
+- Core changes it forced: `verify_mission_structure()` also checks primitive binding keys;
+  `capability.find_binding_problems()` is enforced in `Backseater.write_mission()` and the editor's Validate;
+  the dashboard no longer crashes on an undeclared bound key.
+
+**Verified**: unit tests for all of the above (assistant files: 55 passing at last run; the binding/verify
+changes were run against ~170 neighboring tests). The **full suite was last run at 430, before the
+`write_mission` binding gate and later work -- not re-run since.** Real-model behavior is from the user's runs, not ours.
+
+**Observed with `qwen3.5:4b` on CPU**: ~4-5 tok/s; ~4.3k prompt tokens per call (4-10 s, mostly cached). A two-leg
+mission: ~5 min for the first turn (141 s of it for one call, mostly narration), ~11 min with three correction turns.
+Reliable: tool-call syntax, `Location` values, bindings, recovering from tool errors, batching calls in one message.
+Unreliable: reusing and *setting the start node*, announce-then-stop, rambling when confused, copying examples
+(it copied a "rename the start node" sentence), and renaming to a name that already exists.
+
+**Open items, roughly by value**
+1. *Post-turn graph check fed back to the model* (proposed, not built): empty start node, nodes unreachable from the
+   start, edges to missing nodes, unused keys -- one feedback message before the turn ends. It would have saved
+   the three correction turns above, and fills the "edge-reachability" item `verify_mission_structure` has deferred.
+2. Narration is most of the generation time (the Mission / Tentative Plan / Conduct Recon / Implementation Plan
+   text from the user's TLP prompt). Shortening it is a design call for the user.
+3. The prompt example's "rename the starting node" sentence (user's text).
+4. If stalls continue: an explicit `finish(summary)` tool is sturdier than the announce-pattern heuristic,
+   which can misfire (cost: one extra model call).
+5. A larger model needs a GPU; on this CPU it would be 2-3x slower per token. No alternative model has been tried.
+6. Stretch: a `get_draft` self-refresh tool; an ASCII traversability grid so it can route around blocked terrain
+   (images were rejected -- see below); unify `Backseater._check_binding_types` with `find_binding_problems`.
+7. Test noise: tests that open Tk windows print "Exception ignored ... main thread is not in main loop" at
+   teardown (GC of Tk images/variables). Harmless, and the same class existed before this work.
+
+**Working agreements from this session**: edits to files go through the edit tools so the user sees diffs; no
+tests that assert system-prompt wording; the user runs the real-model tests (they are slow); don't touch the
+user's hand-edited prompt without asking.
+
+
+## Status 1 Oct 26 (later) — LLM assistant window for the mission editor
+
+(Written by Claude)
+
+Build order step 7, first cut. `MissionEditorWindow`'s "Assistant..." button opens an
+`AssistantWindow` (`mission_editor/assistant_window.py`), a separate Toplevel chat whose LLM edits
+the *same* draft as the Editor tab, through the same `_set_draft()` choke point (via
+`apply_draft_edit()`). Decisions:
+- **Tools are 1:1 wrappers of all 14 `graph_draft.py` mutators** (`assistant_tools.py`), deliberately
+  no composite tools like `add_patrol` -- fine-grained, auditable steps are a research point. Wrappers
+  only parse arguments (JSON-string tolerance, type names via `serialization.py`'s registry, condition
+  syntax via `parse_condition`) and turn would-be `KeyError`/`IndexError`s into readable error strings.
+  They do not validate capability names or key bindings: that stays with `write_mission()`/Validate.
+- **Context**: full draft + target platform's capabilities injected into each turn's user message
+  (`assistant_prompt.py`); `AssistantSession` keeps only the plain request and final reply afterward.
+  `NUM_CTX` raised 4096 -> 8192 since 14 schemas plus a draft are unlikely to fit in 4096 (unmeasured).
+- **Threading**: Ollama blocks, so turns run on a worker thread; events and tool calls come back over one
+  FIFO queue drained by `after(50)` on the Tk thread, since tools touch widgets.
+- **Undo**: all edits from one user message are one Ctrl+Z (`begin_undo_group`/`end_undo_group`).
+- Tool steps are shown in both the chat and the Console (`[assistant] name(args) -> result`).
+- Toy tools/CLI from the experiment were removed; `agent.py` now requires `tools`/`run_tool`.
+  `llm/ollama/llm_config.yaml` is superseded by `agent/config.py`; the start/stop scripts remain useful.
+- **First real run (qwen3.5:4b) failed in instructive ways**: no coordinate frame ("top left" was a guess, `x=1,y=2`); ~400 tokens of narration per tool call; tried literals as primitive inputs (they must be knowledge key names) and then doubted whether literals were possible; bound an undeclared output key; split a place into two floats instead of one `Location`; declared unused keys; considered deleting the start node; hit `MAX_ITERATIONS = 5` (now 12).
+- **Fixes**: the per-turn state block now has a WORLD section (`describe_world()`: axes, map extent, corners, region centers, terrain, the platform's position); the system prompt has explicit data rules, a worked example (test-enforced to run through the real toolbox), and the eight Troop Leading Procedures in order, each scaled to an editing assistant (warning order = a MISSION/PLAN header the user can Stop; reconnoiter = checking tool results; issue the order = a short summary that says the draft is not pushed). TLP wording is from the Ranger Handbook's step list as I recall it -- the handbook text is not in the repo, so check the step names against it.
+- **Second real run succeeded but was very slow.** Cause: the old "Show thinking" checkbox also set `think=True` (probe: `think=False` is honored, zero thinking tokens; `think=True` was ~4x slower on a trivial prompt). Also, the `MISSION:`/`PLAN:` header backfired -- the model emitted `MISSION(...)` as a tool call -- and it added a pointless self-edge on a single-task graph. Fixes: checkbox renamed "Enable thinking (slower)" and thinking is always displayed; thinking is kept in history within a turn (so loops don't redo it) and dropped at turn end; TLPs cut to five steps with no fixed header; "no edges for a single task" and "answer questions without tools" rules added; live active node/Knowledge values and capability field meanings added to the state block. UI: line breaks between thinking/answer/tool text, a "done -- waiting for you" separator, and the transcript/Console only autoscroll when already at the bottom.
+- `qwen3.5:4b` reports a vision capability. Not used: pixels are a worse source for coordinates than the WORLD text, and image tokens would cost context/CPU time. If routing around blocked terrain matters, a coarse ASCII traversability grid is the better next step.
+- **Bug found by a real run**: the assistant bound a primitive to an undeclared key (`tolerance`); Validate and the push gate passed it (they only checked edge-condition keys), the mission halted at bind time, and the dashboard's capability table then crashed the whole sim loop with `KeyError`. Fixed both: `verify_mission_structure()` now also checks primitive input/output keys, and the dashboard shows `<undeclared key ...>` instead of raising. A second layer then closed the type gap: `capability.find_binding_problems()` checks each primitive against the target platform's capability registry (unknown capability, missing/unknown fields, undeclared key, wrong key type). It runs in `Backseater.write_mission()` (so every push is gated), the editor's Validate (against the selected target), and the assistant's `add_primitive`/`edit_primitive` (refused with the fix in the error text; `edit_knowledge_key` appends a WARNING if a retype breaks existing bindings). `Backseater._check_binding_types` is left as the runtime backstop; the two now duplicate logic and could be unified later.
+- Later same day: assistant-window platform selector; a loop guard (`MAX_NUDGES`) that asks for real tool calls when calls are typed as text; user message laid out as SITUATION then MISSION. The user hand-edited the system prompt (operations-order considerations, six TLP steps) -- treat it as theirs.
+- **A bad multi-turn run** (go to A then B): turn 1 and 2 each ended on prose announcing a next step ("I will now add the waypoint node...") after only 2 tool calls -- a reply with no tool call ends the turn; turn 3 and 4 were ~4k tokens of "Wait--..." self-talk with no calls. Causes: the state block's "Running now: active node 'start', arrived=True, goal=(40,-40)" (the last pushed graph) looked inconsistent with the renamed draft, and the model tried to reconcile them; replies were unbounded; the user's prompt example said "rename the starting node" without doing it, and the model copied the rename. Fixes: the live section now says it is information only / the last pushed graph / differs from the draft by design, and omits live Knowledge values; `num_predict` cap (`MAX_REPLY_TOKENS`); the nudge generalized to `detect_stall` (typed calls, truncation, announce-without-doing). Unresolved/yours: the prompt example's rename sentence; an explicit `finish` tool would be sturdier than the announce-pattern heuristic if stalls continue.
+- **Not yet done**: a self-refresh/`get_draft` tool remains a stretch goal.
+
 ## Status 1 Oct 26 — `mission_editor` moved under `world/interface/`
 
 (Written by Claude)

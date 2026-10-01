@@ -1,6 +1,7 @@
 """Defines a backseater"""
 import hashlib
 
+from mtofr.capability.capability import find_binding_problems
 from mtofr.condition.condition import parse_condition
 from mtofr.clock.clock import Clock
 from mtofr.database import (
@@ -8,6 +9,7 @@ from mtofr.database import (
     PlatformDatabase,
     PlatformRecord,
     PlatformStatus,
+    MissionStructuralError,
     verify_mission_structure,
 )
 
@@ -155,6 +157,9 @@ class Backseater:
             )
 
         verify_mission_structure(mission_graph)
+        binding_problems = find_binding_problems(mission_graph, self.frontseater.capabilities())
+        if binding_problems:   # reject now rather than accept it and halt the running mission at bind time
+            raise MissionStructuralError("Mission graph cannot be bound on this platform: " + "; ".join(binding_problems))
 
         write_timestamp = timestamp if timestamp is not None else self.clock.now()
         if self.platform_id in self.mission_database.all():

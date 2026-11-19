@@ -21,7 +21,7 @@ The mission-commander LLM runs locally via Ollama, CPU-only. See [`docs/llm_setu
 
 ## Usage
 
-Run the simulator (pick the mission set with `ACTIVE_MISSION_SET` at the top of `main.py`):
+Run the simulator (pick the scenario with `ACTIVE_SCENARIO` at the top of `main.py`):
 ```bash
 python main.py
 ```

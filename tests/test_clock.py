@@ -2,7 +2,7 @@
 import time
 import unittest
 
-from mtofr.clock.clock import Clock
+from mtofr.core.clock import Clock
 
 
 class TestClock(unittest.TestCase):

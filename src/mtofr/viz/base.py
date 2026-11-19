@@ -64,7 +64,7 @@ class EnvironmentViewer(ABC):
     @abstractmethod
     def render(self, ax, states: dict, selected_id: str = None,
                show_traversability: bool = False, show_regions: bool = False) -> None:
-        """Draws every platform in `states` (platform_id -> WorldState) onto ax,
+        """Draws every platform in `states` (platform_id -> its environment's State) onto ax,
         visually distinguishing `selected_id` if given. `show_traversability`/
         `show_regions` toggle optional map overlays; a viewer with no map ignores
         them."""

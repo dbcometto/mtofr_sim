@@ -3,11 +3,11 @@ vehicle steps itself against a passive GroundPlaneEnv, slowed by the terrain's s
 multiplier and stopped dead at blocking (or off-map) cells."""
 import unittest
 
-from mtofr.world.base import WorldState
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.hardware import GroundPlaneHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.maps.ground_map import TraversabilityType
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.hardware import GroundPlaneHardware
+from mtofr.environments.ground_plane.maps.ground_map import TraversabilityType
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.state import GroundPlaneState
 from tests.test_ground_plane_env import uniform_ground_map
 
 SLOW = TraversabilityType(name="slow", blocking=False, speed_multiplier=0.5)
@@ -18,7 +18,7 @@ CLEAR = TraversabilityType(name="clear", blocking=False, speed_multiplier=1.0)
 def _hardware_at(x: float = 0.0, y: float = 0.0, t: float = 0.0, controls: dict = None) -> BicycleHardware:
     """A BicycleHardware at (x, y) facing +x, with controls already sent."""
     hardware = BicycleHardware()
-    hardware.state = WorldState(t=t, x=x, y=y, theta=0.0)
+    hardware.state = GroundPlaneState(t=t, x=x, y=y, theta=0.0)
     hardware.send_controls(controls or {"vel": 1.0, "steer": 0.0})
     return hardware
 

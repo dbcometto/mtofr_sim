@@ -2,10 +2,10 @@
 capability-facing data access methods, spanning all three of a Backseater's databases."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
 from mtofr.database import KnowledgeDatabase, PlatformRecord
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.platform.backseater import Backseater
 
 
 def _make_backseater(test_case: unittest.TestCase, platform_id: str = "ugv1", privilege_level: int = 1) -> Backseater:
@@ -110,7 +110,7 @@ class TestQueryPublishMission(unittest.TestCase):
         # never actually blocks it -- this asserts it really does route through
         # write_mission rather than bypassing it, by checking the structural-verify gate
         # (which write_mission also runs) rejects a bad graph the same way.
-        from mtofr.database import MissionStructuralError
+        from mtofr.mission.validation import MissionStructuralError
         backseater = _make_backseater(self)
         bad_graph = {
             "knowledge": {},

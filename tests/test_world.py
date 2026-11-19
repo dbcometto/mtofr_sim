@@ -1,16 +1,18 @@
 """Tests for World's tick sequencing: backseater update -> frontseater begin/finish_update ->
 each hardware stepping itself against the environment -> mesh sync; per-platform fault
-isolation; state reporting; and the construction-time check that every platform's
-hardware can live in the world's environment."""
+isolation; state reporting; and the construction-time checks that every platform's
+hardware can live in the world's environment and is expressed in its state type."""
 import contextlib
 import io
 import unittest
 
-from mtofr.world.world import World
-from mtofr.world.base import Environment
-from mtofr.world.anywhere.hardware import StationaryHardware
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.core.environment import Environment
+from mtofr.core.state import State
+from mtofr.environments.anywhere.hardware import StationaryHardware
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.state import GroundPlaneState
+from mtofr.environments.world import World
 
 
 class FakeFrontseater:
@@ -59,11 +61,13 @@ class FakeHardware:
 
 
 class FakeEnvironment:
-    pass
+    """Hosts FakeHardware, whose sentinel state is a str."""
+    state_type = str
 
 
 class OtherEnvironment(Environment):
-    """An environment no ground-plane vehicle can live in."""
+    """An environment no ground-plane vehicle can live in, expressed in bare States."""
+    state_type = State
 
 
 class FakePlatform:
@@ -196,9 +200,33 @@ class TestWorldHostingCheck(unittest.TestCase):
             self.assertIn(expected, message)
 
     def test_stationary_hardware_is_hosted_by_any_environment(self):
-        """StationaryHardware (environment_type None) is accepted in any environment."""
+        """StationaryHardware (environment_type None) is accepted in any environment, placed in its state type."""
         for environment in (GroundPlaneEnv(), OtherEnvironment()):
-            World(environment, platforms={"console": _HardwarePlatform(StationaryHardware())})   # must not raise
+            hardware = StationaryHardware(initial_state=environment.state_type())
+            World(environment, platforms={"console": _HardwarePlatform(hardware)})   # must not raise
+
+    def test_state_of_the_wrong_type_is_refused(self):
+        """A platform whose state isn't the environment's state_type is rejected, naming both types."""
+        with self.assertRaises(TypeError) as raised:
+            World(GroundPlaneEnv(), platforms={"console": _HardwarePlatform(StationaryHardware(State()))})
+        message = str(raised.exception)
+        for expected in ("console", "StationaryHardware", "State", "GroundPlaneState"):
+            self.assertIn(expected, message)
+
+    def test_environment_without_state_type_is_refused(self):
+        """An environment that doesn't declare state_type is rejected with a TypeError naming the attribute."""
+        class UndeclaredEnvironment(Environment):
+            """Forgets state_type."""
+
+        with self.assertRaises(TypeError) as raised:
+            World(UndeclaredEnvironment(), platforms={"console": _HardwarePlatform(StationaryHardware())})
+        self.assertIn("state_type", str(raised.exception))
+
+    def test_ground_plane_states_are_reported_as_given(self):
+        """A GroundPlaneEnv World reports each platform's GroundPlaneState unchanged."""
+        hardware = BicycleHardware(initial_state=GroundPlaneState(x=2.0, y=3.0))
+        world = World(GroundPlaneEnv(), platforms={"ugv1": _HardwarePlatform(hardware)})
+        self.assertIs(world.get_states()["ugv1"], hardware.state)
 
     def test_hardware_without_environment_type_is_refused(self):
         """Hardware that doesn't declare environment_type is rejected with a TypeError naming the attribute."""

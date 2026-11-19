@@ -5,11 +5,11 @@ across. Also covers a privileged Mission write propagating to a peer the same wa
 since Mission entries are gossiped by the same mesh sync."""
 import unittest
 
-from mtofr.missions import mission_wait_ugv1, mission_wait_ugv2
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
-from mtofr.world.platform import Platform
-from mtofr.world.world import World
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.environments.world import World
+from mtofr.platform.platform import Platform
+from mtofr.scenarios.wait import mission_wait_ugv1, mission_wait_ugv2
 
 
 def _build_stack(test_case, mission_graph, platform_id, privilege_level=1) -> Platform:
@@ -34,15 +34,15 @@ class TestMeshMissionIntegration(unittest.TestCase):
         self.world = World(GroundPlaneEnv(), platforms={"ugv1": ugv1, "ugv2": ugv2})
 
     def test_ugv2_never_locally_writes_ugv1_arrived(self):
-        """No primitive in ugv2's graph binds "ugv1/arrived" as an output."""
+        """No capability request in ugv2's graph binds "ugv1/arrived" as an output."""
         # ugv2's mission graph only ever reads "ugv1/arrived" -- nothing in ugv2's
         # own graph declares it as an output, so any value ugv2 sees for that key
         # must have arrived via mesh sync.
         outputs = [
             output_key
             for node in mission_wait_ugv2["nodes"].values()
-            for primitive in node["primitives"].values()
-            for output_key in primitive.get("outputs", {}).values()
+            for capability_request in node["capabilities"].values()
+            for output_key in capability_request.get("outputs", {}).values()
         ]
         self.assertNotIn("ugv1/arrived", outputs)
 
@@ -85,7 +85,7 @@ class TestMeshMissionEntryGossipIntegration(unittest.TestCase):
 
         new_graph = {
             "knowledge": {"ugv1/marker": {"type": bool, "value": True}},
-            "nodes": {"n1": {"primitives": {}}},
+            "nodes": {"n1": {"capabilities": {}}},
             "edges": {},
             "start": "n1",
         }

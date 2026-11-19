@@ -4,13 +4,13 @@ inputs and write outputs, and the mission graph transitions on knowledge-based e
 conditions driven by those published outputs."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
+from mtofr.core.capability import Capability, ParamSpec, CapabilityRegistry
 from mtofr.database import KnowledgeDatabase, Location
-from mtofr.world.base import Frontseater
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.platform.backseater import Backseater
+from mtofr.platform.frontseater import Frontseater
 
 
 def _bicycle_setup(test_case: unittest.TestCase):
@@ -33,7 +33,7 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
         mission_graph = {
             "knowledge": {"tolerance": {"type": float, "value": 0.5}},
             "nodes": {
-                "n1": {"primitives": {
+                "n1": {"capabilities": {
                     "nav": {"capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"}},
                 }},
             },
@@ -53,13 +53,13 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
             self.frontseater.update()
             self.hardware.step_dynamics(0.1, GroundPlaneEnv())
 
-        self.assertEqual(self.frontseater.describe_status()["primitives"]["nav"], "arrived")
+        self.assertEqual(self.frontseater.describe_status()["capabilities"]["nav"], "arrived")
 
     def test_unknown_knowledge_key_blocks_mission_without_crashing(self):
         """Binding to an undeclared Knowledge key blocks the mission instead of raising."""
         mission_graph = {
             "knowledge": {"tolerance": {"type": float, "value": 0.5}},
-            "nodes": {"n1": {"primitives": {
+            "nodes": {"n1": {"capabilities": {
                 "nav": {"capability": "move_to", "inputs": {"target": "does_not_exist", "tolerance": "tolerance"}},
             }}},
             "edges": {},
@@ -74,7 +74,7 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
         # "tolerance" is declared bool here, but move_to's ParamSpec for that field is float.
         mission_graph = {
             "knowledge": {"tolerance": {"type": bool, "value": False}},
-            "nodes": {"n1": {"primitives": {
+            "nodes": {"n1": {"capabilities": {
                 "nav": {"capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"}},
             }}},
             "edges": {},
@@ -85,12 +85,12 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
         self.assertTrue(backseater._blocked)
 
     def test_status_before_first_update_reports_unknown(self):
-        """Before any update(), status() shows the start node, unblocked, with each primitive's status "unknown"."""
+        """Before any update(), status() shows the start node, unblocked, with each capability request's status "unknown"."""
         status = self.backseater.status()
         self.assertEqual(status["active_node_id"], "n1")
         self.assertFalse(status["blocked"])
         self.assertEqual(
-            status["primitives"],
+            status["capabilities"],
             {"nav": {"capability": "move_to", "status": "unknown",
                       "inputs": {"target": "goal", "tolerance": "tolerance"}}},
         )
@@ -99,16 +99,16 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
         """After an update(), status() shows the capability, its live status text, and its input bindings."""
         self.backseater.update()
         status = self.backseater.status()
-        primitive_status = status["primitives"]["nav"]
-        self.assertEqual(primitive_status["capability"], "move_to")
-        self.assertIn(primitive_status["status"], ("en route", "arrived"))
-        self.assertEqual(primitive_status["inputs"], {"target": "goal", "tolerance": "tolerance"})
+        request_status = status["capabilities"]["nav"]
+        self.assertEqual(request_status["capability"], "move_to")
+        self.assertIn(request_status["status"], ("en route", "arrived"))
+        self.assertEqual(request_status["inputs"], {"target": "goal", "tolerance": "tolerance"})
 
     def test_status_reflects_blocked_mission(self):
         """status() reports blocked for a mission blocked by an unknown key."""
         mission_graph = {
             "knowledge": {"tolerance": {"type": float, "value": 0.5}},
-            "nodes": {"n1": {"primitives": {
+            "nodes": {"n1": {"capabilities": {
                 "nav": {"capability": "move_to", "inputs": {"target": "does_not_exist", "tolerance": "tolerance"}},
             }}},
             "edges": {},
@@ -131,11 +131,11 @@ class TestBackseaterKnowledgeBasedTransition(unittest.TestCase):
                 "tolerance": {"type": float, "value": 0.5},
             },
             "nodes": {
-                "n1": {"primitives": {
+                "n1": {"capabilities": {
                     "nav": {"capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"},
                             "outputs": {"arrived": "ugv1/arrived"}},
                 }},
-                "n2": {"primitives": {}},
+                "n2": {"capabilities": {}},
             },
             "edges": {
                 "n1": [{"condition": ["ugv1/arrived", "==", True], "to": "n2"}],
@@ -179,17 +179,17 @@ class _TwoOutputFrontseater(Frontseater):
         """Return the one-capability ("scan") registry."""
         return self._registry
 
-    def set_active_primitives(self, primitives: dict) -> None:
-        """Immediately publish both outputs of every started primitive to their bound keys."""
-        for primitive in primitives.values():
-            output_keys = primitive.get("outputs", {})
+    def set_active_capabilities(self, capability_requests: dict) -> None:
+        """Immediately publish both outputs of every started capability request to their bound keys."""
+        for capability_request in capability_requests.values():
+            output_keys = capability_request.get("outputs", {})
             found, count = self._found_value(), 3
             self.backseater.publish("knowledge", output_keys["found"], found)
             self.backseater.publish("knowledge", output_keys["count"], count)
 
     def describe_status(self) -> dict:
         """Report a fixed idle status."""
-        return {"overall": "idle", "primitives": {}}
+        return {"overall": "idle", "capabilities": {}}
 
     def _found_value(self):
         """Return the value published to the "found" output (a correct bool here)."""
@@ -212,7 +212,7 @@ class TestBackseaterOutputCommitment(unittest.TestCase):
                 "ugv1/found": {"type": bool, "value": False},
                 "ugv1/count": {"type": int, "value": 0},
             },
-            "nodes": {"n1": {"primitives": {
+            "nodes": {"n1": {"capabilities": {
                 "scan": {"capability": "scan", "inputs": {}, "outputs": {"found": "ugv1/found", "count": "ugv1/count"}},
             }}},
             "edges": {},

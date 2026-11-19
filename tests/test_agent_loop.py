@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from mtofr.world.anywhere.platforms.interface.agent import agent
+from mtofr.environments.anywhere.platforms.interface.agent import agent
 
 
 def _chunk(thinking=None, content=None):

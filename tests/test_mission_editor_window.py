@@ -18,14 +18,14 @@ except tk.TclError:
     TK_AVAILABLE = False
 
 from mtofr.database import Location, PlatformRecord, PlatformStatus
-from mtofr.world.world import World
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
-from mtofr.world.platform import Platform
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.environments.world import World
+from mtofr.platform.platform import Platform
 
 if TK_AVAILABLE:
-    from mtofr.world.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
-    from mtofr.world.anywhere.platforms.interface.mission_editor import graph_draft
+    from mtofr.environments.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
+    from mtofr.environments.anywhere.platforms.interface.mission_editor import graph_draft
 
 
 class _StubDialog:
@@ -52,7 +52,7 @@ class TestMissionEditorWindow(unittest.TestCase):
                 "goal": {"type": Location, "value": Location(2.0, 0.0)},
                 "tolerance": {"type": float, "value": 0.5},
             },
-            "nodes": {"n1": {"primitives": {}}},
+            "nodes": {"n1": {"capabilities":{}}},
             "edges": {},
             "start": "n1",
         }
@@ -103,7 +103,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         # event loop pump -- call the handler directly, same as a real click would.
         self.window.live_knowledge_tree.selection_set("tolerance")
         self.window._on_live_knowledge_selected()
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._LiveValueDialog", _StubDialog(1.5)):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._LiveValueDialog", _StubDialog(1.5)):
             self.window._on_edit_live_knowledge_value()
         self.assertEqual(self.target_backseater.knowledge_database.get("tolerance"), 1.5)
 
@@ -113,7 +113,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         self.window._refresh_live_knowledge_tree()
         self.window.live_knowledge_tree.selection_set("goal")
         self.window._on_live_knowledge_selected()
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._LiveValueDialog", _StubDialog(Location(9.0, -1.0))):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._LiveValueDialog", _StubDialog(Location(9.0, -1.0))):
             self.window._on_edit_live_knowledge_value()
         new_goal = self.target_backseater.knowledge_database.get("goal")
         self.assertEqual((new_goal.x, new_goal.y), (9.0, -1.0))
@@ -154,7 +154,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         # real double-click via event_generate depends on window-manager focus
         # and exact row coordinates, which is unreliable to automate.
         self.assertTrue(self.window.nodes_tree.bind("<Double-1>"))
-        self.assertTrue(self.window.primitives_tree.bind("<Double-1>"))
+        self.assertTrue(self.window.capabilities_tree.bind("<Double-1>"))
         self.assertTrue(self.window.edges_tree.bind("<Double-1>"))
         self.assertTrue(self.window.knowledge_tree.bind("<Double-1>"))
         self.assertTrue(self.window.live_knowledge_tree.bind("<Double-1>"))
@@ -242,7 +242,7 @@ class TestMissionEditorWindow(unittest.TestCase):
 
     def test_adding_a_node_adds_it_to_the_draft(self):
         """Add Node puts the entered id into the draft."""
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._TextInputDialog", _StubDialog("n2")):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._TextInputDialog", _StubDialog("n2")):
             self.window._on_add_node()
         self.assertIn("n2", self.window.draft["nodes"])
 
@@ -250,7 +250,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         """Renaming the selected node keeps it selected under its new id."""
         self.window.selected_node_id = "start"
         self.window._refresh_nodes_tree()
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._TextInputDialog", _StubDialog("renamed")):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._TextInputDialog", _StubDialog("renamed")):
             self.window._on_rename_node()
         self.assertEqual(self.window.selected_node_id, "renamed")
         self.assertIn("renamed", self.window.nodes_tree.selection())
@@ -265,33 +265,33 @@ class TestMissionEditorWindow(unittest.TestCase):
 
 
 
-    #===============#Primitives #===============#
+    #===============#Capability Requests #===============#
 
-    def test_adding_a_primitive_selects_it(self):
-        """Add Primitive puts it on the selected node and selects it."""
+    def test_adding_a_capability_selects_it(self):
+        """Add Capability puts it on the selected node and selects it."""
         self.window.selected_node_id = "start"
         self.window._refresh_nodes_tree()
         canned = ("nav", "move_to", {"target": "goal", "tolerance": "tolerance"}, {})
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._PrimitiveDialog", _StubDialog(canned)):
-            self.window._on_add_primitive()
-        self.assertIn("nav", self.window.draft["nodes"]["start"]["primitives"])
-        self.assertEqual(self.window.selected_primitive_name, "nav")
-        self.assertIn("nav", self.window.primitives_tree.selection())
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._CapabilityRequestDialog", _StubDialog(canned)):
+            self.window._on_add_capability()
+        self.assertIn("nav", self.window.draft["nodes"]["start"]["capabilities"])
+        self.assertEqual(self.window.selected_request_name, "nav")
+        self.assertIn("nav", self.window.capabilities_tree.selection())
 
-    def test_editing_a_primitive_can_rename_it_and_keeps_it_selected(self):
-        """Editing a primitive with a new name renames it and keeps it selected."""
+    def test_editing_a_capability_can_rename_it_and_keeps_it_selected(self):
+        """Editing a capability request with a new name renames it and keeps it selected."""
         self.window.selected_node_id = "start"
-        self.window._set_draft(graph_draft.add_primitive(
+        self.window._set_draft(graph_draft.add_capability(
             self.window.draft, "start", "nav", "move_to", {"target": "goal", "tolerance": "tolerance"}, {}
         ))
-        self.window.selected_primitive_name = "nav"
-        self.window._refresh_primitives_tree()
+        self.window.selected_request_name = "nav"
+        self.window._refresh_capabilities_tree()
         canned = ("nav_renamed", "move_to", {"target": "goal", "tolerance": "tolerance"}, {})
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._PrimitiveDialog", _StubDialog(canned)):
-            self.window._on_edit_primitive()
-        self.assertNotIn("nav", self.window.draft["nodes"]["start"]["primitives"])
-        self.assertIn("nav_renamed", self.window.draft["nodes"]["start"]["primitives"])
-        self.assertEqual(self.window.selected_primitive_name, "nav_renamed")
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._CapabilityRequestDialog", _StubDialog(canned)):
+            self.window._on_edit_capability()
+        self.assertNotIn("nav", self.window.draft["nodes"]["start"]["capabilities"])
+        self.assertIn("nav_renamed", self.window.draft["nodes"]["start"]["capabilities"])
+        self.assertEqual(self.window.selected_request_name, "nav_renamed")
 
 
 
@@ -302,7 +302,7 @@ class TestMissionEditorWindow(unittest.TestCase):
     def test_adding_an_edge(self):
         """Add Edge puts the dialog's source, target, and condition into the draft."""
         self.window._set_draft(graph_draft.add_node(self.window.draft, "n2"))
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._EdgeDialog", _StubDialog(("start", "n2", []))):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._EdgeDialog", _StubDialog(("start", "n2", []))):
             self.window._on_add_edge()
         self.assertEqual(self.window.draft["edges"]["start"], [{"condition": [], "to": "n2"}])
 
@@ -313,7 +313,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         row_id = next(iter(self.window.edges_tree.get_children()))
         self.window.edges_tree.selection_set(row_id)
         canned = ("start", "n2", ["goal", "is", "not", None])
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._EdgeDialog", _StubDialog(canned)):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._EdgeDialog", _StubDialog(canned)):
             self.window._on_edit_edge()
         self.assertEqual(self.window.draft["edges"]["start"][0]["condition"], ["goal", "is", "not", None])
 
@@ -325,7 +325,7 @@ class TestMissionEditorWindow(unittest.TestCase):
 
     def test_adding_a_knowledge_key(self):
         """Add Key declares the dialog's key, type, and value in the draft."""
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 1.0))):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 1.0))):
             self.window._on_add_knowledge_key()
         self.assertEqual(self.window.draft["knowledge"]["battery"], {"type": float, "value": 1.0})
 
@@ -333,21 +333,21 @@ class TestMissionEditorWindow(unittest.TestCase):
         """Editing the selected key replaces its default value."""
         self.window._set_draft(graph_draft.add_knowledge_key(self.window.draft, "battery", float, 1.0))
         self.window.knowledge_tree.selection_set("battery")
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 0.5))):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery", float, 0.5))):
             self.window._on_edit_knowledge_key()
         self.assertEqual(self.window.draft["knowledge"]["battery"]["value"], 0.5)
 
     def test_editing_a_knowledge_key_can_rename_it_and_cascades_to_bindings(self):
-        """Renaming a key through Edit moves the declaration and rewrites primitive bindings."""
+        """Renaming a key through Edit moves the declaration and rewrites capability request bindings."""
         draft = graph_draft.add_knowledge_key(self.window.draft, "battery", float, 1.0)
-        draft = graph_draft.add_primitive(draft, "start", "nav", "move_to", {"tolerance": "battery"}, {})
+        draft = graph_draft.add_capability(draft, "start", "nav", "move_to", {"tolerance": "battery"}, {})
         self.window._set_draft(draft)
         self.window.knowledge_tree.selection_set("battery")
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery_level", float, 1.0))):
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window._KnowledgeDialog", _StubDialog(("battery_level", float, 1.0))):
             self.window._on_edit_knowledge_key()
         self.assertNotIn("battery", self.window.draft["knowledge"])
         self.assertEqual(self.window.draft["knowledge"]["battery_level"], {"type": float, "value": 1.0})
-        self.assertEqual(self.window.draft["nodes"]["start"]["primitives"]["nav"]["inputs"]["tolerance"], "battery_level")
+        self.assertEqual(self.window.draft["nodes"]["start"]["capabilities"]["nav"]["inputs"]["tolerance"], "battery_level")
 
 
 
@@ -357,7 +357,7 @@ class TestMissionEditorWindow(unittest.TestCase):
 
     def _draft_binding_tolerance_to(self, key_declarations: dict) -> dict:
         """A draft whose move_to binds tolerance to the key 'tolerance', with the given knowledge declared."""
-        draft = {"knowledge": key_declarations, "edges": {}, "start": "n1", "nodes": {"n1": {"primitives": {"go": {
+        draft = {"knowledge": key_declarations, "edges": {}, "start": "n1", "nodes": {"n1": {"capabilities":{"go": {
             "capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"}, "outputs": {}}}}}}
         return draft
 
@@ -365,7 +365,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         """Validate rejects a move_to bound to an undeclared 'tolerance', which would halt the mission on push."""
         self.window.target_platform_id.set("ugv1")
         self.window._set_draft(self._draft_binding_tolerance_to({"goal": {"type": Location, "value": Location(1.0, 2.0)}}))
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window.messagebox.showerror") as showerror:
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window.messagebox.showerror") as showerror:
             self.window._on_validate()
         showerror.assert_called_once()
         self.assertIn("undeclared knowledge key(s): ['tolerance']", self.window.console_text.get("1.0", tk.END))
@@ -375,7 +375,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         self.window.target_platform_id.set("ugv1")
         self.window._set_draft(self._draft_binding_tolerance_to({
             "goal": {"type": Location, "value": Location(1.0, 2.0)}, "tolerance": {"type": bool, "value": True}}))
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window.messagebox.showerror") as showerror:
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window.messagebox.showerror") as showerror:
             self.window._on_validate()
         showerror.assert_called_once()
         console = self.window.console_text.get("1.0", tk.END)
@@ -387,7 +387,7 @@ class TestMissionEditorWindow(unittest.TestCase):
         self.window.target_platform_id.set("ugv1")
         self.window._set_draft(self._draft_binding_tolerance_to({
             "goal": {"type": Location, "value": Location(1.0, 2.0)}, "tolerance": {"type": float, "value": 1.0}}))
-        with patch("mtofr.world.anywhere.platforms.interface.mission_editor.window.messagebox.showerror") as showerror:
+        with patch("mtofr.environments.anywhere.platforms.interface.mission_editor.window.messagebox.showerror") as showerror:
             self.window._on_validate()
         showerror.assert_not_called()
         self.assertIn("binds on 'ugv1'", self.window.console_text.get("1.0", tk.END))

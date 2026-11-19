@@ -1,23 +1,21 @@
 """Tests for MissionDatabase and PlatformDatabase: the platform_id-keyed siblings to
 KnowledgeDatabase, each locked to a single fixed value type, with timestamp and
-origin_platform_id tracking per entry. Also covers verify_mission_structure(), the
-structural-verify gate a Mission write must pass."""
+origin_platform_id tracking per entry. The structural gate a Mission write must pass is
+covered in test_mission_validation.py."""
 import time
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.capability.capability import Capability, CapabilityRegistry
+from mtofr.core.capability import Capability, CapabilityRegistry
 from mtofr.database import (
     KnowledgeDatabase,
     MissionDatabase,
-    MissionStructuralError,
-    verify_mission_structure,
     PlatformDatabase,
     PlatformRecord,
     PlatformStatus,
 )
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.platform.backseater import Backseater
 
 
 class TestMissionDatabase(unittest.TestCase):
@@ -103,52 +101,6 @@ class TestPlatformDatabase(unittest.TestCase):
         """A PlatformStatus built without a message has an empty one."""
         status = PlatformStatus(status="ok")
         self.assertEqual(status.message, "")
-
-
-class TestVerifyMissionStructure(unittest.TestCase):
-    def test_passes_when_every_referenced_key_is_declared(self):
-        """A graph whose edge conditions only use declared keys passes."""
-        mission_graph = {
-            "knowledge": {"ugv1/arrived": {"type": bool, "value": False}},
-            "nodes": {},
-            "edges": {"n1": [{"condition": ["ugv1/arrived", "==", True], "to": "n2"}]},
-            "start": "n1",
-        }
-        verify_mission_structure(mission_graph)   # does not raise
-
-    def test_raises_on_a_reference_to_an_undeclared_key(self):
-        """An edge condition on an undeclared key raises MissionStructuralError."""
-        mission_graph = {
-            "knowledge": {},
-            "nodes": {},
-            "edges": {"n1": [{"condition": ["ugv1/arrived", "==", True], "to": "n2"}]},
-            "start": "n1",
-        }
-        with self.assertRaises(MissionStructuralError):
-            verify_mission_structure(mission_graph)
-
-    def test_raises_on_a_primitive_binding_to_an_undeclared_key(self):
-        """An input or output bound to an undeclared key is caught at verify time, naming the key,
-        rather than halting the mission later."""
-        def graph(inputs, outputs):
-            """Build a one-node graph whose move_to primitive has the given bindings."""
-            return {"knowledge": {"goal": {"type": float, "value": 0.0}},
-                    "nodes": {"n1": {"primitives": {"nav": {"capability": "move_to", "inputs": inputs, "outputs": outputs}}}},
-                    "edges": {}, "start": "n1"}
-        verify_mission_structure(graph({"target": "goal"}, {}))   # does not raise
-        with self.assertRaisesRegex(MissionStructuralError, "tolerance"):
-            verify_mission_structure(graph({"target": "goal", "tolerance": "tolerance"}, {}))
-        with self.assertRaisesRegex(MissionStructuralError, "arrived"):
-            verify_mission_structure(graph({"target": "goal"}, {"arrived": "arrived"}))
-
-    def test_passes_for_a_graph_with_no_edges(self):
-        """An empty graph with no edges passes."""
-        mission_graph = {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
-        verify_mission_structure(mission_graph)   # does not raise
-
-    def test_mission_structural_error_is_a_value_error(self):
-        """MissionStructuralError subclasses ValueError, so existing ValueError handlers catch it."""
-        self.assertTrue(issubclass(MissionStructuralError, ValueError))
 
 
 class TestTimestampAndOriginTracking(unittest.TestCase):

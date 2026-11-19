@@ -5,8 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from mtofr.capability.capability import CapabilityRegistry
-from mtofr.condition.condition import parse_condition
+from mtofr.core.capability import CapabilityRegistry
 
 
 #========================================#
@@ -89,39 +88,12 @@ class MissionDatabase(PlatformKeyedDatabase):
     calls remain unrestricted (used by Backseater to seed/self-write its own entry);
     a write originating from another platform must instead go through
     Backseater.write_mission(), the single gated write point (privilege check,
-    structural verify, then this database's own type check). Backseater detects a
-    changed entry and reacts to it (mission-change handling) on the next update()."""
+    structural verify in mtofr.mission.validation, then this database's own type check).
+    Backseater detects a changed entry and reacts to it (mission-change handling) on the
+    next update()."""
+    # NOTE: plain dict, not mtofr.mission.MissionGraph: a TypedDict can't be
+    # isinstance-checked, and database never imports mission (mission builds on it).
     value_type = dict
-
-
-class MissionStructuralError(ValueError):
-    """Raised when a mission graph references a Knowledge key, in an edge condition or a
-    primitive's inputs/outputs, that isn't declared in that same graph's own "knowledge" section."""
-
-
-def verify_mission_structure(mission_graph: dict) -> None:
-    """Raises MissionStructuralError if any edge condition or primitive input/output binding in
-    `mission_graph` references a Knowledge key not declared in the graph's own "knowledge" section.
-    Primitive bindings are checked here (not only at Backseater's bind time) so a bad graph is
-    rejected at push instead of being accepted and then halting the running mission."""
-    declared_keys = set(mission_graph.get("knowledge", {}).keys())
-
-    # Collect every key an edge condition or a primitive binding references
-    referenced_keys = set()
-    for edges in mission_graph.get("edges", {}).values():
-        for edge in edges:
-            referenced_keys |= parse_condition(edge["condition"]).keys()
-    for node in mission_graph.get("nodes", {}).values():
-        for primitive in node.get("primitives", {}).values():
-            referenced_keys |= set(primitive.get("inputs", {}).values())
-            referenced_keys |= set(primitive.get("outputs", {}).values())
-
-
-    missing_keys = referenced_keys - declared_keys
-    if missing_keys:
-        raise MissionStructuralError(
-            f"Mission graph references undeclared knowledge key(s): {sorted(missing_keys)}"
-        )
 
 
 

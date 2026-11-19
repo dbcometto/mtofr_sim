@@ -1,15 +1,10 @@
 """The main simulator entry point"""
 import time
-from pathlib import Path
 
-import mtofr.maps as maps_package
+from mtofr.environments.world import World
+from mtofr.platform.platform import Platform
+from mtofr.scenarios import Scenario, SCENARIOS
 from mtofr.viz.dashboard import MissionDashboard
-from mtofr.world.world import World
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
-from mtofr.world.platform import Platform
-from mtofr.maps import GroundMap
-from mtofr.missions import MissionSet, MISSION_SETS
 
 
 #========================================#
@@ -23,7 +18,7 @@ DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
 # simple_village's road speed boost and blocked-terrain hard stop. VILLAGE_DEFAULT: same
 # map, but every platform (including the mission-editor "interface" platform) boots onto
 # its own default_mission_graph() -- author/push a real mission live via its window.
-ACTIVE_MISSION_SET = MissionSet.VILLAGE_DEFAULT
+ACTIVE_SCENARIO = Scenario.VILLAGE_DEFAULT
 MAX_BACKLOG_STEPS = 5   # once the loop falls further behind than this many steps, drop the backlog
 IDLE_SLEEP_SECONDS = 0.001   # yields the CPU when there's no step/redraw to do
 
@@ -45,16 +40,14 @@ IDLE_SLEEP_SECONDS = 0.001   # yields the CPU when there's no step/redraw to do
 if __name__ == "__main__":
     #===============# Set Up #===============#
 
-    mission_set = MISSION_SETS[ACTIVE_MISSION_SET]
+    scenario = SCENARIOS[ACTIVE_SCENARIO]
 
-    platforms = {spec.platform_id: Platform(spec, debug=DEBUG) for spec in mission_set.platforms}
+    platforms = {spec.platform_id: Platform(spec, debug=DEBUG) for spec in scenario.platforms}
 
     try:
-        ground_map = None if mission_set.map_name is None \
-            else GroundMap.load(Path(maps_package.__file__).parent / mission_set.map_name)
-        environment = GroundPlaneEnv(ground_map=ground_map)
+        environment = scenario.build_environment()
         world = World(environment, platforms=platforms, debug=DEBUG)
-        visualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter(ground_map=ground_map))
+        visualizer = None if ENABLE_HEADLESS else MissionDashboard(world, scenario.build_viewer(environment))
 
         # Only now do World and the dashboard's Tk root exist -- some platforms (e.g. the
         # mission editor) need them for setup they couldn't do at construction.

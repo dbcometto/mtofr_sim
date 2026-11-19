@@ -32,7 +32,7 @@ class PlatformOverviewViewer:
     """Renders one row per platform id: a lightweight stand-in for a real
     cross-platform mission graph, which doesn't exist yet. Each row always shows the
     platform's active node inline (not just on hover) next to a small colored box
-    marking where to hover for its active primitives; the box's position (not the
+    marking where to hover for its active capability requests; the box's position (not the
     text) is what hover/click hit-testing tracks, since the box is the visible hover
     target. Hit-testing happens in *display* (pixel) space, mirroring
     MissionGraphViewer's node hover, so the hover/click area stays correctly sized
@@ -110,11 +110,11 @@ class PlatformOverviewViewer:
 
     @staticmethod
     def _describe_platform(platform_id: str, status: dict) -> str:
-        """A row's hover text: overall status plus each active primitive's status."""
-        primitives = status["primitives"]
+        """A row's hover text: overall status plus each active capability request's status."""
+        capability_requests = status["capabilities"]
         lines = [f"Platform: {platform_id}", TOOLTIP_RULE, status["overall_status"]]
-        if not primitives:
-            lines.append("(no active primitives)")
-        for name, info in primitives.items():
+        if not capability_requests:
+            lines.append("(no active capabilities)")
+        for name, info in capability_requests.items():
             lines.append(f"{name} ({info['capability']}): {info['status']}")
         return "\n".join(lines)

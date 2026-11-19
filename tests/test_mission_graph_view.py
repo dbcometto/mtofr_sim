@@ -8,7 +8,7 @@ from mtofr.viz.mission_graph_view import compute_graph_layout, MissionGraphViewe
 
 
 LINEAR_GRAPH = {
-    "nodes": {"n1": {"primitives": {}}, "n2": {"primitives": {}}},
+    "nodes": {"n1": {"capabilities": {}}, "n2": {"capabilities": {}}},
     "edges": {
         "n1": [{"condition": ["ugv1/arrived", "==", True], "to": "n2"}],
         "n2": [{"condition": ["ugv1/arrived", "==", True], "to": "n1"}],
@@ -17,7 +17,7 @@ LINEAR_GRAPH = {
 }
 
 BRANCHING_GRAPH = {
-    "nodes": {"n1": {"primitives": {}}, "n2": {"primitives": {}}, "n3": {"primitives": {}}},
+    "nodes": {"n1": {"capabilities": {}}, "n2": {"capabilities": {}}, "n3": {"capabilities": {}}},
     "edges": {
         "n1": [
             {"condition": ["ugv1/arrived", "==", True], "to": "n2"},
@@ -29,9 +29,9 @@ BRANCHING_GRAPH = {
 
 CYCLE_GRAPH = {
     "nodes": {
-        "n1": {"primitives": {"nav": {"capability": "move_to", "inputs": {}}}},
-        "n2": {"primitives": {}},
-        "n3": {"primitives": {}},
+        "n1": {"capabilities": {"nav": {"capability": "move_to", "inputs": {}}}},
+        "n2": {"capabilities": {}},
+        "n3": {"capabilities": {}},
     },
     "edges": {
         "n1": [{"condition": ["ugv1/arrived", "==", True], "to": "n2"}],
@@ -62,7 +62,7 @@ class TestComputeGraphLayout(unittest.TestCase):
     def test_node_unreachable_from_start_still_gets_placed(self):
         """A node with no path from the start node still receives a position."""
         graph = {
-            "nodes": {"n1": {"primitives": {}}, "orphan": {"primitives": {}}},
+            "nodes": {"n1": {"capabilities": {}}, "orphan": {"capabilities": {}}},
             "edges": {},
             "start": "n1",
         }
@@ -71,7 +71,7 @@ class TestComputeGraphLayout(unittest.TestCase):
 
     def test_single_node_graph_places_it_at_the_origin(self):
         """A single-node graph places that node at (0, 0)."""
-        graph = {"nodes": {"only": {"primitives": {}}}, "edges": {}, "start": "only"}
+        graph = {"nodes": {"only": {"capabilities": {}}}, "edges": {}, "start": "only"}
         self.assertEqual(compute_graph_layout(graph), {"only": (0.0, 0.0)})
 
     def test_empty_graph_returns_empty_layout(self):
@@ -88,7 +88,7 @@ class TestComputeGraphLayout(unittest.TestCase):
         # every render(), even though a mission graph is static once built -- results
         # must be cached by the graph object's identity.
         graph = {
-            "nodes": {"n1": {"primitives": {}}, "n2": {"primitives": {}}},
+            "nodes": {"n1": {"capabilities": {}}, "n2": {"capabilities": {}}},
             "edges": {"n1": [{"condition": [], "to": "n2"}]},
             "start": "n1",
         }
@@ -104,7 +104,7 @@ class TestComputeGraphLayout(unittest.TestCase):
         from mtofr.viz.mission_graph_view import _layout_cache
 
         graph = {
-            "nodes": {"n1": {"primitives": {}}, "n2": {"primitives": {}}},
+            "nodes": {"n1": {"capabilities": {}}, "n2": {"capabilities": {}}},
             "edges": {},
             "start": "n1",
         }
@@ -216,15 +216,15 @@ class TestMissionGraphViewerRender(unittest.TestCase):
         self.assertIsNotNone(self.viewer.find_node_label_at(display_x, display_y))
 
     def test_node_hover_label_includes_live_status_for_active_node(self):
-        """The active node's hover label includes its primitives' live status."""
+        """The active node's hover label includes its capability requests' live status."""
         self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1",
-                            primitive_statuses={"nav": {"capability": "move_to", "status": "in_progress", "inputs": {}}})
+                            request_statuses={"nav": {"capability": "move_to", "status": "in_progress", "inputs": {}}})
         label = next(node["label"] for node in self.viewer._nodes if node["label"].startswith("Node: n1"))
         self.assertIn("in_progress", label)
 
     def test_node_hover_label_for_inactive_node_shows_capability_only(self):
         """Without live statuses, a node's hover label shows capabilities but no status."""
-        self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1", primitive_statuses=None)
+        self.viewer.render(self.ax, CYCLE_GRAPH, active_node_id="n1", request_statuses=None)
         label = next(node["label"] for node in self.viewer._nodes if node["label"].startswith("Node: n1"))
         self.assertIn("move_to", label)
         self.assertNotIn("in_progress", label)

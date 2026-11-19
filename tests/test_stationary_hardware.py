@@ -1,20 +1,28 @@
 """Tests for StationaryHardware (and ConsoleHardware, the interface platform's subclass of it):
 never moves regardless of controls, and needs nothing from its environment -- which is
-what lets it live in any environment."""
+what lets it live in any environment, placed in that environment's own State type."""
 import unittest
+from dataclasses import dataclass
 
-from mtofr.world.base import WorldState
-from mtofr.world.anywhere.hardware import StationaryHardware
-from mtofr.world.anywhere.platforms.interface.hardware import ConsoleHardware
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.maps.ground_map import TraversabilityType
+from mtofr.core.state import State
+from mtofr.environments.anywhere.hardware import StationaryHardware
+from mtofr.environments.anywhere.platforms.interface.hardware import ConsoleHardware
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.maps.ground_map import TraversabilityType
+from mtofr.environments.ground_plane.state import GroundPlaneState
 from tests.test_ground_plane_env import uniform_ground_map
+
+
+@dataclass
+class _DepthState(State):
+    """A State from some other, made-up environment."""
+    depth: float = 0.0   # m
 
 
 class TestStationaryHardware(unittest.TestCase):
     def setUp(self):
-        """Build a StationaryHardware at a non-origin pose."""
-        self.hardware = StationaryHardware(initial_state=WorldState(x=1.0, y=-2.0, theta=0.3))
+        """Build a StationaryHardware at a non-origin ground-plane pose."""
+        self.hardware = StationaryHardware(initial_state=GroundPlaneState(x=1.0, y=-2.0, theta=0.3))
 
     def test_lives_in_any_environment(self):
         """StationaryHardware declares no required environment type."""
@@ -42,15 +50,23 @@ class TestStationaryHardware(unittest.TestCase):
 
     def test_unaffected_by_terrain_even_on_a_blocked_cell(self):
         """On a blocking map cell it stays put and time still advances."""
-        hardware = StationaryHardware(initial_state=WorldState(x=0.0, y=0.0))
+        hardware = StationaryHardware(initial_state=GroundPlaneState(x=0.0, y=0.0))
         wall = TraversabilityType(name="wall", blocking=True, speed_multiplier=1.0)
         hardware.step_dynamics(0.5, GroundPlaneEnv(uniform_ground_map(wall)))
         self.assertEqual((hardware.state.x, hardware.state.y, hardware.state.t), (0.0, 0.0, 0.5))
 
-    def test_default_initial_state_is_the_origin(self):
-        """With no initial state given, it sits at the origin."""
+    def test_default_initial_state_is_a_bare_state(self):
+        """With no initial state given, it holds a bare State (time only) at t = 0."""
         state = StationaryHardware().read_state()
-        self.assertEqual((state.x, state.y), (0.0, 0.0))
+        self.assertIs(type(state), State)
+        self.assertEqual(state.t, 0.0)
+
+    def test_keeps_any_state_type_and_only_advances_time(self):
+        """Any State subclass keeps its type and every non-time field across a step."""
+        hardware = StationaryHardware(initial_state=_DepthState(depth=12.0))
+        hardware.step_dynamics(0.25)
+        self.assertIsInstance(hardware.state, _DepthState)
+        self.assertEqual((hardware.state.depth, hardware.state.t), (12.0, 0.25))
 
 
 class TestConsoleHardware(unittest.TestCase):

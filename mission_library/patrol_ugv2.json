@@ -32,7 +32,7 @@
   },
   "nodes": {
     "patrol_0": {
-      "primitives": {
+      "capabilities": {
         "nav": {
           "capability": "move_to",
           "inputs": {
@@ -46,7 +46,7 @@
       }
     },
     "patrol_1": {
-      "primitives": {
+      "capabilities": {
         "move_to": {
           "capability": "move_to",
           "inputs": {
@@ -60,7 +60,7 @@
       }
     },
     "patrol_2": {
-      "primitives": {
+      "capabilities": {
         "move_to": {
           "capability": "move_to",
           "inputs": {

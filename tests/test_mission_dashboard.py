@@ -13,11 +13,11 @@ except tk.TclError:
     TK_AVAILABLE = False
 
 from mtofr.database import Location
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
-from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
-from mtofr.world.platform import Platform
-from mtofr.world.world import World
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.environments.ground_plane.viz.plane_plotter import PlanePlotter
+from mtofr.environments.world import World
+from mtofr.platform.platform import Platform
 
 if TK_AVAILABLE:
     from mtofr.viz.dashboard import MissionDashboard, GRAPH_PLOT_BACKGROUND, MISSION_OVERVIEW_ID
@@ -33,7 +33,7 @@ class TestMissionDashboard(unittest.TestCase):
                 "goal": {"type": Location, "value": Location(2.0, 0.0)},
                 "tolerance": {"type": float, "value": 0.5},
             },
-            "nodes": {"n1": {"primitives": {
+            "nodes": {"n1": {"capabilities": {
                 "nav": {"capability": "move_to", "inputs": {"target": "goal", "tolerance": "tolerance"}},
             }}},
             "edges": {},
@@ -59,8 +59,8 @@ class TestMissionDashboard(unittest.TestCase):
         self.world.step(0.1)
         self.dashboard.update()
 
-    def test_capability_tree_reflects_active_primitive(self):
-        """After a tick, the capability tree lists the active node's primitive."""
+    def test_capability_tree_reflects_active_capability_request(self):
+        """After a tick, the capability tree lists the active node's capability request."""
         self.world.step(0.1)
         self.dashboard.update()
         self.assertIn("nav", self.dashboard.capability_tree.get_children())
@@ -68,7 +68,7 @@ class TestMissionDashboard(unittest.TestCase):
     def test_capability_tree_shows_an_undeclared_binding_instead_of_crashing(self):
         """A binding to an undeclared key is shown as such in the capability tree."""
         backseater = self.world.platforms["ugv1"].backseater
-        status = {"overall_status": "halted", "primitives": {
+        status = {"overall_status": "halted", "capabilities": {
             "nav": {"capability": "move_to", "status": "failed", "inputs": {"tolerance": "missing_key"}}}}
         self.dashboard._refresh_capability_tree(backseater, status)
         self.assertIn("undeclared key 'missing_key'", self.dashboard.capability_tree.item("nav", "values")[2])
@@ -336,14 +336,14 @@ class TestMissionDashboardDefaults(unittest.TestCase):
 @unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
 class TestMissionDashboardOverview(unittest.TestCase):
     """Covers the "Mission Overview" dropdown entry: a platform list (hover shows
-    active primitives) in place of a single platform's mission graph, and an empty
+    active capability requests) in place of a single platform's mission graph, and an empty
     knowledge panel in place of a single platform's own Knowledge (there is no
     canonical cross-platform store to show)."""
     def setUp(self):
         """Build a one-UGV world with a move_to mission and a dashboard on Mission Overview."""
         mission_graph = {
             "knowledge": {"ugv1/arrived": {"type": bool, "value": False}},
-            "nodes": {"n1": {"primitives": {
+            "nodes": {"n1": {"capabilities": {
                 "nav": {"capability": "move_to", "inputs": {}, "outputs": {}},
             }}},
             "edges": {},

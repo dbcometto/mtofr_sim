@@ -9,6 +9,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
+from mtofr.viz.base import EnvironmentViewer
 from mtofr.viz.mission_graph_view import MissionGraphViewer
 from mtofr.viz.platform_overview_view import PlatformOverviewViewer
 
@@ -86,7 +87,7 @@ class MissionDashboard:
     mission graph (active node highlighted, hover for details), and a combined
     capability-status/knowledge panel switchable via a selector. The dropdown's
     extra "Mission Overview" entry swaps the mission graph for a flat platform list
-    (hover shows each platform's active primitives); the knowledge panel has no
+    (hover shows each platform's active capability requests); the knowledge panel has no
     single-platform Knowledge to show in that mode (there is no canonical
     cross-platform store: each platform's Knowledge is peer-to-peer mesh-synced,
     not centralized), so it's left empty. Also owns the sim's pause state. Knows
@@ -94,8 +95,11 @@ class MissionDashboard:
     World/Backseater/Knowledge's public query methods and delegates spatial
     rendering to whatever EnvironmentViewer it's given."""
 
-    def __init__(self, world, environment_viewer, title: str = "MTOFR Mission Dashboard"):
+    def __init__(self, world, environment_viewer: EnvironmentViewer, title: str = "MTOFR Mission Dashboard"):
         """Opens the window over `world`, drawing space through `environment_viewer`."""
+        # NOTE: `world` is a mtofr.environments.world.World, deliberately not imported or
+        # type-hinted: viz sits below environments (which import viz), so importing World
+        # here would run the dependency back up. Only .platforms and .get_states() are used.
         self.world = world
         self.environment_viewer = environment_viewer
         self.mission_graph_viewer = MissionGraphViewer()
@@ -483,11 +487,11 @@ class MissionDashboard:
         self.environment_canvas.draw_idle()
 
     def _refresh_capability_tree(self, backseater, status: dict) -> None:
-        """Fills the Capabilities panel with each active primitive's capability, status, and bound input values."""
+        """Fills the Capabilities panel with each active capability request's capability, status, and bound input values."""
         self.capability_tree.delete(*self.capability_tree.get_children())
         self.overall_status_label.config(text=f"Status: {status['overall_status']}")
         entries = backseater.knowledge_database.all()
-        for name, info in status["primitives"].items():
+        for name, info in status["capabilities"].items():
             # A bad binding halts the mission but must never crash the viewer, so show it instead.
             inputs_text = ", ".join(
                 f"{field_name}={entries[key]!r}" if key in entries else f"{field_name}=<undeclared key '{key}'>"
@@ -503,7 +507,7 @@ class MissionDashboard:
         self.graph_ax.set_facecolor(GRAPH_PLOT_BACKGROUND)
         self.mission_graph_viewer.render(
             self.graph_ax, backseater.mission_graph, status["active_node_id"],
-            primitive_statuses=status["primitives"], overall_status=status["overall_status"],
+            request_statuses=status["capabilities"], overall_status=status["overall_status"],
             show_edge_labels=self.show_edge_labels.get(),
         )
         self._finish_graph_panel()

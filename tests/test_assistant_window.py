@@ -12,14 +12,14 @@ try:
 except tk.TclError:
     TK_AVAILABLE = False
 
-from mtofr.world.world import World
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
-from mtofr.world.platform import Platform
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.environments.world import World
+from mtofr.platform.platform import Platform
 
 if TK_AVAILABLE:
-    from mtofr.world.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
-    from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow
+    from mtofr.environments.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
+    from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow
 
 
 def _fake_agent_turn(messages, think, emit, tools, run_tool, options, should_stop, detect_stall=None):

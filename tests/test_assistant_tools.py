@@ -1,16 +1,16 @@
 """Tests for the assistant's tool wrappers, prompt rendering, and session history -- no Tk, no Ollama."""
 import unittest
 
-from mtofr.capability.capability import Capability, CapabilityRegistry, ParamSpec
+from mtofr.core.capability import Capability, CapabilityRegistry, ParamSpec
 from mtofr.database import Location
-from mtofr.world.anywhere.platforms.interface.mission_editor import graph_draft
-from mtofr.maps.ground_map import RegionType, TraversabilityType
-from mtofr.world.base import WorldState
-from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_prompt import (
+from mtofr.environments.anywhere.platforms.interface.mission_editor import graph_draft
+from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_prompt import (
     SYSTEM_PROMPT, render_state, compose_user_message, describe_world, describe_live,
 )
-from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_session import AssistantSession
-from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox
+from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_session import AssistantSession
+from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox
+from mtofr.environments.ground_plane.maps.ground_map import RegionType, TraversabilityType
+from mtofr.environments.ground_plane.state import GroundPlaneState
 
 
 class _Holder:
@@ -42,27 +42,27 @@ class TestDraftToolbox(unittest.TestCase):
         for name in schema_names:
             self.assertTrue(hasattr(graph_draft, name), name)
 
-    def test_node_primitive_edge_knowledge_flow(self):
-        """A sequence of node, knowledge, primitive, and edge tool calls builds the expected draft."""
+    def test_node_capability_request_edge_knowledge_flow(self):
+        """A sequence of node, knowledge, capability request, and edge tool calls builds the expected draft."""
         toolbox, holder = _toolbox()
         self.assertTrue(toolbox.run("add_node", {"node_id": "b"}).startswith("ok"))
         self.assertTrue(toolbox.run("add_knowledge_key", {"key": "goal", "type": "Location", "value": {"x": 1, "y": 2}}).startswith("ok"))
         self.assertTrue(toolbox.run("add_knowledge_key", {"key": "arrived", "type": "bool", "value": "false"}).startswith("ok"))
-        self.assertTrue(toolbox.run("add_primitive", {"node_id": "a", "primitive_name": "go", "capability": "move_to",
-                                                      "inputs": {"target": "goal"}, "outputs": {"arrived": "arrived"}}).startswith("ok"))
+        self.assertTrue(toolbox.run("add_capability", {"node_id": "a", "request_name": "go", "capability": "move_to",
+                                                       "inputs": {"target": "goal"}, "outputs": {"arrived": "arrived"}}).startswith("ok"))
         self.assertTrue(toolbox.run("add_edge", {"source_id": "a", "target_id": "b", "condition": ["arrived", "==", True]}).startswith("ok"))
         draft = holder.draft
         self.assertEqual(draft["knowledge"]["goal"]["value"].x, 1.0)
         self.assertEqual(draft["knowledge"]["arrived"]["value"], False)
-        self.assertEqual(draft["nodes"]["a"]["primitives"]["go"]["inputs"], {"target": "goal"})
+        self.assertEqual(draft["nodes"]["a"]["capabilities"]["go"]["inputs"], {"target": "goal"})
         self.assertEqual(draft["edges"]["a"][0]["to"], "b")
 
     def test_nested_arguments_accepted_as_json_strings(self):
         """Bindings and conditions sent as JSON strings are decoded before use."""
         toolbox, holder = _toolbox()
-        toolbox.run("add_primitive", {"node_id": "a", "primitive_name": "p", "capability": "stopwatch",
-                                      "inputs": "{}", "outputs": '{"elapsed_time": "t"}'})
-        self.assertEqual(holder.draft["nodes"]["a"]["primitives"]["p"]["outputs"], {"elapsed_time": "t"})
+        toolbox.run("add_capability", {"node_id": "a", "request_name": "p", "capability": "stopwatch",
+                                       "inputs": "{}", "outputs": '{"elapsed_time": "t"}'})
+        self.assertEqual(holder.draft["nodes"]["a"]["capabilities"]["p"]["outputs"], {"elapsed_time": "t"})
         toolbox.run("add_node", {"node_id": "b"})
         result = toolbox.run("add_edge", {"source_id": "a", "target_id": "b", "condition": '["t", ">", 5.0]'})
         self.assertTrue(result.startswith("ok"), result)
@@ -93,8 +93,8 @@ class TestDraftToolbox(unittest.TestCase):
         cases = [
             ("add_node", {"node_id": "a"}),                                            # duplicate
             ("remove_node", {"node_id": "missing"}),
-            ("add_primitive", {"node_id": "missing", "primitive_name": "p", "capability": "c"}),  # helper would KeyError
-            ("remove_primitive", {"node_id": "a", "primitive_name": "nope"}),
+            ("add_capability", {"node_id": "missing", "request_name": "p", "capability": "c"}),  # helper would KeyError
+            ("remove_capability", {"node_id": "a", "request_name": "nope"}),
             ("add_edge", {"source_id": "a", "target_id": "missing", "condition": []}),
             ("add_edge", {"source_id": "a", "target_id": "a", "condition": ["x", "=="]}),   # bad condition syntax
             ("remove_edge", {"source_id": "a", "index": 3}),
@@ -102,7 +102,7 @@ class TestDraftToolbox(unittest.TestCase):
             ("add_knowledge_key", {"key": "k", "type": "float", "value": "abc"}),
             ("add_knowledge_key", {"key": "k", "type": "Location", "value": {"x": 1}}),
             ("edit_knowledge_key", {"key": "missing", "type": "float", "value": 1}),
-            ("add_primitive", {"node_id": "a", "primitive_name": "p", "capability": "c", "inputs": {"f": 3}}),
+            ("add_capability", {"node_id": "a", "request_name": "p", "capability": "c", "inputs": {"f": 3}}),
             ("add_node", {}),                                                          # missing argument
             ("no_such_tool", {}),
         ]
@@ -122,7 +122,7 @@ class TestDraftToolbox(unittest.TestCase):
 
 
 class TestToolboxBindingChecks(unittest.TestCase):
-    """With a target platform's capabilities known, a primitive that platform couldn't bind is refused at the tool call."""
+    """With a target platform's capabilities known, a capability request that platform couldn't bind is refused at the tool call."""
     def setUp(self):
         """Build a toolbox that knows a move_to capability, with "goal" and "arrived" declared."""
         registry = CapabilityRegistry([Capability(
@@ -135,9 +135,9 @@ class TestToolboxBindingChecks(unittest.TestCase):
         self.toolbox.run("add_knowledge_key", {"key": "arrived", "type": "bool", "value": False})
 
     def _add(self, **inputs):
-        """Add a move_to primitive "go" on node "a" with the given input bindings; return the tool result."""
-        return self.toolbox.run("add_primitive", {"node_id": "a", "primitive_name": "go", "capability": "move_to",
-                                                  "inputs": inputs, "outputs": {"arrived": "arrived"}})
+        """Add a move_to capability request "go" on node "a" with the given input bindings; return the tool result."""
+        return self.toolbox.run("add_capability", {"node_id": "a", "request_name": "go", "capability": "move_to",
+                                                   "inputs": inputs, "outputs": {"arrived": "arrived"}})
 
     def test_undeclared_key_is_refused_and_the_draft_is_untouched(self):
         """Binding an undeclared key errors with a "declare it first" hint and applies nothing."""
@@ -158,12 +158,12 @@ class TestToolboxBindingChecks(unittest.TestCase):
 
     def test_unknown_capability_is_refused_with_the_available_ones(self):
         """An unknown capability errors and lists the capabilities that do exist."""
-        result = self.toolbox.run("add_primitive", {"node_id": "a", "primitive_name": "x", "capability": "fly"})
+        result = self.toolbox.run("add_capability", {"node_id": "a", "request_name": "x", "capability": "fly"})
         self.assertIn("move_to", result)
         self.assertTrue(result.startswith("Error"))
 
-    def test_retyping_a_key_that_primitives_use_warns(self):
-        """Changing the type of a key a primitive binds succeeds but returns a WARNING."""
+    def test_retyping_a_key_that_capability_requests_use_warns(self):
+        """Changing the type of a key a capability request binds succeeds but returns a WARNING."""
         self.toolbox.run("add_knowledge_key", {"key": "tolerance", "type": "float", "value": 1.0})
         self._add(target="goal", tolerance="tolerance")
         result = self.toolbox.run("edit_knowledge_key", {"key": "tolerance", "type": "bool", "value": True})
@@ -171,29 +171,29 @@ class TestToolboxBindingChecks(unittest.TestCase):
         self.assertIn("WARNING", result)
 
     def test_unknown_capabilities_means_no_check(self):
-        """Without a capability registry, any primitive is accepted unchecked."""
+        """Without a capability registry, any capability request is accepted unchecked."""
         toolbox, holder = _toolbox()
-        self.assertTrue(toolbox.run("add_primitive", {"node_id": "a", "primitive_name": "p", "capability": "anything",
-                                                      "inputs": {"x": "undeclared"}}).startswith("ok"))
+        self.assertTrue(toolbox.run("add_capability", {"node_id": "a", "request_name": "p", "capability": "anything",
+                                                       "inputs": {"x": "undeclared"}}).startswith("ok"))
 
 
 class TestPromptAndSession(unittest.TestCase):
     def setUp(self):
-        """Build a move_to registry and a one-node draft with a Location key, a primitive, and a self-edge."""
+        """Build a move_to registry and a one-node draft with a Location key, a capability request, and a self-edge."""
         self.registry = CapabilityRegistry([Capability(
             "move_to", "drive to a target",
             inputs=(ParamSpec("target", Location, "where"),), outputs=(ParamSpec("arrived", bool, "done"),))])
         draft = graph_draft.blank_graph("a")
         draft = graph_draft.add_knowledge_key(draft, "goal", Location, Location(1.0, 2.0))
-        draft = graph_draft.add_primitive(draft, "a", "go", "move_to", {"target": "goal"}, {})
+        draft = graph_draft.add_capability(draft, "a", "go", "move_to", {"target": "goal"}, {})
         draft = graph_draft.add_edge(draft, "a", "a", ["goal", "is", "not", None])
         self.draft = draft
 
     def test_render_state_lists_capabilities_nodes_and_numbered_edges(self):
-        """render_state() shows the target, capability fields, keys, start node, primitives, and indexed edges."""
+        """render_state() shows the target, capability fields, keys, start node, capability requests, and indexed edges."""
         text = render_state(self.draft, self.registry, "ugv1")
         for expected in ("ugv1", "move_to", "target (Location: where)", "goal: Location", "start node: a",
-                         "primitive go: move_to", "a edge 0: -> a when"):
+                         "capability go: move_to", "a edge 0: -> a when"):
             self.assertIn(expected, text)
 
     def test_render_state_handles_empty_draft_and_missing_registry(self):
@@ -243,8 +243,8 @@ class TestPromptAndSession(unittest.TestCase):
         """A reply that announces work and stops is a stall; a question or a finished summary is not."""
         toolbox, _ = _toolbox(self.draft)
         session = AssistantSession(toolbox)
-        stalls = ["Declared the keys.\n\nI will now add the waypoint node and its primitive, then configure the edges.",
-                  "Next, I need to update the primitive in phase_one so it targets target_alpha.",
+        stalls = ["Declared the keys.\n\nI will now add the waypoint node and its capability, then configure the edges.",
+                  "Next, I need to update the capability in phase_one so it targets target_alpha.",
                   "Let me add the second move_to now."]
         for content in stalls:
             self.assertIsNotNone(session._detect_stall(content), content)
@@ -287,7 +287,7 @@ class _FakeMap:
 class TestWorldDescription(unittest.TestCase):
     def test_map_corners_regions_terrain_and_position(self):
         """describe_world() gives world-frame bounds, corners, region centers, terrain, and the platform position."""
-        text = describe_world(_FakeMap(), WorldState(x=3.0, y=-4.0))
+        text = describe_world(_FakeMap(), GroundPlaneState(x=3.0, y=-4.0))
         for expected in ("x from -100 to 100", "y from -50 to 50", "top-left (-100, 50)", "bottom-right (100, -50)",
                          "Region 'depot': center (-100, 50)", "Terrain 'water': blocked", "Terrain 'road': speed x1.5",
                          "(3.0, -4.0)", "+y is up"):
@@ -356,7 +356,7 @@ class TestSystemPrompt(unittest.TestCase):
             arguments = eval(f"dict({argument_text[:-1]})", {"true": True, "false": False})
             result = toolbox.run(name, arguments)
             self.assertTrue(result.startswith("ok"), f"{line} -> {result}")
-        self.assertEqual(holder.draft["nodes"]["start"]["primitives"]["go"]["inputs"],
+        self.assertEqual(holder.draft["nodes"]["start"]["capabilities"]["go"]["inputs"],
                          {"target": "goal", "tolerance": "tolerance"})
 
 

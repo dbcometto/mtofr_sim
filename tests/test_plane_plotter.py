@@ -6,10 +6,10 @@ matplotlib.use("Agg")   # headless backend: no window/display needed to draw
 import matplotlib.pyplot as plt
 import numpy as np
 
+from mtofr.environments.ground_plane.maps.ground_map import GroundMap, TraversabilityType, RegionType
+from mtofr.environments.ground_plane.state import GroundPlaneState
+from mtofr.environments.ground_plane.viz.plane_plotter import PlanePlotter
 from mtofr.viz.base import EnvironmentViewer
-from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
-from mtofr.world.base import WorldState
-from mtofr.maps.ground_map import GroundMap, TraversabilityType, RegionType
 
 
 class TestPlanePlotter(unittest.TestCase):
@@ -18,8 +18,8 @@ class TestPlanePlotter(unittest.TestCase):
         self.fig, self.ax = plt.subplots()
         self.plotter = PlanePlotter()
         self.states = {
-            "ugv1": WorldState(x=1.0, y=2.0, theta=0.0),
-            "ugv2": WorldState(x=-3.0, y=4.0, theta=1.5),
+            "ugv1": GroundPlaneState(x=1.0, y=2.0, theta=0.0),
+            "ugv2": GroundPlaneState(x=-3.0, y=4.0, theta=1.5),
         }
 
     def tearDown(self):
@@ -98,7 +98,7 @@ class TestPlanePlotterWithGroundMap(unittest.TestCase):
         self.fig, self.ax = plt.subplots()
         self.ground_map = _tiny_ground_map()
         self.plotter = PlanePlotter(ground_map=self.ground_map)
-        self.states = {"ugv1": WorldState(x=0.0, y=0.0, theta=0.0)}
+        self.states = {"ugv1": GroundPlaneState(x=0.0, y=0.0, theta=0.0)}
 
     def tearDown(self):
         """Close the test figure."""

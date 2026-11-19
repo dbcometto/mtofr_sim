@@ -1,6 +1,16 @@
 # Notes
 
-Paths are as they were when each note was written; notes 33, 36, and 37 record the moves.
+Paths are as they were when each note was written; notes 33, 36, 37, and 40 record the moves.
+
+## 40 - 2026-11-19: Layered packages; primitive → capability request
+- Layers, each importing only from those above it: `core/` (`State`, `Sensor`/`PerfectSensor`, `Hardware`, `Environment`, `Clock`, capabilities; platform-, environment-, and mission-agnostic) → `database/` → `mission/` → `platform/` (`Frontseater`, `Backseater`, `Platform`) → `viz/` → `environments/` (was `world/`; `World` plus one folder per environment) → `scenarios/`.
+- Why `platform/` sits above `mission/`: with the Backseater in `core`, `core` needed `mission` and `mission` needed `core.capability`, a cycle.  The Frontseater moved with it since its contract is mission primitives.  `viz/` sits below `environments/` because every real import points environments → viz; `MissionDashboard` takes `World` duck-typed.
+- `world/base.py` split up.  `WorldState` became `GroundPlaneState(State)` (`environments/ground_plane/state.py`); core `State` holds only `t`.
+- Anywhere platforms are placed in the host environment's terms (the Gazebo static-model pattern): `StationaryHardware` keeps any `State` and advances only `t`, `Environment.state_type` is required (no default), and `World` rejects a mismatched state.  `interface()` takes an `initial_state`.  A shared geodetic frame (the GCS pattern) was the alternative, deferred until a multi-environment `World`.
+- `mission/` collects the mission definition: `graph.py` (TypedDict shape, the one place to read what a mission is), `condition.py`, `validation.py` (structural check from `platform_keyed.py`, binding checks from `capability.py`), `serialization.py` (from the editor).  The Backseater's duplicate `_check_binding_types` is gone: it runs `find_capability_problems()` against `KnowledgeDatabase.types()`.
+- Maps moved to `environments/ground_plane/maps/` (`load_map(name)`); `environments/ground_plane/sensors/` added as the home for ground-plane sensors.
+- `missions.py` → `scenarios/`, one file per scenario.  `ScenarioConfig(build_environment, build_viewer, platforms)` replaced `map_name`, so `main.py` is environment-agnostic.  Renames: `MissionSet` → `Scenario`, `MISSION_SETS` → `SCENARIOS`, `ACTIVE_MISSION_SET` → `ACTIVE_SCENARIO`.
+- Rename (user request): a node entry is a capability request.  Graph key `"primitives"` → `"capabilities"` (saved `mission_library` files too), `Primitive` → `CapabilityRequest`, `set_active_primitives` → `set_active_capabilities`, `find_primitive_problems` → `find_capability_problems`, assistant tools `add/edit/remove_capability` with `request_name`, status dicts' `"primitives"` → `"capabilities"`.  `SYSTEM_PROMPT` updated at the user's request: term swaps only, plus the worked example's `add_capability(..., request_name=...)` call.
 
 ## 39 - 2026-11-19: Code migrated to style.md
 - Whole codebase (`src/`, `main.py`, `scripts/`, `tests/`) brought in line with `style.md`; no behavior change.  `style_migration.md` retired.

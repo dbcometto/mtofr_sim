@@ -2,7 +2,7 @@
 
 The mission-commander LLM runs locally via [Ollama](https://ollama.com), CPU-only, on the model `qwen3.5:4b`. No cloud API is used: the Claude API has no sustained free tier for this use case, and Ollama Cloud is a separate paid product, not what's used here.
 
-The start/stop scripts live under `llm/ollama/`.  The model settings (model name, context size, temperature, reply cap, keep-alive, ...) live in `src/mtofr/world/anywhere/platforms/interface/agent/config.py`, and are passed on each call rather than baked into a model with `ollama create`, so changing them needs no rebuild.
+The start/stop scripts live under `llm/ollama/`.  The model settings (model name, context size, temperature, reply cap, keep-alive, ...) live in `src/mtofr/environments/anywhere/platforms/interface/agent/config.py`, and are passed on each call rather than baked into a model with `ollama create`, so changing them needs no rebuild.
 
 ## Setup
 
@@ -39,7 +39,7 @@ Both scripts echo a success/failure message based on `%errorlevel%`. Note this o
 
 ## Usage
 
-- **In the simulator**: start the service, run `main.py` with a mission set that includes the interface platform (e.g. `VILLAGE_DEFAULT`), and click "Assistant..." in the mission editor.  See `spec.md`'s LLM Assistant section for how it works.
+- **In the simulator**: start the service, run `main.py` with a scenario that includes the interface platform (e.g. `VILLAGE_DEFAULT`), and click "Assistant..." in the mission editor.  See `spec.md`'s LLM Assistant section for how it works.
 - **CLI** (`ollama run qwen3.5:4b`): interactive chat in the terminal, for manual testing. Ollama manages conversation history for you.
 - **API**: the simulator uses the `ollama` Python client (`/api/chat`), which is stateless -- each request carries the full conversation history.
 

@@ -3,12 +3,12 @@ constructed with mission_graph=None, so a platform boots into a safe idle behavi
 before a real mission is delegated to it."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.capability.capability import Capability, CapabilityRegistry
+from mtofr.core.capability import Capability, CapabilityRegistry
 from mtofr.database import KnowledgeDatabase
-from mtofr.world.base import Frontseater
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.platform.backseater import Backseater
+from mtofr.platform.frontseater import Frontseater
 
 
 class _FakeHardware:
@@ -32,20 +32,20 @@ class _BareFrontseater(Frontseater):
         """Return the one-capability ("idle") registry."""
         return self._registry
 
-    def set_active_primitives(self, primitives: dict) -> None:
-        """Ignore primitive changes; nothing runs."""
+    def set_active_capabilities(self, capability_requests: dict) -> None:
+        """Ignore capability request changes; nothing runs."""
 
     def describe_status(self) -> dict:
         """Report a fixed idle status."""
-        return {"overall": "idle", "primitives": {}}
+        return {"overall": "idle", "capabilities": {}}
 
 
 class TestBaseFrontseaterDefaultMissionGraph(unittest.TestCase):
     def test_base_default_mission_graph_is_an_inert_placeholder(self):
-        """The base default graph is a single primitive-free "startup" node with no edges."""
+        """The base default graph is a single "startup" node with no capability requests and no edges."""
         graph = _BareFrontseater().default_mission_graph()
         self.assertEqual(graph["start"], "startup")
-        self.assertEqual(graph["nodes"], {"startup": {"primitives": {}}})
+        self.assertEqual(graph["nodes"], {"startup": {"capabilities": {}}})
         self.assertEqual(graph["edges"], {})
 
 
@@ -60,7 +60,7 @@ class TestBackseaterFallsBackToFrontseaterDefault(unittest.TestCase):
     def test_backseater_with_an_explicit_mission_graph_does_not_use_the_default(self):
         """An explicit mission graph is used instead of the default, starting at its own start node."""
         frontseater = _BareFrontseater()
-        explicit_graph = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {}, "start": "n1"}
+        explicit_graph = {"knowledge": {}, "nodes": {"n1": {"capabilities": {}}}, "edges": {}, "start": "n1"}
         backseater = Backseater(frontseater=frontseater, knowledge_database=KnowledgeDatabase(),
                                  mission_graph=explicit_graph, platform_id="ugv1")
         self.assertEqual(backseater.active_node_id, "n1")
@@ -75,14 +75,14 @@ class TestBicycleFrontseaterDefaultMissionEndToEnd(unittest.TestCase):
         self.backseater = Backseater(frontseater=self.frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
 
     def test_boots_onto_the_startup_node_running_the_stopwatch(self):
-        """The bicycle boots on "startup", and its first update starts the "loiter" primitive."""
+        """The bicycle boots on "startup", and its first update starts the "loiter" capability request."""
         self.assertEqual(self.backseater.active_node_id, "startup")
         self.backseater.update()
-        self.assertIn("loiter", self.frontseater.describe_status()["primitives"])
+        self.assertIn("loiter", self.frontseater.describe_status()["capabilities"])
 
     def test_elapsed_time_advances_as_the_default_mission_runs(self):
         """The default stopwatch publishes elapsed sim time to "startup/elapsed_time"."""
-        # Backseater only hands the primitive set to the Frontseater; actually running
+        # Backseater only hands the capability request set to the Frontseater; actually running
         # it (and publishing elapsed_time) happens in the Frontseater's own update(),
         # driven independently every tick (see World.step()).
         self.backseater.update()

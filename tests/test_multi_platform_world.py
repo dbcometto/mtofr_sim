@@ -4,10 +4,10 @@ supports more than one platform with no shared state or cross-platform coupling.
 import unittest
 
 from mtofr.database import Location
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
-from mtofr.world.platform import Platform
-from mtofr.world.world import World
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.environments.world import World
+from mtofr.platform.platform import Platform
 
 
 def _build_platform(test_case, platform_id, target, tolerance_key, arrived_key) -> Platform:
@@ -22,7 +22,7 @@ def _build_platform(test_case, platform_id, target, tolerance_key, arrived_key) 
             tolerance_key: {"type": float, "value": 0.5},
             arrived_key: {"type": bool, "value": False},
         },
-        "nodes": {"n1": {"primitives": {
+        "nodes": {"n1": {"capabilities": {
             "nav": {"capability": "move_to", "inputs": {"target": target_key, "tolerance": tolerance_key},
                     "outputs": {"arrived": arrived_key}},
         }}},

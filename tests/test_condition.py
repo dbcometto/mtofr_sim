@@ -3,7 +3,7 @@ are a pre-tokenized boolean expression over Knowledge keys, parsed into a small 
 tree and evaluated without eval() or string parsing of literals."""
 import unittest
 
-from mtofr.condition.condition import parse_condition, ConditionSyntaxError, Comparison, IsNone, And, Or, Not
+from mtofr.mission.condition import parse_condition, ConditionSyntaxError, Comparison, IsNone, And, Or, Not
 from mtofr.database import KnowledgeDatabase
 
 

@@ -1,17 +1,17 @@
 """Tests for Backseater._detect_mission_change(): when a Backseater's own Mission
 database entry becomes a different object than the mission graph currently driving
 update(), it re-declares the new graph's knowledge keys, hands the new graph's start
-node's primitives to the Frontseater (which naturally drops whatever was active under
+node's capability requests to the Frontseater (which naturally drops whatever was active under
 the old graph, since it's no longer in the new dict), jumps the active node to the new
 graph's declared start node — all within the same update() tick that detects the
 change. Detection is by object identity (mission_database.get(platform_id) is not
 self.mission_graph), not deep equality."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.capability.capability import Capability, CapabilityRegistry
+from mtofr.core.capability import Capability, CapabilityRegistry
 from mtofr.database import KnowledgeDatabase
-from mtofr.world.base import Frontseater
+from mtofr.platform.backseater import Backseater
+from mtofr.platform.frontseater import Frontseater
 
 
 class _FakeHardware:
@@ -21,15 +21,15 @@ class _FakeHardware:
 
 class _RecordingFrontseater(Frontseater):
     """Fake Frontseater advertising one no-input, no-output capability ("idle"),
-    recording every set_active_primitives() call so tests can assert on
+    recording every set_active_capabilities() call so tests can assert on
     start/stop behavior without a real MPC/hardware stack."""
     def __init__(self):
-        """Start with no active primitives and nothing stopped."""
+        """Start with no active capability requests and nothing stopped."""
         self.hardware = _FakeHardware()
         self._registry = CapabilityRegistry([
             Capability(ipl_type="idle", description="Does nothing."),
         ])
-        self.active_primitive_names = set()   # what the last set_active_primitives() call contained
+        self.active_request_names = set()   # what the last set_active_capabilities() call contained
         self.stopped_names = []                # every name that has ever dropped out of that dict
 
     def compute_controls(self, state) -> dict:
@@ -40,15 +40,15 @@ class _RecordingFrontseater(Frontseater):
         """Return the one-capability ("idle") registry."""
         return self._registry
 
-    def set_active_primitives(self, primitives: dict) -> None:
+    def set_active_capabilities(self, capability_requests: dict) -> None:
         """Record names that dropped out since the last call, then remember the new set."""
-        for name in self.active_primitive_names - primitives.keys():
+        for name in self.active_request_names - capability_requests.keys():
             self.stopped_names.append(name)
-        self.active_primitive_names = set(primitives)
+        self.active_request_names = set(capability_requests)
 
     def describe_status(self) -> dict:
         """Report a fixed idle status."""
-        return {"overall": "idle", "primitives": {}}
+        return {"overall": "idle", "capabilities": {}}
 
 
 def _make_backseater(platform_id="ugv1"):
@@ -56,7 +56,7 @@ def _make_backseater(platform_id="ugv1"):
     frontseater = _RecordingFrontseater()
     old_graph = {
         "knowledge": {"counter": {"type": int, "value": 1}},
-        "nodes": {"old_node": {"primitives": {"idle": {"capability": "idle", "inputs": {}}}}},
+        "nodes": {"old_node": {"capabilities": {"idle": {"capability": "idle", "inputs": {}}}}},
         "edges": {},
         "start": "old_node",
     }
@@ -76,7 +76,7 @@ class TestMissionChangeNoOpsUntilFirstWrite(unittest.TestCase):
     def test_no_change_detected_when_platform_id_is_none(self):
         """A Backseater with no platform_id keeps its constructor's graph across update()."""
         frontseater = _RecordingFrontseater()
-        old_graph = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {}, "start": "n1"}
+        old_graph = {"knowledge": {}, "nodes": {"n1": {"capabilities": {}}}, "edges": {}, "start": "n1"}
         backseater = Backseater(frontseater=frontseater, knowledge_database=KnowledgeDatabase(),
                                  mission_graph=old_graph)
         backseater.update()
@@ -91,7 +91,7 @@ class TestMissionChangeAppliesNewGraph(unittest.TestCase):
 
         new_graph = {
             "knowledge": {"counter": {"type": int, "value": 1}},
-            "nodes": {"new_node": {"primitives": {}}},
+            "nodes": {"new_node": {"capabilities": {}}},
             "edges": {},
             "start": "new_node",
         }
@@ -100,27 +100,27 @@ class TestMissionChangeAppliesNewGraph(unittest.TestCase):
 
         self.assertEqual(backseater.knowledge_database.get("counter"), 1)
 
-    def test_old_primitive_is_dropped_from_the_frontseaters_active_set(self):
-        """A mission change stops the old graph's running primitive."""
+    def test_old_capability_request_is_dropped_from_the_frontseaters_active_set(self):
+        """A mission change stops the old graph's running capability request."""
         backseater, frontseater, old_graph = _make_backseater()
         backseater.update()  # starts "idle" under old_node
-        self.assertIn("idle", frontseater.active_primitive_names)
+        self.assertIn("idle", frontseater.active_request_names)
 
-        new_graph = {"knowledge": {}, "nodes": {"new_node": {"primitives": {}}}, "edges": {}, "start": "new_node"}
+        new_graph = {"knowledge": {}, "nodes": {"new_node": {"capabilities": {}}}, "edges": {}, "start": "new_node"}
         backseater.write_mission(new_graph, writer_platform_id="ugv1")
         backseater.update()
 
         self.assertIn("idle", frontseater.stopped_names)
-        self.assertNotIn("idle", frontseater.active_primitive_names)
+        self.assertNotIn("idle", frontseater.active_request_names)
 
-    def test_active_node_jumps_to_new_graph_start_and_starts_primitives_same_tick(self):
-        """In the tick that detects the change, the new start node becomes active and its primitives start."""
+    def test_active_node_jumps_to_new_graph_start_and_starts_capability_requests_same_tick(self):
+        """In the tick that detects the change, the new start node becomes active and its capability requests start."""
         backseater, frontseater, old_graph = _make_backseater()
         backseater.update()
 
         new_graph = {
             "knowledge": {},
-            "nodes": {"new_node": {"primitives": {"idle": {"capability": "idle", "inputs": {}}}}},
+            "nodes": {"new_node": {"capabilities": {"idle": {"capability": "idle", "inputs": {}}}}},
             "edges": {},
             "start": "new_node",
         }
@@ -128,14 +128,14 @@ class TestMissionChangeAppliesNewGraph(unittest.TestCase):
         backseater.update()
 
         self.assertEqual(backseater.active_node_id, "new_node")
-        self.assertIn("idle", frontseater.active_primitive_names)
+        self.assertIn("idle", frontseater.active_request_names)
 
     def test_mission_change_unblocks_a_previously_blocked_mission(self):
         """A mission blocked by an unknown capability is unblocked when a new graph is written."""
         frontseater = _RecordingFrontseater()
         old_graph = {
             "knowledge": {},
-            "nodes": {"n1": {"primitives": {"bad": {"capability": "does_not_exist", "inputs": {}}}}},
+            "nodes": {"n1": {"capabilities": {"bad": {"capability": "does_not_exist", "inputs": {}}}}},
             "edges": {},
             "start": "n1",
         }
@@ -144,7 +144,7 @@ class TestMissionChangeAppliesNewGraph(unittest.TestCase):
         backseater.update()
         self.assertTrue(backseater._blocked)
 
-        new_graph = {"knowledge": {}, "nodes": {"new_node": {"primitives": {}}}, "edges": {}, "start": "new_node"}
+        new_graph = {"knowledge": {}, "nodes": {"new_node": {"capabilities": {}}}, "edges": {}, "start": "new_node"}
         backseater.write_mission(new_graph, writer_platform_id="ugv1")
         backseater.update()
 

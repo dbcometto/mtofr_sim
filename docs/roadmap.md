@@ -1,5 +1,11 @@
 # Roadmap
 
+## Current Status
+- Done: the peer-to-peer platform stack, image-based maps, default missions, the mission editor (interface platform), and the reorganization into layered packages (build order steps 1-7).  The LLM assistant (step 10) has a first cut.
+- Next: step 8, a web UI capability for the interface platform.  On the LLM side, the post-turn graph check (Next Up for LLM Agent, below).
+
+
+
 ## Build Order
 1. [x] Backseater/Frontseater/Hardware split (note 4)
 2. [x] Capability registry (note 5)
@@ -7,14 +13,21 @@
 4. [x] Image-based maps: cosmetic, traversability, and region layers, physically enforced (note 24); region membership is still display-only
 5. [x] Default startup missions (note 25)
 6. [x] Manual mission-authoring "interface" platform (notes 27-33)
-7. [~] Agentic LLM on the interface platform: first cut done (the mission-editor assistant, notes 34-35); see open items below
-8. [ ] Logistics: hardware limits, refueling (battery/gas), and pick-up/drop-off of cargo containers.  Interview heavily to nail down the details.
-9. [ ] Teleop on the interface platform, for the experimental comparison (inside the existing system if it fits)
-10. [ ] Scenario scripting for experimental mission drops, and metric collection
+7. [x] Reorganization: layered packages, `mission/`, `scenarios/`, environment-specific state; primitive → capability request (note 40)
+8. [ ] Web UI capability so interface is more flexible
+9. [ ] Convoying-related capabilities
+10. [ ] [~] Agentic LLM on the interface platform: first cut done (the mission-editor assistant, notes 34-35); see open items below
+11. [ ] Teleop on the interface platform, for the experimental comparison (inside the existing system if it fits)
 
 
 
-## Next Up
+## Reach Goals
+- Logistics: hardware limits, refueling (battery/gas), and pick-up/drop-off of cargo containers.  Interview heavily to nail down the details.
+- Scenario scripting for experimental mission drops, and metric collection
+
+
+
+## Next Up for LLM Agent
 - Post-turn graph check fed back to the assistant: empty start node, nodes unreachable from the start, edges to missing nodes, unused keys.  One feedback message before the turn ends.  It would have saved the correction turns seen so far, and fills the edge-reachability gap in `verify_mission_structure()`.
 
 
@@ -25,7 +38,8 @@
 3. The prompt example's "rename the starting node" sentence, which the model copies (user's text).
 4. If stalls continue, an explicit `finish(summary)` tool is sturdier than the announce-pattern heuristic, which can misfire.
 5. A larger model needs a GPU (2-3x slower per token on this CPU); no alternative model has been tried.
-6. Stretch goals: a `get_draft` self-refresh tool; an ASCII traversability grid for routing around blocked terrain; unifying `Backseater._check_binding_types` with `find_binding_problems`, which duplicate logic.
+6. Stretch goals: a `get_draft` self-refresh tool; an ASCII traversability grid for routing around blocked terrain.
+7. `describe_world()` (`assistant_prompt.py`) reads `environment.ground_map` and `state.x/.y`, which is ground-plane knowledge inside an `anywhere` platform.  A per-environment `describe()` (e.g. on `Environment`) would remove the leak.
 
 
 
@@ -44,9 +58,9 @@
 - `verify_mission_structure()` doesn't check edge reachability (a terminal node can legitimately have no edges).
 - Last-write-wins is a named simplification, not consensus; mesh sync is O(n²) in platform count.
 - The MPC worker protocol has no timeout or crash recovery.  An analytic MPC gradient (the biggest remaining speed lever) hasn't been tried.
-- `WorldState` is 2D (x, y, theta) in the base layer; a 3D environment (e.g. a UAV) needs its own state type.
+- A platform's `State` is its environment's own type, and `World` is single-environment, so cross-environment geometry (comms range between a UGV and a UAV) has no common frame yet.  A shared placement frame (e.g. geodetic) would be needed for a multi-environment `World`.
 - `compute_graph_layout()` is O(n²) per iteration and untested on large graphs.
-- `avoid` as a mission primitive is conceptually awkward (it has no real "done" state); a separate mechanism may fit better.
+- `avoid` as a mission capability is conceptually awkward (it has no real "done" state); a separate mechanism may fit better.
 - No security beyond the privilege placeholder; no adversarial actor is modeled.
 - A single slow computation (e.g. one MPC solve) freezes the UI for its duration, since Tk is pumped between calls.
 - Test noise: Tk tests print "Exception ignored ... main thread is not in main loop" at teardown (GC of Tk objects).  Harmless.

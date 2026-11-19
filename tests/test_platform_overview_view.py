@@ -8,13 +8,13 @@ from mtofr.viz.platform_overview_view import PlatformOverviewViewer
 
 
 class _FakeBackseater:
-    def __init__(self, active_node_id, primitives=None):
-        """Hold a fixed status snapshot with the given active node and primitives."""
+    def __init__(self, active_node_id, capability_requests=None):
+        """Hold a fixed status snapshot with the given active node and capability requests."""
         self._status = {
             "active_node_id": active_node_id,
             "blocked": False,
             "overall_status": "idle",
-            "primitives": primitives or {},
+            "capabilities": capability_requests or {},
         }
 
     def status(self):
@@ -83,10 +83,10 @@ class TestPlatformOverviewViewer(unittest.TestCase):
         inline_texts = [text.get_text() for text in self.ax.texts]
         self.assertTrue(any("(none)" in text for text in inline_texts))
 
-    def test_hover_label_includes_active_primitives(self):
-        """The hover label lists each active primitive's capability and status."""
+    def test_hover_label_includes_active_capability_requests(self):
+        """The hover label lists each active capability request's capability and status."""
         self.viewer.render(self.ax, {"ugv1": _FakeBackseater(
-            "n1", primitives={"nav": {"capability": "move_to", "status": "in_progress", "inputs": {}}}
+            "n1", capability_requests={"nav": {"capability": "move_to", "status": "in_progress", "inputs": {}}}
         )})
         display_x, display_y = self.viewer._to_display(self.viewer._rows[0]["position"])
         label = self.viewer.find_platform_label_at(display_x, display_y)

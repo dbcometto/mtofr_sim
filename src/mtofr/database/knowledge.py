@@ -59,6 +59,11 @@ class KnowledgeDatabase:
         """Returns the declared type for `key`, or None if it hasn't been declared."""
         return self._types.get(key)
 
+    def types(self) -> dict[str, type]:
+        """key -> declared type for every declared key: what Backseater's bind-time check
+        hands to mtofr.mission.validation.find_capability_problems()."""
+        return dict(self._types)
+
     def timestamp_of(self, key: str) -> float | None:
         """Returns the timestamp (s, local frame) of the value currently stored for
         `key`, or None if it hasn't been declared."""

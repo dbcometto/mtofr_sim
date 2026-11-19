@@ -3,8 +3,8 @@ coordinates against its traversability layer."""
 import unittest
 from pathlib import Path
 
-import mtofr.maps as maps_package
-from mtofr.maps.ground_map import GroundMap, TraversabilityType, _hex_to_rgb, _nearest_lookup
+import mtofr.environments.ground_plane.maps as maps_package
+from mtofr.environments.ground_plane.maps.ground_map import GroundMap, TraversabilityType, _hex_to_rgb, _nearest_lookup
 
 MAPS_DIRECTORY = Path(maps_package.__file__).parent
 

@@ -1,16 +1,17 @@
 """Tests confirming the mission editor's push path -- Backseater.write_mission() --
 behaves correctly for the interface platform's privilege level (0, outranking the
-default 1) set up in missions.py's VILLAGE_DEFAULT mission set: it can push a
+default 1) set up in the VILLAGE_DEFAULT scenario: it can push a
 mission graph onto an ordinary platform, an ordinary platform cannot push onto it
 without sufficient privilege, and a structurally invalid graph is rejected before
 ever reaching the target platform's Mission database. No Tk/window involved --
 this exercises exactly what MissionEditorWindow._on_push() calls."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.capability.capability import Capability, CapabilityRegistry
-from mtofr.database import KnowledgeDatabase, MissionStructuralError
-from mtofr.world.base import Frontseater
+from mtofr.core.capability import Capability, CapabilityRegistry
+from mtofr.database import KnowledgeDatabase
+from mtofr.mission.validation import MissionStructuralError
+from mtofr.platform.backseater import Backseater
+from mtofr.platform.frontseater import Frontseater
 
 
 class _FakeHardware:
@@ -33,15 +34,15 @@ class _FakeFrontseater(Frontseater):
         """Return the one-capability ("idle") registry."""
         return self._registry
 
-    def set_active_primitives(self, primitives: dict) -> None:
-        """Ignore primitive changes; nothing runs."""
+    def set_active_capabilities(self, capability_requests: dict) -> None:
+        """Ignore capability request changes; nothing runs."""
 
     def describe_status(self) -> dict:
         """Report a fixed idle status."""
-        return {"overall": "idle", "primitives": {}}
+        return {"overall": "idle", "capabilities": {}}
 
 
-_EMPTY_GRAPH = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {}, "start": "n1"}
+_EMPTY_GRAPH = {"knowledge": {}, "nodes": {"n1": {"capabilities": {}}}, "edges": {}, "start": "n1"}
 
 
 def _make_backseater(platform_id: str, privilege_level: int) -> Backseater:
@@ -62,13 +63,13 @@ class TestMissionEditorPushPrivilege(unittest.TestCase):
 
     def test_higher_privilege_platform_can_push_a_mission_onto_a_lower_privilege_one(self):
         """The interface's push onto ugv1 stores the graph in ugv1's Mission entry."""
-        graph = {"knowledge": {}, "nodes": {"n2": {"primitives": {}}}, "edges": {}, "start": "n2"}
+        graph = {"knowledge": {}, "nodes": {"n2": {"capabilities": {}}}, "edges": {}, "start": "n2"}
         self.ugv1.write_mission(graph, writer_platform_id="interface")
         self.assertIs(self.ugv1.mission_database.get("ugv1"), graph)
 
     def test_lower_privilege_platform_cannot_push_onto_a_higher_privilege_one(self):
         """ugv1 pushing onto the interface raises PermissionError."""
-        graph = {"knowledge": {}, "nodes": {"n2": {"primitives": {}}}, "edges": {}, "start": "n2"}
+        graph = {"knowledge": {}, "nodes": {"n2": {"capabilities": {}}}, "edges": {}, "start": "n2"}
         with self.assertRaises(PermissionError):
             self.interface.write_mission(graph, writer_platform_id="ugv1")
 
@@ -76,7 +77,7 @@ class TestMissionEditorPushPrivilege(unittest.TestCase):
         """A graph whose condition uses an undeclared key raises MissionStructuralError."""
         bad_graph = {
             "knowledge": {},   # references "arrived" below without declaring it
-            "nodes": {"n2": {"primitives": {}}},
+            "nodes": {"n2": {"capabilities": {}}},
             "edges": {"n2": [{"condition": ["arrived", "==", True], "to": "n2"}]},
             "start": "n2",
         }
@@ -84,18 +85,18 @@ class TestMissionEditorPushPrivilege(unittest.TestCase):
             self.ugv1.write_mission(bad_graph, writer_platform_id="interface")
 
     def test_graph_the_target_cannot_bind_is_rejected_and_not_stored(self):
-        """A primitive naming a capability the target lacks is rejected at write time, leaving the stored graph as is."""
+        """A capability request naming a capability the target lacks is rejected at write time, leaving the stored graph as is."""
         before = self.ugv1.mission_database.all().get("ugv1")
         graph = {"knowledge": {}, "edges": {}, "start": "n2",
-                 "nodes": {"n2": {"primitives": {"go": {"capability": "move_to", "inputs": {}, "outputs": {}}}}}}
+                 "nodes": {"n2": {"capabilities": {"go": {"capability": "move_to", "inputs": {}, "outputs": {}}}}}}
         with self.assertRaisesRegex(MissionStructuralError, "move_to.*does not exist"):
             self.ugv1.write_mission(graph, writer_platform_id="interface")
         self.assertIs(self.ugv1.mission_database.all().get("ugv1"), before)
 
     def test_graph_using_a_capability_the_target_has_is_accepted(self):
-        """A primitive using a capability the target has is accepted and stored."""
+        """A capability request using a capability the target has is accepted and stored."""
         graph = {"knowledge": {}, "edges": {}, "start": "n2",
-                 "nodes": {"n2": {"primitives": {"wait": {"capability": "idle", "inputs": {}, "outputs": {}}}}}}
+                 "nodes": {"n2": {"capabilities": {"wait": {"capability": "idle", "inputs": {}, "outputs": {}}}}}}
         self.ugv1.write_mission(graph, writer_platform_id="interface")
         self.assertIs(self.ugv1.mission_database.get("ugv1"), graph)
 

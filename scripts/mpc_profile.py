@@ -56,11 +56,11 @@ def _report(label: str, sorted_data: list) -> None:
 
 def _logging_worker(request_queue, response_queue, nav_horizon, nav_dt, wheelbase,
                      min_speed, max_speed, min_steer, max_steer) -> None:
-    """Same as mtofr.world.ground_plane.platforms.bicycle_ugv.mpc.run_mpc_worker, but wraps minimize() to
+    """Same as mtofr.environments.ground_plane.platforms.bicycle_ugv.mpc.run_mpc_worker, but wraps minimize() to
     also record each solve's (elapsed time, iterations, rollout evals) -- this replaces
     the worker entry point for the duration of this profiling run only."""
     import numpy as np
-    import mtofr.world.ground_plane.platforms.bicycle_ugv.mpc as mpc_module
+    import mtofr.environments.ground_plane.platforms.bicycle_ugv.mpc as mpc_module
     from scipy.optimize import minimize as real_minimize
 
     solve_log = []   # (elapsed_seconds, iterations, evaluations)
@@ -73,7 +73,7 @@ def _logging_worker(request_queue, response_queue, nav_horizon, nav_dt, wheelbas
         return result
 
     mpc_module.minimize = logging_minimize
-    from mtofr.world.ground_plane.platforms.bicycle_ugv.mpc import solve_mpc, CONTROLS_PER_STEP
+    from mtofr.environments.ground_plane.platforms.bicycle_ugv.mpc import solve_mpc, CONTROLS_PER_STEP
 
     prev_solution = np.zeros(nav_horizon * CONTROLS_PER_STEP)
     avoid_regions = []
@@ -106,15 +106,15 @@ def _logging_worker(request_queue, response_queue, nav_horizon, nav_dt, wheelbas
 
 def main() -> None:
     """Runs the SPLIT mission for STEP_COUNT ticks with the logging worker and prints the report."""
-    import mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater as frontseater_module
+    import mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater as frontseater_module
     frontseater_module.run_mpc_worker = _logging_worker
 
-    from mtofr.world.world import World
-    from mtofr.world.ground_plane.env import GroundPlaneEnv
-    from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-    from mtofr.world.ground_plane.platforms.bicycle_ugv.mpc import MPC_MAX_ITERATIONS
-    from mtofr.world.platform import Platform, PlatformSpec
-    from mtofr.missions import mission_split_ugv1, mission_split_ugv2
+    from mtofr.environments.world import World
+    from mtofr.environments.ground_plane.env import GroundPlaneEnv
+    from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+    from mtofr.environments.ground_plane.platforms.bicycle_ugv.mpc import MPC_MAX_ITERATIONS
+    from mtofr.platform.platform import Platform, PlatformSpec
+    from mtofr.scenarios.split import mission_split_ugv1, mission_split_ugv2
 
     import tempfile
     import os

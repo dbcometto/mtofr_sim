@@ -1,16 +1,17 @@
 """Tests for Platform/PlatformSpec and the per-type spec factories that build them."""
 import unittest
 
-from mtofr.capability.capability import CapabilityRegistry
-from mtofr.clock.clock import Clock
-from mtofr.world.base import Frontseater
-from mtofr.world.platform import Platform, PlatformSpec
-from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
-from mtofr.world.anywhere.platforms.interface.spec import interface
-from mtofr.world.anywhere.platforms.interface.hardware import ConsoleHardware
-from mtofr.world.anywhere.platforms.interface.frontseater import MissionEditorFrontseater
+from mtofr.core.capability import CapabilityRegistry
+from mtofr.core.clock import Clock
+from mtofr.environments.anywhere.platforms.interface.spec import interface
+from mtofr.environments.anywhere.platforms.interface.hardware import ConsoleHardware
+from mtofr.environments.anywhere.platforms.interface.frontseater import MissionEditorFrontseater
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.environments.ground_plane.state import GroundPlaneState
+from mtofr.platform.frontseater import Frontseater
+from mtofr.platform.platform import Platform, PlatformSpec
 
 
 def _build_platform(test_case: unittest.TestCase, spec: PlatformSpec) -> Platform:
@@ -36,13 +37,13 @@ class _RecordingFrontseater(Frontseater):
         """Advertise no capabilities."""
         return CapabilityRegistry([])
 
-    def set_active_primitives(self, primitives):
-        """Ignore primitive changes."""
+    def set_active_capabilities(self, capability_requests):
+        """Ignore capability request changes."""
         pass
 
     def describe_status(self):
-        """Always report idle with no primitives."""
-        return {"overall": "idle", "primitives": {}}
+        """Always report idle with no capability requests."""
+        return {"overall": "idle", "capabilities": {}}
 
     def attach(self, world, window_root=None):
         """Record the world and window root this frontseater was attached with."""
@@ -77,7 +78,7 @@ class TestPlatform(unittest.TestCase):
 
     def test_given_mission_graph_is_used(self):
         """A spec's mission graph is loaded and its start node made active."""
-        mission_graph = {"knowledge": {}, "nodes": {"only": {"primitives": {}}}, "edges": {}, "start": "only"}
+        mission_graph = {"knowledge": {}, "nodes": {"only": {"capabilities": {}}}, "edges": {}, "start": "only"}
         platform = _build_platform(self, bicycle_ugv("ugv1", 0.0, 0.0, mission_graph=mission_graph))
         self.assertEqual(platform.backseater.active_node_id, "only")
 
@@ -123,16 +124,16 @@ class TestSpecFactories(unittest.TestCase):
         """bicycle_ugv() defaults to privilege level 1."""
         self.assertEqual(bicycle_ugv("ugv1", 0.0, 0.0).privilege_level, 1)
 
-    def test_interface_builds_console_hardware_at_its_position(self):
-        """interface() builds a mission-editor stack on ConsoleHardware placed at the given position."""
-        platform = _build_platform(self, interface("interface", 1.0, 2.0))
+    def test_interface_builds_console_hardware_at_its_initial_state(self):
+        """interface() builds a mission-editor stack on ConsoleHardware placed at the given state."""
+        platform = _build_platform(self, interface("interface", GroundPlaneState(x=1.0, y=2.0)))
         self.assertIsInstance(platform.hardware, ConsoleHardware)
         self.assertIsInstance(platform.frontseater, MissionEditorFrontseater)
         self.assertEqual((platform.hardware.state.x, platform.hardware.state.y), (1.0, 2.0))
 
     def test_interface_defaults_to_outranking_an_ordinary_platform(self):
         """interface() defaults to a higher privilege (lower level) than a default bicycle UGV."""
-        self.assertLess(interface("interface", 0.0, 0.0).privilege_level,
+        self.assertLess(interface("interface", GroundPlaneState()).privilege_level,
                         bicycle_ugv("ugv1", 0.0, 0.0).privilege_level)
 
     def test_spec_builds_nothing_until_a_platform_is_constructed(self):

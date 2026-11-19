@@ -7,10 +7,10 @@ sync_with_stale_peers() are called directly against manually constructed
 Backseaters."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.capability.capability import Capability, CapabilityRegistry
+from mtofr.core.capability import Capability, CapabilityRegistry
 from mtofr.database import KnowledgeDatabase, PlatformRecord, PlatformStatus
-from mtofr.world.base import Frontseater
+from mtofr.platform.backseater import Backseater
+from mtofr.platform.frontseater import Frontseater
 
 
 class _FakeHardware:
@@ -36,12 +36,12 @@ class _FakeFrontseater(Frontseater):
         """Return the one-capability ("idle") registry."""
         return self._registry
 
-    def set_active_primitives(self, primitives: dict) -> None:
-        """Ignore primitive changes; nothing runs."""
+    def set_active_capabilities(self, capability_requests: dict) -> None:
+        """Ignore capability request changes; nothing runs."""
 
     def describe_status(self) -> dict:
         """Report a fixed idle status."""
-        return {"overall": "idle", "primitives": {}}
+        return {"overall": "idle", "capabilities": {}}
 
 
 _EMPTY_GRAPH = {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
@@ -110,7 +110,7 @@ class TestMissionSync(unittest.TestCase):
         """A platform's own Mission entry reaches the peer as the same graph object."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
-        graph = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {}, "start": "n1"}
+        graph = {"knowledge": {}, "nodes": {"n1": {"capabilities": {}}}, "edges": {}, "start": "n1"}
         ugv1.write_mission(graph, writer_platform_id="ugv1")
 
         ugv1.sync_with(ugv2)
@@ -125,7 +125,7 @@ class TestMissionSync(unittest.TestCase):
         # already satisfied at ugv2's own originating publish() call.
         ugv1 = _make_backseater("ugv1", privilege_level=0)
         ugv2 = _make_backseater("ugv2", privilege_level=5)
-        graph = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {}, "start": "n1"}
+        graph = {"knowledge": {}, "nodes": {"n1": {"capabilities": {}}}, "edges": {}, "start": "n1"}
         ugv2.write_mission(graph, writer_platform_id="ugv2")
 
         ugv1.sync_with(ugv2)

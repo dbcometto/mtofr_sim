@@ -4,8 +4,8 @@ import unittest
 
 import numpy as np
 
-from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.maps.ground_map import GroundMap, TraversabilityType
+from mtofr.environments.ground_plane.env import GroundPlaneEnv
+from mtofr.environments.ground_plane.maps.ground_map import GroundMap, TraversabilityType
 
 
 def uniform_ground_map(traversability_type: TraversabilityType) -> GroundMap:

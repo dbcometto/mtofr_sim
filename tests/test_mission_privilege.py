@@ -5,10 +5,11 @@ and the structural-verify gate; type-check rejection is mainly covered by
 MissionDatabase's own tests in test_database.py."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.database import KnowledgeDatabase, MissionStructuralError, PlatformRecord
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.database import KnowledgeDatabase, PlatformRecord
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.mission.validation import MissionStructuralError
+from mtofr.platform.backseater import Backseater
 
 
 def _make_backseater(test_case: unittest.TestCase, platform_id: str, privilege_level: int) -> Backseater:

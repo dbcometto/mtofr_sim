@@ -189,12 +189,12 @@ class MissionGraphViewer:
 
     #===============# Rendering #===============#
 
-    def render(self, ax, mission_graph: dict, active_node_id, primitive_statuses: dict = None,
+    def render(self, ax, mission_graph: dict, active_node_id, request_statuses: dict = None,
                overall_status: str = None, show_edge_labels: bool = False) -> None:
         """Draws every node (active node highlighted) and edge (optionally labeled).
-        `primitive_statuses` (from Backseater.status()["primitives"]) supplies live
-        status for the active node's primitives in the hover text; other nodes
-        show only their statically-defined primitive types. `overall_status` (from
+        `request_statuses` (from Backseater.status()["capabilities"]) supplies live
+        status for the active node's capability requests in the hover text; other nodes
+        show only their statically-defined capability types. `overall_status` (from
         Backseater.status()["overall_status"]) is shown only on the active node's hover."""
         self._ax = ax
         positions = compute_graph_layout(mission_graph)
@@ -217,7 +217,7 @@ class MissionGraphViewer:
                                        edge.get("condition", []), show_edge_labels, curvature)
 
         for node_id, position in positions.items():
-            self._render_node(ax, mission_graph, node_id, position, active_node_id, primitive_statuses, overall_status)
+            self._render_node(ax, mission_graph, node_id, position, active_node_id, request_statuses, overall_status)
 
         self._set_padded_limits(ax, positions.values())
         ax.set_xticks([])
@@ -286,7 +286,7 @@ class MissionGraphViewer:
         ax.annotate("", xy=end, xytext=start, annotation_clip=False,
                     arrowprops=dict(arrowstyle="->", color=EDGE_COLOR, clip_on=False))
 
-    def _render_node(self, ax, mission_graph, node_id, position, active_node_id, primitive_statuses, overall_status) -> None:
+    def _render_node(self, ax, mission_graph, node_id, position, active_node_id, request_statuses, overall_status) -> None:
         """Draws one node (highlighted if active) and records its hover label."""
         x, y = position
         color = ACTIVE_NODE_COLOR if node_id == active_node_id else NODE_COLOR
@@ -295,7 +295,7 @@ class MissionGraphViewer:
                 fontsize=NODE_FONT_SIZE, clip_on=False)
         self._nodes.append({
             "position": (x, y),
-            "label": self._describe_node(mission_graph, node_id, active_node_id, primitive_statuses, overall_status),
+            "label": self._describe_node(mission_graph, node_id, active_node_id, request_statuses, overall_status),
         })
 
 
@@ -341,20 +341,20 @@ class MissionGraphViewer:
     #===============# Text #===============#
 
     @staticmethod
-    def _describe_node(mission_graph: dict, node_id: str, active_node_id, primitive_statuses: dict, overall_status: str) -> str:
-        """A node's hover text: its primitives, with live status if it's the active node."""
-        primitives = mission_graph.get("nodes", {}).get(node_id, {}).get("primitives", {})
+    def _describe_node(mission_graph: dict, node_id: str, active_node_id, request_statuses: dict, overall_status: str) -> str:
+        """A node's hover text: its capability requests, with live status if it's the active node."""
+        capability_requests = mission_graph.get("nodes", {}).get(node_id, {}).get("capabilities", {})
         lines = [f"Node: {node_id}", TOOLTIP_RULE]
         if node_id == active_node_id and overall_status:
             lines.append(overall_status)
-        if not primitives:
-            lines.append("(no primitives)")
-        for name, primitive in primitives.items():
-            if node_id == active_node_id and primitive_statuses and name in primitive_statuses:
-                info = primitive_statuses[name]
+        if not capability_requests:
+            lines.append("(no capabilities)")
+        for name, capability_request in capability_requests.items():
+            if node_id == active_node_id and request_statuses and name in request_statuses:
+                info = request_statuses[name]
                 lines.append(f"{name} ({info['capability']}): {info['status']}")
             else:
-                lines.append(f"{name} ({primitive['capability']})")
+                lines.append(f"{name} ({capability_request['capability']})")
         return "\n".join(lines)
 
     @staticmethod

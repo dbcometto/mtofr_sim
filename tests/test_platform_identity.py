@@ -2,10 +2,10 @@
 down through Frontseater to Hardware, so any layer can identify its own platform."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
 from mtofr.database import KnowledgeDatabase
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
-from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
+from mtofr.platform.backseater import Backseater
 
 
 class TestPlatformIdentityCascade(unittest.TestCase):

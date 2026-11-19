@@ -5,8 +5,7 @@ per-peer clock handshake, the checksum short-circuit that skips a full reconcile
 when nothing changed since the last sync with a given peer, and the staleness
 gate that decides when a sync is due. No World involved — sync_with()/
 sync_with_stale_peers() are called directly against manually constructed
-Backseaters, per CLAUDE.md's "Tested with two Backseaters directly, no World
-involved."."""
+Backseaters (mesh redesign increment 5, docs/notes.md note 21)."""
 import unittest
 
 from mtofr.backseater.backseater import Backseater

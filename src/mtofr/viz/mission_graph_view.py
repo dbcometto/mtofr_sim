@@ -27,7 +27,7 @@ def compute_graph_layout(mission_graph: dict, iterations: int = LAYOUT_ITERATION
     the same graph always lays out the same way.
 
     Result is cached by the mission_graph object's identity: a mission graph is
-    static once built into a Backseater (see notes.md/CLAUDE.md), so re-running
+    static once built into a Backseater (see docs/notes.md, note 14), so re-running
     150 iterations of an O(n^2) force simulation on every render() call — several
     times a second — would recompute an answer that never changes. A future
     Foreman that mutates a graph in place would need to invalidate this cache."""

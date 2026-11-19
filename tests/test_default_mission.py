@@ -1,6 +1,6 @@
 """Tests for step 5: a platform's default mission graph — what a Backseater falls back
 to when constructed with mission_graph=None, so a platform boots into a safe idle
-behavior before a real mission is delegated to it (see CLAUDE.md's remaining build
+behavior before a real mission is delegated to it (see docs/roadmap.md's build
 order, step 5)."""
 import unittest
 

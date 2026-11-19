@@ -1,45 +1,237 @@
 # Notes
 
-## 6 - 2026-11-13: Driveability analyzer
-- `driveable.py` → `driveability_analyzer.py`; `DriveableMap` → `DriveabilityMap` (3D heading stack); config section `driveable` → `driveability`.  Vehicle limits (pitch, roll, step, roughness, margin) moved under `vehicle`; `max_slope_deg` split into `max_pitch_deg` and `max_roll_deg`.
-- Decisions: 16 heading bins (8 computed, mirrored by the 180° symmetry); oriented rectangle footprint; any bad cell under it blocks; unknown cells and the map edge block; clearance = max rise above a footprint plane fit (so slopes pass, bumps fail).
-- Plane fit generalized to any kernel (`fit_plane_over_kernel` in `terrain_analyzer.py`), shared by the terrain window and the footprint.
-- Costmap stays heading-independent (any heading) for now.
-- Plot: any/all/heading layers; heading slider (left/right keys) with a compass arrow; grid toggle (`g`); layer labels prefixed by stage; controls column widened so labels fit; bool layers use a fixed 0-1 color scale.
-- Limits: slope uses the terrain window's grade, not the footprint's; `vehicle.height` is not checked (2.5D map has no overhangs).  The new pitch/roll/margin values are guesses to tune; step 0.1 m and clearance 0.1 m look large for an F1Tenth.
-- Checked on both maps and synthetic rock/ramp data; no test files, per project default.
+Paths are as they were when each note was written; notes 33, 36, and 37 record the moves.
 
-## 5 - 2026-11-13: Terrain analyzer and GridMap
-- `terrain.py` renamed `terrain_analyzer.py`.  Added generic `GridMap` (grid + named layers + units); `HeightMap`/`TerrainMap` are now `GridMap`s, so pipeline export and plot layers are generic.  `DriveableMap`/`CostMap` unchanged until implemented.
-- One weighted plane fit per cell gives gx, gy, grade, roughness, and curvature (single window, `terrain.window_size_m`, rounded to odd cells); steps are raw 8-neighbor differences, signed into up/down.
-- `slope` (rad) replaced by `grade` (m/m).  `driveable.max_slope_deg` will need `tan()` when that stage is implemented.
-- Known limits: the fit window blurs grade across sharp edges; `step_height` on a ramp reads about grade x cell size.
-- Checked on synthetic ramp/bowl/step/hole data (exact to ~1e-9); no test files, per project default.
+## 38 - 2026-11-19: Docs and workflow migration
+- Adopted the docs layout from another project: a short `CLAUDE.md` importing `docs/proc.md` (process), `docs/style.md` (code style), `docs/spec.md` (architecture), and `docs/roadmap.md` (build order, open items, known issues); this file holds the history.
+- The old root `notes.md` (dated "Status" entries) was condensed into notes 1-37 and deleted; the old `CLAUDE.md` architecture moved to `spec.md`, its build order to `roadmap.md`, its process and style rules to `proc.md`/`style.md`.
+- Decisions: tests written whenever worthwhile (the other project's "no tests" default dropped); `style.md`'s four-tier separators and other rules adopted, with the code migrated later per `docs/style_migration.md`; no `to_hardware.md` until a hardware version exists.
+- `style.md` gained this repo's rules (layer-tagged debug prints, type hints on public signatures, the test-teardown rule); rule 6 relaxed to allow common short forms (`env`, `dist`) but not cryptic ones.
+- `ollama` added to `pyproject.toml`'s dependencies.  Moving `pyproject.toml` + `src/` into `mtofr/` (so the README's `pip install -e ./mtofr` works) is deferred, listed in `roadmap.md`.
+- `docs/llm_setup.md` brought current (`llm_config.yaml` is gone; the client exists).
 
-## 4 - 2026-11-13: Planning sim scaffold
-- Added `planning_sim/`, same layout as `convoying_sim` (`main.py`, `config.yaml`, `plot.py`, `core/`).  Stages are pure functions chained by `core/pipeline.py`.
-- Only the height map loader and plotter are real; terrain, driveable, costmap, planner, and speed profile are stubs with placeholder outputs.
-- Decisions: gray maps linearly to height (dark = low, so obstacles in `obstacle1_map.png` are pits); footprint inflation lives in `driveable`, so the costmap only adds soft costs; `Path` carries theta for a future kinematic planner; `HeightMap` has a validity mask for RTAB-Map unknowns.
-- Plotter (`LayerView`): radio buttons or up/down keys switch the layer; checkbox or `t` toggles the trajectory.
-- Docs split into Convoying Sim / Planning Sim sections.
+## 37 - 2026-11-19: Platform types live under their environment
+- Reverses note 36's "compatible with, not owned by": a bicycle UGV can only live in the ground plane, and the code already implied it (`max_speed_multiplier` sat on the base `Hardware` though only `GroundPlaneEnv` passed it; nothing stopped a platform being placed in an environment it can't live in).
+- Rule: a platform type lives in `world/<environment_name>/platforms/<type>/`, next to that environment's `env.py` and Hardware base (`world/<environment_name>/hardware.py`); one needing no environment lives in `world/anywhere/platforms/<type>/` on `StationaryHardware`.  `Platform`/`PlatformSpec` moved up to `world/platform.py`; `world/platforms/` is gone.
+- Base `Hardware` has one abstract method, `step_dynamics(dt, environment)`; every subclass declares `environment_type` (an Environment class, or `None` = any), deliberately with no base default so forgetting it is an error.
+- Dynamics belong to the vehicle: `Environment` is passive (`GroundPlaneEnv` answers `speed_multiplier_at`/`is_blocked`, steps nothing); `GroundPlaneHardware` holds the old wheeled-vehicle terrain response, using ground-truth state.  A UAV or tracked vehicle would respond differently.
+- `ConsoleHardware` is a docstring-only `StationaryHardware` subclass; the interface platform keeps a map position (a placeable ground station, since comms range will matter) rather than a separate position-less environment, which would have needed a multi-environment World.
+- `World.__init__` raises `TypeError` for a platform its environment can't host; `World.step()` runs `step_dynamics` per platform, isolated, even when its brain faulted that tick (a real vehicle keeps coasting).  `main.py` shuts platforms down if setup fails after they're built, so no MPC workers are orphaned.
+- Open: `WorldState` is still 2D in the base layer; a 3D environment would need its own state type.
 
-## 3 - 2026-11-13: Speed-up and legend placement
-- Profiling showed ~97% of the time in the MPC solve, from scipy's finite-difference gradients (~21 cost calls per gradient).  Added an analytic gradient (`MPC.cost_and_gradient`, checked against finite differences to ~1e-7): full 60 s run 26 s -> ~7 s.
-- Error statistics are statistically unchanged but not bit-identical, since the optimizer path shifts slightly.
-- A numpy-vectorized rollout alone was slower (N=10 is too small), so it was not kept.
-- Live view: `tight_layout` once instead of per frame, and the frame is rendered before pacing so it holds real time (~103 ms per 100 ms step).
-- Legend moved outside the world view, to the right (`plot.legend_*`, `plot.live_right_margin` in `config.yaml`).  This also removed the slow `loc='best'` search.
+## 36 - 2026-11-19: Platform object; World owns platforms
+- A "platform" used to exist only by convention, spread over `missions.py` builder closures, three parallel id-keyed dicts in `MissionSetConfig`, `main.py`'s stack-building loop, an `isinstance(MissionEditorFrontseater)` special case, and a `World` that held only backseaters.
+- `PlatformSpec` (id, `build_frontseater`, `mission_graph`, `privilege_level`, `clock`, `sync_interval`) and `Platform` (builds the stack + `KnowledgeDatabase`, exposes each layer, owns `attach()`/`shutdown()`).  Each platform type exports a spec factory (`bicycle_ugv(...)`, `interface(...)`, the latter privilege 0).  `MissionSetConfig` is `map_name` + `platforms: list[PlatformSpec]`.
+- New no-op `Frontseater.attach(world, window_root=None)`; the editor overrides it to install its window factory, so `main.py` no longer special-cases a platform type.
+- `World(environment, platforms)` replaced `World(environment, backseaters)`, no compatibility shim.
+- Decisions: Platform is assembly/lifecycle only, not a runtime layer (layers still call each other directly, like separate processes on a robot; it's the per-robot launch file).  Platforms hold no reference to World, so a Platform still means something on hardware where comms replaces World's mesh sync.  World drives each phase across all platforms (no `Platform.step()`), since the `begin_update()`/`finish_update()` split exists so MPC solves overlap.
+- Bicycle UGV files moved to `world/platforms/bicycle_ugv/`, interface files to `world/platforms/interface/` (plain filesystem moves, so git sees delete + untracked).
 
-## 2 - 2026-11-13: Config yaml, sim/main split, core package
-- All tunables moved to `convoying_sim/config.yaml` (loaded by `core/config.py`); classes take config sections, no duplicated defaults.
-- `core/sim.py` is now a `Simulation` class; `main.py` runs it, `core/live.py` holds the live view, `plot.py` plots saved results.
-- Code moved under `core/`; only `main.py`, `plot.py`, and `config.yaml` are top level.
-- Fixed bug: follower EKF `x0` was `-following_distance*id`; now `-following_distance` (the true initial offset).  Verified the refactor was bit-identical to the old results before applying the fix.
-- Added `pyyaml` to `requirements.txt`.
+## 35 - 2026-10-01: LLM assistant, state at end of day
+- Built (build order step 7, first cut): `agent/agent.py` (streaming tool-call loop, `should_stop`, thinking kept within a turn, stall nudges up to `MAX_NUDGES`, `MAX_REPLY_TOKENS` cap, per-call timings) and `agent/config.py` (`qwen3.5:4b`, `NUM_CTX` 8192, `MAX_ITERATIONS` 12).  Toy tools and the CLI were deleted.
+- Observed on CPU: ~4-5 tok/s, ~4.3k prompt tokens per call.  A two-leg mission took ~5 min for the first turn, ~11 min with three correction turns.  Reliable: tool-call syntax, `Location` values, bindings, recovery from tool errors.  Unreliable: setting/reusing the start node, announce-then-stop, rambling when confused, copying the prompt example.
+- Open items moved to `roadmap.md` (chiefly a post-turn graph check fed back to the model).
+- Working agreements: edits go through the edit tools so the user sees diffs; no tests asserting system-prompt wording; the user runs the real-model tests; don't touch the user's hand-edited prompt unasked.
 
-## 1 - 2026-11-13: Merged simulators into convoying_sim
-- Merged `notrack_control`, `_scaled`, and `_errorplot` into `convoying_sim/`; based on errorplot (best tuning, headless sim, metrics).
-- `visualization_mode` config (`LIVE` / `END_PLOT`) selects the live view or the end plot; `plot.py` is now shared by both.
-- Kept `dt*Q` covariance scaling from `_scaled`; needs to go to hardware (see `to_hardware.md`).
-- Errorplot added `Q` three times per step (lidar, pozyx, final predict), so `q` is now 0.3 /s (was 0.01 per call) to match its error statistics; not bit-identical to the old saved runs.
-- Restyled all files to `style.md`; old folders removed (old data lives in `convoy_data`).
+## 34 - 2026-10-01: LLM assistant window for the mission editor
+- "Assistant..." opens `AssistantWindow`, a chat whose LLM edits the same draft as the Editor tab through `_set_draft()` (via `apply_draft_edit()`); one user message = one undo step.
+- Tools are 1:1 wrappers of the 14 `graph_draft.py` mutators, deliberately no composite tools (fine-grained, auditable steps are a research point).  Wrappers parse arguments and turn exceptions into readable errors.
+- Context per turn: SITUATION (target platform, a WORLD section with axes/extent/regions/terrain/position, capabilities with field meanings, the full draft) then MISSION (the request); history keeps only plain requests and final replies.
+- Turns run on a worker thread (Ollama blocks); events and tool calls return over one queue drained by `after(50)`, since tools touch widgets.
+- First real runs failed instructively: no coordinate frame, literals passed as primitive inputs, undeclared output keys, ~400 tokens of narration per call.  Fixes: WORLD section, explicit data rules, a worked example (test-enforced to run through the real toolbox), Troop Leading Procedures adapted to an editing assistant.
+- "Show thinking" also set `think=True` (~4x slower); renamed "Enable thinking", and thinking is always displayed.  A fixed `MISSION:`/`PLAN:` header backfired (the model called `MISSION(...)` as a tool), so it was dropped.
+- A multi-turn run stalled on prose ("I will now add...") and ~4k-token self-talk, caused by the live-state block (last pushed graph) looking inconsistent with the draft and by unbounded replies.  Fixes: live state framed as information only, live Knowledge values omitted, `num_predict` cap, `detect_stall` nudges.
+- Bug from a real run: a primitive bound to an undeclared key passed Validate and the push gate, halted at bind time, and crashed the dashboard.  Fixed: `verify_mission_structure()` checks primitive binding keys; `capability.find_binding_problems()` checks each primitive against the target's registry in `write_mission()`, Validate, and the assistant's `add_primitive`/`edit_primitive`; the dashboard shows `<undeclared key ...>` instead of raising.
+- `qwen3.5:4b`'s vision isn't used: pixels are a worse coordinate source than the WORLD text and cost context.  A coarse ASCII traversability grid is the better next step if routing matters.
+- The user hand-edited the system prompt (operations-order considerations, TLP steps); treat it as theirs.  `llm/ollama/llm_config.yaml` superseded by `agent/config.py`.
+
+## 33 - 2026-10-01: Mission editor moved under the interface platform
+- `mission_editor/` moved from `src/mtofr/` to `world/interface/mission_editor/`: it's specific to the interface platform, mirroring how an environment's viewer lives under `world/<environment_name>/viz/`.  Imports and `patch(...)` targets updated.
+
+## 32 - 2026-09-14: Live Control keeps its selection
+- The Live Control tab's 1 s refresh wiped the Treeview selection every tick (`delete()`+`insert()` always clears it), the same bug the Editor tables had in note 28.
+- Same fix: track `selected_live_knowledge_key` via `<<TreeviewSelect>>`, re-apply after each rebuild; Edit Value reads the tracked key, so a refresh between select and click is harmless.
+
+## 31 - 2026-09-14: Live Control tab, undo/redo, double-click edit
+- Undo/redo came free: every mutation goes through `_set_draft()`, which already swaps in a new dict, so `undo_stack`/`redo_stack` (capped at `UNDO_HISTORY_LIMIT` = 50) need no extra bookkeeping.  Ctrl+Z/Y/Shift+Z are bound on the window (not `bind_all`): they fire from any child widget but stay inert while a modal dialog holds the grab.
+- Double-click edits every table, alongside the Edit buttons.
+- New default tab, "Live Control": the target platform's declared Knowledge, edited directly on the running platform via `KnowledgeDatabase.set()` (no draft/push, since Knowledge writes aren't privilege-gated).  Motivation: steer a running mission through its existing edges without writing a new one.  Refreshes every `LIVE_KNOWLEDGE_REFRESH_MS`.
+- `_build_value_fields()`/`_read_value_fields()` extracted to module level and shared by `_KnowledgeDialog` and `_LiveValueDialog`, so a new `KnowledgeEntry` type works in both.
+- "Draft loaded from" label removed by request (the Console already logs it); both `after()` loops are cancelled in `close()` instead of tolerating "invalid command name" noise.
+
+## 30 - 2026-09-14: Editor focus, layout, console, draft source
+- Dialogs pulled the whole app forward: dropped `transient()`, and `_center_over_parent()` sets `-topmost` instead.
+- The Knowledge table never showed its key column (`show="headings"` hid `#0`).  Fixed (Key, Type, Value), and the Editor tab became resizable `PanedWindow`s with a larger default window.
+- Validate/Push feedback was easy to miss, so a read-only Console panel logs every action (error popups kept).
+- A draft loaded from ugv1 was pushed to ugv2 unnoticed.  Fixed with `draft_source_platform_id` and a non-blocking Console warning on mismatch (reuse across platforms can be intentional).  Declined multi-platform push; added a Draft/Live toggle to the Graph tab (Live renders the target's running graph read-only, refreshed every 500 ms).
+
+## 29 - 2026-09-03: Cascaded Knowledge key rename
+- `graph_draft.rename_knowledge_key()` moves the declaration and updates every primitive binding and edge condition that references the old key, instead of leaving them dangling.
+- Condition tokens are told apart positionally: per the grammar, a key is always followed by a comparison operator or `"is"`, which a literal never is, so `["status", "==", "arrived"]`'s literal `"arrived"` is left alone.
+- The dialog's key field is editable; `_on_edit_knowledge_key()` composes rename then `edit_knowledge_key()` rather than growing one helper.
+
+## 28 - 2026-09-03: Mission editor UX fixes
+- Dialogs opened at the screen corner: `_center_over_parent()` on every dialog, with a custom `_TextInputDialog` replacing `simpledialog.askstring`.
+- Knowledge types were Location-hardcoded.  `serialization.constructor_fields()` introspects a `KnowledgeEntry` subclass's `__init__` signature (`Location.__init__` gained type hints for this), so a new type needs one line in `KNOWLEDGE_TYPES_BY_NAME`.
+- Selection was lost on every refresh: `selected_node_id`/`selected_primitive_name` tracked and re-applied; adding a node auto-selects it.
+- `mission_graph_view.py` curves apart edges sharing an unordered endpoint pair (A->B and B->A) with a quadratic bezier.  Hover and label anchor to the bezier midpoint, whose tangent is parallel to the chord, so the arrowhead needed only a midpoint parameter.  The preview moved to its own "Graph" tab (the seed of a future graphical editor).
+- Added Edit (not just Add/Remove) for primitives, edges (including moving endpoints), and knowledge keys, via an `existing` parameter on each dialog.
+
+## 27 - 2026-09-03: Mission editor interface platform (build order step 6)
+- Built as an ordinary platform (generic Backseater + bespoke `MissionEditorFrontseater` + stationary `ConsoleHardware`), not a bolt-on that bypasses the mesh.
+- Editing is not a capability: the one capability, `show_interface`, opens/closes a Tk window; everything the window does lives outside the capability machinery.  Its default graph runs `show_interface` unconditionally.
+- The window is a Toplevel on `MissionDashboard`'s root, sharing its cooperative event pump.  A separate process was deferred.
+- Edit a local draft (from a live platform deep-copied, a JSON file, or blank) with pure `graph_draft.py` helpers that return new dicts (the layout cache is keyed by `id()`), then push explicitly through `write_mission()`; the editor is just another writer.
+- Conditions are typed as raw token literals (`ast.literal_eval` + `parse_condition()`): no tree-to-token serializer exists, and typing was judged enough.  Forms/tables chosen over a drag-and-drop canvas to keep the step small.
+- New `MissionSet.VILLAGE_DEFAULT`: every platform boots its default graph; the interface platform sits at a verified clear cell (0, -30).  Every Frontseater must implement `shutdown()`.
+
+## 26 - 2026-09-03: One-call Frontseater lifecycle
+- Replaced `start_capability()`/`poll_status()`/`cancel()` and per-primitive handles with `Frontseater.set_active_primitives(primitives)`, called only when the active node's dict changes (by identity).  Edges already read only Knowledge, so polling status every tick bought nothing, and the bespoke part of the system should be as small as possible.
+- The Frontseater owns the diff (new -> start, gone -> stop) and how "running" works (tick, thread, ROS nodes).
+- Added back introspection as a required abstract `describe_status() -> {"overall", "primitives"}`, display-only (a by-convention Knowledge key was rejected as too easy to forget).
+- Fault isolation moved to `World.step()`: each platform's three calls are wrapped individually, and a faulting platform is skipped for the rest of the tick.
+- `BicycleFrontseater` rewritten as the reference: plain if/elif over `move_to`/`avoid`/`stopwatch` (a generic handler registry was tried and rejected as ceremony), with a labeled `__init__` for authors to copy.
+
+## 25 - 2026-09-03: Default startup missions (build order step 5)
+- `Frontseater.default_mission_graph()` is concrete: an inert single `"startup"` node, so test Frontseaters need no change.  Platform-specific content belongs with the Frontseater, not the platform-agnostic Backseater.
+- `BicycleFrontseater` overrides it to loiter on `stopwatch` (a UAV might hover instead).  `Backseater` falls back to it when given `mission_graph=None`, replacing an empty stub with no start node.
+
+## 24 - 2026-09-01: Image-based maps (build order step 4)
+- `world/maps/` moved to `maps/` (not ground-plane-specific); `simple_test` renamed `simple_village`.  `GroundMap` loads yaml (pyyaml added) + cosmetic/traversability/regions PNGs; traversability entries became `{name, blocking, speed_multiplier}`.
+- World (0, 0) is the image center, +y up (the bicycle model's convention), so sampling flips rows.  Colors snap to the nearest declared color (PNG anti-aliasing); unmatched in-bounds colors are passable, off-map is blocked.
+- `GroundPlaneEnv(ground_map=None)`: scales max speed by the multiplier at the current position; a step into a blocked cell is rejected and velocity zeroed (approximate "stop at the boundary", fine at raster resolution).  `blank` is bounded to its image; `map_name=None` is the unbounded mode.
+- `PlanePlotter` draws the cosmetic image plus toggleable overlays and legend; gray background off-map; heading drawn as a fixed-size marker (points) instead of a zoom-scaling `ax.arrow()`.  Dashboard: overlay checkboxes, scroll-zoom and drag-pan without the toolbar.
+- `missions.py` restructured into one `MissionSetConfig` per `MissionSet` (map + per-platform builders + graphs), since mission sets may want different hardware.  New `VILLAGE` set: ugv1 hits the building and gives up, ugv2 loops road vs. open ground.
+- New `stopwatch` capability (sim seconds since start, never completes), used for "give up after N s".
+- Deferred: the MPC knows nothing about terrain (it drives straight and gets clamped); see `roadmap.md`.
+
+## 23 - 2026-09-01: Mesh increment 6, World integration (build order step 3 done)
+- `World.step()` calls `sync_with_stale_peers()` for every backseater with every other one as peers (full mesh), last in the tick so a synced fact is seen by next tick's edges.  `World` takes no `relay=`; `relay/relay.py` and its tests deleted, no coexistence.
+- Mission Overview's knowledge panel is left empty: there is no canonical cross-platform store anymore, and the panel's real job is the platform list.
+- New `test_multi_platform_mesh_integration.py` (ugv2 waits on `ugv1/arrived`, and a Mission entry gossips, purely through `World.step()`).  Fixed a test whose two platforms shared a bare `"target"` key, which mesh sync now clobbered.
+- The user recorded the experiment plan (now in `spec.md`): compare human teleoperation to autonomy for scripted pick-up/drop-off logistics missions, in sim and on hardware.
+
+## 22 - 2026-08-28: Deterministic Frontseater shutdown in tests
+- `unittest discover` crashed the interpreter (`_PySemaphore_Wakeup ... ReleaseSemaphore failed`), though every file passed alone.  Cause: `BicycleFrontseater` workers were only stopped by `__del__`, so GC-timed teardown raced other tests.
+- Every test building one now shuts it down (`tearDown()`/`addCleanup()`); per-test helpers take `self` and register the cleanup.  Became a standing style rule.
+
+## 21 - 2026-08-21: Mesh increment 5, `sync_with()` and Clock
+- `Backseater.sync_with(peer)` reconciles all three databases both ways, last-write-wins by locally converted timestamp, via a shared `_reconcile_database()`.  Pulled timestamps are converted with `Clock.to_local()` and stored, never re-stamped "now" (a re-stamped fact would out-race its origin and oscillate).
+- Opens with `_handshake_clock()`: each side records `peer.clock.now() - self.clock.now()` in `Clock`'s per-peer offset table (a real computation, ~0 until latency is simulated).
+- Received Mission/Platform entries bypass the write gates (checks happen once, at the writer).  Self-records echoed back get no special case; last-write-wins suffices.
+- Symmetric and idempotent, so either side may initiate with no lock or tie-break.  `sync_with_stale_peers(peers)` syncs only peers older than `sync_interval` (default 1 s).  A checksum short-circuit (the user's request, from the old Relay) skips unchanged pairs.
+
+## 20 - 2026-08-21: Mesh increment 4, continuous `query()`/`publish()`
+- `frontseater.backseater = self` (mirrors the `platform_id` cascade).  `query(database_name, key)`/`publish(...)` over `"knowledge"`/`"mission"`/`"platform"`; a `"mission"` publish goes through `write_mission()`.  `declare_knowledge_key()` declares new keys (Knowledge only).
+- Eager resolve-then-execute removed outright (`_resolve_inputs`/`_commit_outputs`, `validate_inputs`/`validate_outputs`); primitives receive key names, not values.
+- Added `_check_binding_types()` at bind time (the user's request mid-session), since removing eager resolution removed the only type check before a capability ran.
+- `move_to` re-queries its target each poll (mid-flight retargets work); `avoid` queries once.
+
+## 19 - 2026-08-21: Mesh increment 3, mission-change detection
+- `_detect_mission_change()` at the top of `update()` (before the blocked early return, so a new mission un-blocks): compares `mission_database.get(platform_id)` to the current graph by identity, since not every `KnowledgeEntry` defines `__eq__` and a new mission always arrives as a new object.
+- On change: cancel old primitives, reset knowledge to the new graph's defaults, swap the graph and parsed conditions, clear blocked, and activate the start node the same tick.
+- Detection lives in `update()`, not `write_mission()`, so mesh-synced missions (written directly) trigger it too.  Renamed from "hot-swap" at the user's request.
+
+## 18 - 2026-08-21: Database package split
+- `knowledge/knowledge.py` and `database/database.py` became `database/knowledge.py` (`KnowledgeDatabase`), `database/knowledge_types.py` (`KnowledgeEntry`, `Location`; kept apart so new types don't grow the store file), and `database/platform_keyed.py` (the platform-keyed family).  `database/__init__.py` re-exports all, so callers import `mtofr.database`.
+
+## 17 - 2026-08-19: Mesh increment 2, privilege and gated Mission writes
+- `Backseater(privilege_level=1)` (0 reserved/highest) and `write_mission(mission_graph, writer_platform_id, timestamp=None)`: privilege check (skipped for self-writes), type check, `verify_mission_structure()` (edge keys declared; `MissionStructuralError(ValueError)` so callers can tell it apart).
+- Both privilege levels are read from the target's own `PlatformDatabase`; an unknown writer is rejected with `PermissionError`.  This keeps Backseaters ignorant of each other.
+- Merged the increment-1 Capabilities and Status databases into `PlatformDatabase` (`PlatformRecord(privilege_level, status, capabilities)`): privilege needed a home, and one gossiped record per platform is simpler than three.
+- Renamed `Backseater.knowledge` to `knowledge_database`.  Runtime privilege reassignment deferred.
+- Increment 1 (same week): Mission/Capabilities/Status databases added beside Knowledge, all with `origin_platform_id`.
+
+## 16 - 2026-08-19: Peer-to-peer mesh redesign decided
+- Supersedes notes 11 and 15.  No central Relay: each platform's databases sync pairwise, full mesh (connectivity assumed for now).  World mediates who talks to whom; Backseater owns what a sync does; Backseaters hold no peer references.
+- Running capabilities talk to Backseater continuously (`query()`/`publish()`, declare new keys) instead of resolve-then-execute.
+- Per-platform databases: Knowledge, Mission (gated: privilege, type, structure), Capabilities and Status (self-write, gossiped); `origin_platform_id` on every entry.  Checks happen write-side only, never on receipt.
+- Privilege: integer levels, 0 highest, assigned by the harness; only a strictly higher level may write another's Mission.  A deliberate placeholder, not security.
+- Clock repurposed: per-peer offsets from each sync handshake; no shared clock.  Last-write-wins remains a named simplification (vector clocks/CRDTs judged not worth it: no general merge rule for arbitrary values).
+- Every platform boots a default mission; the operator/LLM interface is just another platform.  Mission authoring deferred (later build order step 6).
+- Build order renumbered: mesh redesign became step 3 (six increments), Foreman/Frontend dropped.
+
+## 15 - 2026-08-17: Four-relay and full-mesh discussions (superseded by note 16)
+- The user dropped Foreman (cross-platform coordination is entirely Knowledge-mediated; cross-graph inspection belongs in the visualizer) for four relays (Knowledge, Status, Capability, Graph) plus a `MissionBuilder` editing surface.  Not built.
+- Same night, a full-mesh alternative was weighed: a central relay conflicts with "comms-denial tolerant as first-class" (cf. ROS1 `roscore` vs. ROS2 DDS).  Ideas that survived into note 16: `origin_platform_id`, default missions for every platform, the interface-as-platform, dropping Foreman.  Ideas dropped: mission graphs and capabilities stored as plain Knowledge entries with no privileged write path.
+- Open holes raised then and later resolved by notes 16-21: hot-swap semantics, adoption-time verification, clock ownership without a relay, O(n²) sync.
+
+## 14 - 2026-08-17: Performance pass
+- The literal cause of "one core maxed": `main.py`'s loop busy-spun; it now sleeps 1 ms when a tick does no work.
+- Mission-graph layout cached by `id(graph)`, with the cache holding a strong reference so a reused id can't return a stale layout.  Redraw decoupled from physics (once per outer loop).
+- MPC hot path: scalar `math` instead of numpy, cost matrices inlined; 4.6x faster single-process.
+- Multiprocessing (at the user's request): `Frontseater.begin_update()`/`finish_update()`; `World.step()` begins all, then finishes all, so solves overlap.  `BicycleFrontseater` has one persistent worker per platform holding the warm start (the user's choice over a pool).  Naive protocol, no timeout or recovery.  Dynamics factored into `dynamics.bicycle_step()`, shared by hardware and MPC.
+- Windows "spawn" re-imports the launch script in each worker, so all of `main.py`'s setup lives under `if __name__ == "__main__":` (any script building a `BicycleFrontseater` needs the same guard).
+- SLSQP `maxiter` capped at 20: worst ticks were hitting the default 100 near obstacles (100-250 ms) while median solves take 11 iterations.  Worst tick fell 250 ms -> 72 ms; ~12% of solves hit the cap.  Normal receding-horizon practice, since the next tick re-solves from a warm start.
+- New `scripts/mpc_profile.py` (tick-time and iteration percentiles).  An analytic gradient is the largest remaining lever, not tried.
+
+## 13 - 2026-08-17: Mission Overview polish
+- Graph panel always titled "Mission Overview"; the edge-label checkbox and a new back button show only for a single platform.
+- `PlatformOverviewViewer` rows always show `platform_id: "active_node"` beside a square marker (the hover/click target); clicking a row selects that platform.
+- Mission Overview and the Knowledge panel are the defaults; knowledge columns reordered Name/Type/Value with fixed widths.
+
+## 12 - 2026-08-17: Relay (later replaced by the mesh)
+- `clock/clock.py` (`Clock`: wall time + offset) on Backseater.  Knowledge gained per-key timestamps and `set_or_declare()` (a deliberately rare bypass for facts no graph declared).
+- `Relay` held a canonical store; `sync()` each tick, after dynamics: pull (last-write-wins, checksum-skipped when unchanged, the user's idea), then push without re-stamping (a re-stamped fact would out-race its origin and oscillate).
+- `status()`'s per-primitive `"handle"` became `"inputs"`; the dashboard resolves live values itself.
+- Mission naming `mission_<set>_<platform_id>`; new WAIT set (ugv2 waits on `ugv1/arrived`).  New Mission Overview dropdown entry and `PlatformOverviewViewer`; tooltips lead with a title line.
+
+## 11 - 2026-08-17: Foreman/Relay/Frontend design (superseded by note 16)
+- Proposed planner layer: Foreman (graph manager, verify, delegate), Relay (canonical Knowledge, conflict resolution), Frontend (user + LLM, same methods for both).  Only Relay was built.
+- Verify: every edge-condition key must be declared; reachability deferred (a terminal node is legitimately edge-less).  Runs on demand and as a gate before issuing, not on every edit.  Last-write-wins and clock sync flagged as placeholders.
+
+## 10 - 2026-08-17: Second platform, platform identity
+- Structural check that two independent platforms run in one World.  `World`, the dashboard, and the plotter were already id-keyed; only `main.py` hardcoded one platform.
+- Identity: `Backseater(platform_id=...)` is the only place it's set; `Frontseater.platform_id` is a property whose setter cascades to `Hardware.platform_id`.
+- Mission dicts moved to `missions.py`.  No collision handling ("pass through each other").
+
+## 9 - 2026-08-13: Local LLM via Ollama
+- The mission-commander LLM runs locally on Ollama, `qwen3.5:4b`, CPU-only; no cloud API (no sustained free Claude API tier; Ollama Cloud is a separate paid product).  Backups considered: Phi-4-mini, Gemma 4 E4B.
+- `llm/ollama/` holds start/stop scripts (`llm/` general, `ollama/` this runner).  `stop_ollama.bat` kills the tray app (`ollama app.exe`) before `ollama.exe`, since the tray app respawns the server.
+- Config passed per `/api/chat` call rather than baked into a model with `ollama create`, so the prompt can change without a rebuild.  Setup lives in `docs/llm_setup.md`.
+
+## 8 - 2026-08-13: Knowledge-based edge conditions
+- Edges transition on Knowledge conditions, not primitive status; a capability decides what to write (`move_to` writes `arrived`, reset to `False` on a new target; `avoid` writes `registered`).
+- `condition/condition.py`: pre-tokenized lists (`["ugv1/arrived", "==", True, "and", ...]`) parsed by recursive descent into a typed tree.  Tokens are real Python values, so there's no literal parsing and no `eval()`.  Chosen over a nested-dict tree (doesn't read like the expression) and a plain string (needs literal parsing).  Fixed an end-of-tokens sentinel that collided with a literal `None`.
+- Every capability field, input or output, is a Knowledge key (no raw literals); one `ParamSpec` serves both.  Knowledge became type-locked (`declare()`/`set()`), with declarations in the graph's top-level `"knowledge"` section.
+- Fixed a stale-output bug: a newly started primitive is polled the same tick, so a reset output lands before edges are evaluated.
+- Renames: `actuate` -> `start_capability`; primitive keys `type`/`params` -> `capability`/`inputs`/`outputs`.  `move_to`'s `tolerance` became a per-mission input.
+
+## 7 - 2026-08-12: Dashboard polish
+- The BFS-column layout put cycles on one row, so closing edges curved and couldn't be hovered.  Replaced by a deterministic force-directed (Fruchterman-Reingold-style) layout, seeded on a circle.
+- Explicit axis limits with fixed padding (autoscale clipped flat graphs); hover hit-tests in display pixels so it stays right across resize, pan, and zoom; tooltips flip inward near edges.
+- Arrowheads drawn at edge midpoints (at the target they hid under the node marker).  The view keeps the user's pan/zoom across redraws.
+- Known limit: the layout is O(n²) per iteration, untested at scale.
+
+## 6 - 2026-08-12: Mission dashboard; Memory renamed Knowledge
+- `EnvironmentViewer` ABC (`viz/base.py`) draws onto a caller-owned Axes; each environment supplies its own (`PlanePlotter` moved to `world/ground_plane/viz/`).
+- `MissionDashboard` (Tkinter): platform dropdown, environment view, mission graph with hover, one capability/knowledge panel switched by a selector, and the sim's pause state.
+- `Backseater.status()`: a read-only snapshot, the same query-path idea as `capabilities()`.
+- `Memory`/`MemoryEntry` renamed `Knowledge`/`KnowledgeEntry`.  Debug prints gated by `debug` constructor flags.
+
+## 5 - 2026-08-12: Capability registry (build order step 2)
+- `capability/capability.py`: `ParamSpec`, `Capability`, `CapabilityRegistry`.  Each Frontseater builds its own registry; a planner learns what a platform can do only by asking its Backseater (`capabilities()`), with no central manifest.
+- Entry types self-describe (`describe()` on the `KnowledgeEntry` ABC), so capabilities and their types are understandable without source.
+- One name per capability: `ipl_type` is what the Frontseater receives (dropped the `move_to` -> `navigate` mapping).
+- First `tests/` directory (stdlib `unittest`; pytest isn't installed and the project stays pure Python).
+
+## 4 - 2026-08-12: Backseater/Frontseater/Hardware split
+- Agent became Backseater (platform-agnostic, issues capability requests, never controls).  Platform split into Frontseater (planning/control brain: MPC, capabilities) and Hardware (MCU-equivalent: owns `WorldState`, dynamics, `send_controls`/`read_state`), like a companion computer talking to firmware.
+- `read_state()` goes through a `PerfectSensor` stub, a seam for a future noisy sensor.
+- Naming rule: avoid abbreviations in identifiers.
+- Original build order: rename/split, capability registry, minimal planner, comms boundary with delay, edge staleness/timeouts, concurrent active nodes, second platform with cross-platform edges, OPORD/world-state layer.  Later reshaped (note 16; current order in `roadmap.md`).
+
+## 3 - 2026-08-10: First layered architecture
+- World (environment + agents, tick loop), Agent (mission graph, memory, task handles; never touches `WorldState`), Platform `BicycleUGV` (state + warm-started scipy MPC; `actuate`/`poll_status`/`cancel`), `GroundPlaneEnv` (infinite plane), per-agent Memory.
+- Missions are graphs: nodes hold concurrent primitives, edges hold conditions (replacing a flat list).
+- Principles: continuous capabilities (`move_to`, `avoid`) are persistent state feeding one MPC cost; discrete ones use ROS-action-like start/poll/cancel.  The LLM will write a DSL compiled and validated into the graph, and the graph is an artifact a human commander can review.
+- Open at the time: `avoid` as a primitive is awkward (no real done state); only one platform type and environment existed to validate the abstractions.
+
+## 2 - 2026-08-08: Design principles
+- Continuous actions (optimal control toward a goal) and discrete actions (do once) are handled by separate mechanisms, never blended.
+- MTOFR never controls hardware directly: it puts the robot at the right place at the right time and signals another process to act, so hardware programs change without changing MTOFR.
+- Actions are started, then checked (`waiting`/`success`/`fail`/`timeout`), and can be cancelled for a higher-priority task.
+
+## 1 - 2026-08-07: Initial sim loop
+- Live loop: `World.step()` -> agents plan -> environment steps dynamics -> mission update -> matplotlib dot + heading arrow.
+- Package `src/mtofr/` (editable install): `world/` (`WorldState`, `Platform`/`Environment` ABCs, `World`, `GroundPlaneEnv`, `BicycleUGV`), `agent/`, `memory/` (`Memory`, `Location`), `viz/plane_plotter.py`; `main.py` runs a fixed-timestep loop.

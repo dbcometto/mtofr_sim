@@ -61,7 +61,7 @@ class MissionEditorFrontseater(Frontseater):
 
     def default_mission_graph(self) -> dict:
         """Always active: a single node with no edges, running show_interface
-        unconditionally -- the "interface platform" pattern from notes.md."""
+        unconditionally -- the "interface platform" pattern from docs/notes.md (note 16)."""
         return {
             "knowledge": {},
             "nodes": {"operating": {"primitives": {

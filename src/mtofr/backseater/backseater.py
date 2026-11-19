@@ -199,7 +199,7 @@ class Backseater:
         which is what lets both platforms in a pair independently decide to initiate a
         sync without any lock or tie-break between them. Bypasses write_mission()'s
         privilege/type/structural gate for the Mission database — and self-write-only for
-        Platform — since CLAUDE.md's architecture specifies all such checks happen
+        Platform — since the architecture (docs/spec.md) specifies all such checks happen
         write-side only, once, at the originating platform's publish() call, with no
         receipt-side re-verification; a Mission or Platform entry that is "about" this
         platform itself is reconciled the same as any other, no self-record special-casing.
@@ -258,7 +258,7 @@ class Backseater:
     def _detect_mission_change(self) -> None:
         """Detects whether this platform's own Mission database entry is a different
         object than the mission graph currently driving update() — the trigger point
-        CLAUDE.md specifies ("when a Backseater detects its own Mission database entry
+        docs/spec.md specifies ("when a Backseater detects its own Mission database entry
         has changed"), rather than handling the mission change synchronously inside
         write_mission(), so a future mesh sync that writes mission_database directly
         (increment 5) triggers the mission change the same way a local write_mission()

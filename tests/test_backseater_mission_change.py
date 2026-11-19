@@ -1,5 +1,5 @@
 """Tests for Backseater._detect_mission_change(): increment 3 of the peer-to-peer mesh
-redesign's build order step 3. Covers the CLAUDE.md-specified behavior: when a
+redesign's build order step 3. Covers the docs/spec.md-specified behavior: when a
 Backseater's own Mission database entry becomes a different object than the mission
 graph currently driving update(), it re-declares the new graph's knowledge keys, hands
 the new graph's start node's primitives to the Frontseater (which naturally drops

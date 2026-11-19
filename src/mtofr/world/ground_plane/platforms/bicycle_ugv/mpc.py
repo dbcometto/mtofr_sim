@@ -63,8 +63,8 @@ def solve_mpc(nav_horizon: int, nav_dt: float, wheelbase: float, min_speed: floa
     # warm start anyway (standard receding-horizon MPC practice), an unconverged solve
     # near a hard obstacle-avoidance case would otherwise burn the full 100 iterations
     # trying to reach an optimum that isn't much better than what a much shorter budget
-    # already finds, at several times the wall-clock cost -- see notes.md for the
-    # measurements behind this number.
+    # already finds, at several times the wall-clock cost -- see docs/notes.md (note 14)
+    # for the measurements behind this number.
     result = minimize(rollout_cost, x0, bounds=bounds, method="SLSQP", options={"maxiter": 20})
     vel, steer = result.x[0], result.x[1]
     return vel, steer, result.x

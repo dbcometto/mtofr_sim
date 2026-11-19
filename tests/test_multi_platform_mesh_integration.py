@@ -65,7 +65,7 @@ class TestMeshMissionIntegration(unittest.TestCase):
 class TestMeshMissionEntryGossipIntegration(unittest.TestCase):
     """A platform's own Mission database entry is gossiped to a peer purely through
     World.step()'s mesh sync -- write_mission() itself is a direct, gated call (there
-    is no networked "install a mission on a remote platform" RPC yet, per CLAUDE.md's
+    is no networked "install a mission on a remote platform" RPC yet, per docs/roadmap.md's
     "real comms boundary" step being deferred); what's networked is a peer's *view*
     of that entry propagating afterward, the same way Knowledge does."""
     def setUp(self):

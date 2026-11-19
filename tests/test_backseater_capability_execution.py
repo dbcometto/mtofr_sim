@@ -8,8 +8,9 @@ from mtofr.backseater.backseater import Backseater
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
 from mtofr.database import KnowledgeDatabase, Location
 from mtofr.world.base import Frontseater
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.env import GroundPlaneEnv
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
 
 def _bicycle_setup():
@@ -47,7 +48,7 @@ class TestBackseaterCapabilityExecution(unittest.TestCase):
         for _ in range(500):
             self.backseater.update()
             self.frontseater.update()
-            self.hardware.step_dynamics(0.1)
+            self.hardware.step_dynamics(0.1, GroundPlaneEnv())
 
         self.assertEqual(self.frontseater.describe_status()["primitives"]["nav"], "arrived")
 
@@ -138,7 +139,7 @@ class TestBackseaterKnowledgeBasedTransition(unittest.TestCase):
         for _ in range(500):
             backseater.update()
             frontseater.update()
-            hardware.step_dynamics(0.1)
+            hardware.step_dynamics(0.1, GroundPlaneEnv())
             if backseater.active_node_id == "n2":
                 break
 

@@ -7,19 +7,9 @@ from mtofr.viz.dashboard import MissionDashboard
 from mtofr.world.world import World
 from mtofr.world.ground_plane.env import GroundPlaneEnv
 from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
-from mtofr.backseater.backseater import Backseater
-from mtofr.database import KnowledgeDatabase
+from mtofr.world.platform import Platform
 from mtofr.maps import GroundMap
 from mtofr.missions import MissionSet, MISSION_SETS
-from mtofr.world.interface.frontseater import MissionEditorFrontseater
-from mtofr.world.interface.mission_editor.window import MissionEditorWindow
-
-
-class _NullWindow:
-    """Stand-in for MissionEditorWindow when running headless (no Tk root exists) --
-    lets show_interface start/stop without crashing, with nothing actually shown."""
-    def close(self) -> None:
-        pass
 
 
 #==========# Config #==========#
@@ -42,35 +32,26 @@ if __name__ == "__main__":
     #==========# Set up #==========#
     mission_set = MISSION_SETS[ACTIVE_MISSION_SET]
 
-    frontseaters = {}   # platform_id -> Frontseater, kept around only for shutdown()
-    backseaters = {}    # platform_id -> Backseater, handed to World
-    for platform_id, build_frontseater in mission_set.platform_builders.items():
-        frontseater = build_frontseater(DEBUG)
-        knowledge = KnowledgeDatabase()
-        backseaters[platform_id] = Backseater(
-            frontseater=frontseater, knowledge_database=knowledge,
-            mission_graph=mission_set.mission_graphs.get(platform_id), platform_id=platform_id,
-            privilege_level=mission_set.privilege_levels.get(platform_id, 1), debug=DEBUG,
-        )
-        frontseaters[platform_id] = frontseater
+    platforms = {spec.platform_id: Platform(spec, debug=DEBUG) for spec in mission_set.platforms}
 
-    ground_map = None if mission_set.map_name is None \
-        else GroundMap.load(Path(maps_package.__file__).parent / mission_set.map_name)
-    environment = GroundPlaneEnv(ground_map=ground_map)
-    world = World(environment, backseaters=backseaters, debug=DEBUG)
-    vizualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter(ground_map=ground_map))
+    try:
+        ground_map = None if mission_set.map_name is None \
+            else GroundMap.load(Path(maps_package.__file__).parent / mission_set.map_name)
+        environment = GroundPlaneEnv(ground_map=ground_map)
+        world = World(environment, platforms=platforms, debug=DEBUG)
+        vizualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter(ground_map=ground_map))
 
-    # Any mission-editor "interface" platform needs a window_factory, supplied only
-    # now since it needs World/the dashboard's Tk root, neither of which existed
-    # when its Frontseater was built above.
-    for platform_id, frontseater in frontseaters.items():
-        if isinstance(frontseater, MissionEditorFrontseater):
-            if vizualizer is not None:
-                frontseater.set_window_factory(
-                    lambda platform_id=platform_id: MissionEditorWindow(vizualizer.root, world, platform_id)
-                )
-            else:
-                frontseater.set_window_factory(_NullWindow)
+        # Only now do World and the dashboard's Tk root exist -- some platforms (e.g. the
+        # mission editor) need them for setup they couldn't do at construction.
+        window_root = None if vizualizer is None else vizualizer.root
+        for platform in platforms.values():
+            platform.attach(world, window_root)
+    except BaseException:
+        # The platforms above already spawned their MPC worker processes; a setup failure
+        # here (e.g. World refusing a platform its environment can't host) would orphan them.
+        for platform in platforms.values():
+            platform.shutdown()
+        raise
 
     #==========# Main #==========#
     accumulator = 0.0
@@ -129,5 +110,5 @@ if __name__ == "__main__":
 
     finally:
         print("Shutting down...")
-        for frontseater in frontseaters.values():
-            frontseater.shutdown()
+        for platform in platforms.values():
+            platform.shutdown()

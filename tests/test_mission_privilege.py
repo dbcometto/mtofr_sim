@@ -8,8 +8,8 @@ import unittest
 
 from mtofr.backseater.backseater import Backseater
 from mtofr.database import KnowledgeDatabase, MissionStructuralError, PlatformRecord
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
 
 def _make_backseater(test_case: unittest.TestCase, platform_id: str, privilege_level: int) -> Backseater:

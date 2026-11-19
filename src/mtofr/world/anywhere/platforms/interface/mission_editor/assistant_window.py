@@ -6,10 +6,10 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from mtofr.world.interface.agent import config
-from mtofr.world.interface.mission_editor.assistant_prompt import describe_live, describe_world
-from mtofr.world.interface.mission_editor.assistant_session import AssistantSession
-from mtofr.world.interface.mission_editor.assistant_tools import DraftToolbox
+from mtofr.world.anywhere.platforms.interface.agent import config
+from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_prompt import describe_live, describe_world
+from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_session import AssistantSession
+from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox
 
 # How often the Tk thread drains events from the worker thread, in milliseconds.
 EVENT_POLL_MS = 50
@@ -72,7 +72,7 @@ class AssistantWindow(tk.Toplevel):
         top = ttk.Frame(self)
         top.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 0))
         ttk.Label(top, text="Target platform:").pack(side=tk.LEFT, padx=(0, 4))
-        self.platform_dropdown = ttk.Combobox(top, values=list(self.editor.world.backseaters), state="readonly", width=14,
+        self.platform_dropdown = ttk.Combobox(top, values=list(self.editor.world.platforms), state="readonly", width=14,
                                               textvariable=self.editor.target_platform_id)
         self.platform_dropdown.pack(side=tk.LEFT)
         self.platform_dropdown.bind("<<ComboboxSelected>>", lambda event: self.editor._on_target_platform_changed())
@@ -127,7 +127,7 @@ class AssistantWindow(tk.Toplevel):
 
     def _target_capabilities(self):
         """The currently selected target platform's CapabilityRegistry, or None. Only called on the Tk thread (tools run there)."""
-        backseater = self.editor.world.backseaters.get(self.editor.target_platform_id.get())
+        backseater = self.editor._backseater_of(self.editor.target_platform_id.get())
         return backseater.capabilities() if backseater is not None else None
 
     def _note_target_change(self) -> None:
@@ -152,7 +152,7 @@ class AssistantWindow(tk.Toplevel):
 
         # Everything the worker needs is captured here, on the Tk thread.
         target_id = self.editor.target_platform_id.get()
-        backseater = self.editor.world.backseaters.get(target_id)
+        backseater = self.editor._backseater_of(target_id)
         registry = backseater.capabilities() if backseater is not None else None
         world_description = "\n".join(filter(None, (
             describe_world(getattr(self.editor.world.environment, "ground_map", None),
@@ -236,7 +236,7 @@ class AssistantWindow(tk.Toplevel):
         """Loads the model in the background so the first request doesn't pay for it."""
         def warm_up_worker():
             try:
-                from mtofr.world.interface.agent.agent import warm_up
+                from mtofr.world.anywhere.platforms.interface.agent.agent import warm_up
                 warm_up(self.session.messages, tools=self.toolbox.schemas, options=self.session.options)
             except Exception as exception:
                 self._events.put(("emit", "warm_up_failed", f"{type(exception).__name__}: {exception}"))

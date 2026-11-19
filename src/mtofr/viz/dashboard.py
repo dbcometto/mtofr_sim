@@ -69,7 +69,7 @@ class MissionDashboard:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._configure_theme()
 
-        entity_ids = list(world.backseaters.keys())
+        entity_ids = list(world.platforms.keys())
         self.selected_id = tk.StringVar(value=MISSION_OVERVIEW_ID)
         self.show_edge_labels = tk.BooleanVar(value=False)
         self.side_panel_choice = tk.StringVar(value="Knowledge")
@@ -365,9 +365,10 @@ class MissionDashboard:
             self._refresh_knowledge_tree(None)   # no canonical cross-platform store to show
             return
 
-        backseater = self.world.backseaters.get(self.selected_id.get())
-        if backseater is None:
+        platform = self.world.platforms.get(self.selected_id.get())
+        if platform is None:
             return
+        backseater = platform.backseater
 
         status = backseater.status()
         self._refresh_capability_tree(backseater, status)
@@ -439,7 +440,9 @@ class MissionDashboard:
     def _refresh_platform_overview(self) -> None:
         self.graph_ax.clear()
         self.graph_ax.set_facecolor(GRAPH_PLOT_BACKGROUND)
-        self.platform_overview_viewer.render(self.graph_ax, self.world.backseaters)
+        self.platform_overview_viewer.render(
+            self.graph_ax, {platform_id: platform.backseater for platform_id, platform in self.world.platforms.items()}
+        )
         self._graph_tooltip = self.graph_ax.annotate(
             "", xy=(0, 0), xytext=(15, 15), textcoords="offset points",
             bbox=dict(boxstyle="round", fc=TOOLTIP_BACKGROUND, ec="gray"), zorder=10, visible=False,

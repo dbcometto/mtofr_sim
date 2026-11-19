@@ -8,8 +8,8 @@ from mtofr.backseater.backseater import Backseater
 from mtofr.capability.capability import Capability, CapabilityRegistry
 from mtofr.database import KnowledgeDatabase
 from mtofr.world.base import Frontseater
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
 
 class _FakeHardware:

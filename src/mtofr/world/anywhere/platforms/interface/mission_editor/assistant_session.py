@@ -1,8 +1,8 @@
 """Defines AssistantSession: the LLM conversation history for the mission editor, with no Tk dependency."""
 import re
 
-from mtofr.world.interface.agent import config
-from mtofr.world.interface.mission_editor.assistant_prompt import SYSTEM_PROMPT, compose_user_message
+from mtofr.world.anywhere.platforms.interface.agent import config
+from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_prompt import SYSTEM_PROMPT, compose_user_message
 
 
 TEXT_CALL_NUDGE = ("Those tool calls were written as text, so nothing happened. "
@@ -35,7 +35,7 @@ class AssistantSession:
         executes it on the Tk thread. `agent_turn` defaults to the real Ollama loop, imported lazily so this
         module (and the editor) work without the `ollama` package installed."""
         if agent_turn is None:
-            from mtofr.world.interface.agent.agent import run_agent_turn as agent_turn
+            from mtofr.world.anywhere.platforms.interface.agent.agent import run_agent_turn as agent_turn
         turn_start = len(self.messages)
         self.messages.append({"role": "user", "content": compose_user_message(
             user_text, draft, capability_registry, target_platform_id, world_description)})

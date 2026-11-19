@@ -12,16 +12,14 @@ try:
 except tk.TclError:
     TK_AVAILABLE = False
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.database import KnowledgeDatabase
 from mtofr.world.world import World
 from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.world.platform import Platform
 
 if TK_AVAILABLE:
-    from mtofr.world.interface.mission_editor.window import MissionEditorWindow
-    from mtofr.world.interface.mission_editor.assistant_window import AssistantWindow
+    from mtofr.world.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
+    from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow
 
 
 def _fake_agent_turn(messages, think, emit, tools, run_tool, options, should_stop, detect_stall=None):
@@ -38,11 +36,10 @@ def _fake_agent_turn(messages, think, emit, tools, run_tool, options, should_sto
 @unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
 class TestAssistantWindow(unittest.TestCase):
     def setUp(self):
-        self.frontseater = BicycleFrontseater(hardware=BicycleHardware())
-        self.addCleanup(self.frontseater.shutdown)
-        backseater = Backseater(frontseater=self.frontseater, knowledge_database=KnowledgeDatabase(),
-                                mission_graph=None, platform_id="ugv1", privilege_level=1)
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
+        platform = Platform(bicycle_ugv("ugv1", 0.0, 0.0))
+        self.frontseater = platform.frontseater
+        self.addCleanup(platform.shutdown)
+        self.world = World(GroundPlaneEnv(), platforms={"ugv1": platform})
         self.root = tk.Tk()
         self.addCleanup(self.root.destroy)
         self.editor = MissionEditorWindow(self.root, self.world, own_platform_id="interface")

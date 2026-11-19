@@ -1,14 +1,11 @@
 """Example mission graphs for main.py's demo platforms."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable
 
 from mtofr.database import Location
-from mtofr.world.base import Frontseater, WorldState
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
-from mtofr.world.interface.hardware import ConsoleHardware
-from mtofr.world.interface.frontseater import MissionEditorFrontseater
+from mtofr.world.platform import PlatformSpec
+from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.world.anywhere.platforms.interface.spec import interface
 
 
 class MissionSet(IntEnum):
@@ -24,37 +21,19 @@ class MissionSet(IntEnum):
 @dataclass
 class MissionSetConfig:
     """Everything main.py needs to wire up one mission set: which GroundMap to use
-    (see mtofr.maps; None for the old unbounded mapless mode), and each platform's
-    Frontseater builder plus mission graph, keyed by platform_id. Hardware/Frontseater
-    construction lives here (not main.py) since different mission sets may want
-    different platform types/hardware configs, not just BicycleHardware. main.py
-    builds one frontseater/backseater stack per key in platform_builders (mission_graphs
-    need not cover every key -- a platform_id missing from mission_graphs boots onto its
-    own Frontseater.default_mission_graph() instead). privilege_levels likewise defaults
-    any platform_id it doesn't mention to 1 -- only the interface platform currently needs
-    to outrank that default, to push mission graphs onto other platforms."""
+    (see mtofr.maps; None for the old unbounded mapless mode), and one PlatformSpec per
+    platform -- built via each platform type's own spec factory (e.g. bicycle_ugv()), so
+    different mission sets can mix platform types freely. A spec with no mission_graph
+    boots onto its own Frontseater.default_mission_graph() instead."""
     map_name: str | None
-    platform_builders: dict            # platform_id -> Callable[[bool], Frontseater] (arg: debug)
-    mission_graphs: dict                # platform_id -> mission graph dict
-    privilege_levels: dict = field(default_factory=dict)   # platform_id -> int, default 1
+    platforms: list[PlatformSpec]
 
-
-def _bicycle_platform(start_x: float, start_y: float) -> Callable[[bool], Frontseater]:
-    """A platform_builders entry for a UGV with bicycle dynamics starting at
-    (start_x, start_y) -- only safe on a map with no blocking terrain at that point."""
-    def build(debug: bool = False) -> Frontseater:
-        hardware = BicycleHardware(initial_state=WorldState(x=start_x, y=start_y))
-        return BicycleFrontseater(hardware=hardware, debug=debug)
-    return build
-
-
-def _interface_platform(start_x: float, start_y: float) -> Callable[[bool], Frontseater]:
-    """A platform_builders entry for the mission-editor "interface" platform,
-    fixed at (start_x, start_y) -- only safe on a map with no blocking terrain there."""
-    def build(debug: bool = False) -> Frontseater:
-        hardware = ConsoleHardware(initial_state=WorldState(x=start_x, y=start_y))
-        return MissionEditorFrontseater(hardware=hardware, debug=debug)
-    return build
+    def __post_init__(self):
+        """Rejects duplicate platform_ids, which would otherwise silently overwrite
+        one another once main.py keys the built platforms by id."""
+        platform_ids = [spec.platform_id for spec in self.platforms]
+        if len(platform_ids) != len(set(platform_ids)):
+            raise ValueError(f"Duplicate platform_id in mission set: {platform_ids}")
 
 
 #==========# split: independent per-platform loops, no cross-platform coordination #==========#
@@ -240,34 +219,38 @@ mission_village_ugv2 = {
 MISSION_SETS = {
     MissionSet.SPLIT: MissionSetConfig(
         map_name="blank",
-        platform_builders={"ugv1": _bicycle_platform(0.0, 0.0), "ugv2": _bicycle_platform(0.0, 0.0)},
-        mission_graphs={"ugv1": mission_split_ugv1, "ugv2": mission_split_ugv2},
+        platforms=[
+            bicycle_ugv("ugv1", 0.0, 0.0, mission_graph=mission_split_ugv1),
+            bicycle_ugv("ugv2", 0.0, 0.0, mission_graph=mission_split_ugv2),
+        ],
     ),
     MissionSet.WAIT: MissionSetConfig(
         map_name="blank",
-        platform_builders={"ugv1": _bicycle_platform(0.0, 0.0), "ugv2": _bicycle_platform(0.0, 0.0)},
-        mission_graphs={"ugv1": mission_wait_ugv1, "ugv2": mission_wait_ugv2},
+        platforms=[
+            bicycle_ugv("ugv1", 0.0, 0.0, mission_graph=mission_wait_ugv1),
+            bicycle_ugv("ugv2", 0.0, 0.0, mission_graph=mission_wait_ugv2),
+        ],
     ),
     MissionSet.VILLAGE: MissionSetConfig(
         map_name="simple_village",
-        platform_builders={"ugv1": _bicycle_platform(-3.0, -20.0), "ugv2": _bicycle_platform(45.0, -25.0)},
-        mission_graphs={"ugv1": mission_village_ugv1, "ugv2": mission_village_ugv2},
+        platforms=[
+            bicycle_ugv("ugv1", -3.0, -20.0, mission_graph=mission_village_ugv1),
+            bicycle_ugv("ugv2", 45.0, -25.0, mission_graph=mission_village_ugv2),
+        ],
     ),
+    # No mission graphs: every platform boots straight onto its own
+    # Frontseater.default_mission_graph() -- ugv1/ugv2 idle-loiter, interface shows
+    # its editor window -- until a mission is authored/pushed live via the editor.
     MissionSet.VILLAGE_DEFAULT: MissionSetConfig(
         map_name="simple_village",
-        platform_builders={
-            "ugv1": _bicycle_platform(-3.0, -20.0),
-            "ugv2": _bicycle_platform(45.0, -25.0),
+        platforms=[
+            bicycle_ugv("ugv1", -3.0, -20.0),
+            bicycle_ugv("ugv2", 45.0, -25.0),
             # (0, -30) is clear, unblocked terrain on simple_village's map -- verified
-            # against GroundMap.is_blocked()/speed_multiplier_at() directly.
-            "interface": _interface_platform(0.0, -30.0),
-        },
-        # No entries: every platform (ugv1/ugv2/interface) boots straight onto its own
-        # Frontseater.default_mission_graph() -- ugv1/ugv2 idle-loiter, interface shows
-        # its editor window -- until a mission is authored/pushed live via the editor.
-        mission_graphs={},
-        # interface must outrank the default privilege level (1) to push a mission
-        # graph onto ugv1/ugv2 via write_mission()'s privilege gate.
-        privilege_levels={"interface": 0},
+            # against GroundMap.is_blocked()/speed_multiplier_at() directly. interface()
+            # defaults to privilege 0, outranking ugv1/ugv2's default 1 so its pushes pass
+            # write_mission()'s privilege gate.
+            interface("interface", 0.0, -30.0),
+        ],
     ),
 }

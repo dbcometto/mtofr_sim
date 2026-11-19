@@ -3,7 +3,8 @@ control clamping to the platform's speed/steer limits."""
 import unittest
 
 from mtofr.world.base import WorldState
-from mtofr.world.ground_plane.hardware import BicycleHardware
+from mtofr.world.ground_plane.env import GroundPlaneEnv
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
 
 
 class TestBicycleHardwareDynamics(unittest.TestCase):
@@ -65,7 +66,7 @@ class TestBicycleHardwareDynamics(unittest.TestCase):
     def test_step_dynamics_uses_pending_controls_sent_via_send_controls(self):
         self.hardware.state = WorldState(x=0.0, y=0.0, theta=0.0)
         self.hardware.send_controls({"vel": 1.0, "steer": 0.0})
-        self.hardware.step_dynamics(dt=1.0)
+        self.hardware.step_dynamics(1.0, GroundPlaneEnv())
         self.assertAlmostEqual(self.hardware.state.x, 1.0)
 
     def test_read_state_returns_current_state_via_sensor(self):

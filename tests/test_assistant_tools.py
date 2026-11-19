@@ -3,14 +3,14 @@ import unittest
 
 from mtofr.capability.capability import Capability, CapabilityRegistry, ParamSpec
 from mtofr.database import Location
-from mtofr.world.interface.mission_editor import graph_draft
+from mtofr.world.anywhere.platforms.interface.mission_editor import graph_draft
 from mtofr.maps.ground_map import RegionType, TraversabilityType
 from mtofr.world.base import WorldState
-from mtofr.world.interface.mission_editor.assistant_prompt import (
+from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_prompt import (
     SYSTEM_PROMPT, render_state, compose_user_message, describe_world, describe_live,
 )
-from mtofr.world.interface.mission_editor.assistant_session import AssistantSession
-from mtofr.world.interface.mission_editor.assistant_tools import DraftToolbox
+from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_session import AssistantSession
+from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox
 
 
 class _Holder:

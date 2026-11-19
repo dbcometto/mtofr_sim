@@ -1,31 +1,31 @@
-"""Defines hardware to be used with the ground_plane environment"""
+"""Defines GroundPlaneHardware, the Hardware base every ground_plane vehicle subclasses"""
+from abc import abstractmethod
+
 from mtofr.world.base import Hardware, WorldState
-from mtofr.world.ground_plane.dynamics import bicycle_step
+from mtofr.world.ground_plane.env import GroundPlaneEnv
 
 
-class BicycleHardware(Hardware):
-    """The MCU/actuator-equivalent layer for a UGV with bicycle dynamics.
+class GroundPlaneHardware(Hardware):
+    """A vehicle that lives in a GroundPlaneEnv. Subclasses implement pure
+    calculate_dynamics(); the default step_dynamics() is a wheeled vehicle's terrain
+    response (slowed by the surface underneath it, stopped dead at a blocked cell),
+    which a vehicle reacting to terrain differently overrides."""
+    environment_type = GroundPlaneEnv
 
-    Controls:
-    - "vel": desired forward speed in m/s
-    - "steer": desired steering angle in rad around +z
-    """
-    def __init__(self, wheelbase=0.33, min_speed=-2.0, max_speed=8.0,
-                 min_steer=-0.4, max_steer=0.4, initial_state: WorldState = None):
-        super().__init__()
-        self.wheelbase = wheelbase
-        self.min_speed = min_speed
-        self.max_speed = max_speed
-        self.min_steer = min_steer
-        self.max_steer = max_steer
-        self.state = initial_state or WorldState()
-        self._pending_controls = {"vel": 0.0, "steer": 0.0}
-
+    @abstractmethod
     def calculate_dynamics(self, state: WorldState, controls: dict, dt: float,
                             max_speed_multiplier: float = 1.0) -> WorldState:
-        x, y, theta, vx, vy, vtheta = bicycle_step(
-            state.x, state.y, state.theta, controls["vel"], controls["steer"],
-            self.wheelbase, self.min_speed, self.max_speed * max_speed_multiplier,
-            self.min_steer, self.max_steer, dt,
-        )
-        return WorldState(t=state.t + dt, x=x, y=y, theta=theta, vx=vx, vy=vy, vtheta=vtheta)
+        """Pure: the state after dt, with this vehicle's own max speed scaled by max_speed_multiplier."""
+
+    def step_dynamics(self, dt: float, environment: GroundPlaneEnv) -> None:
+        """Steps under the terrain's speed multiplier at the current position; if that
+        lands in a blocked cell, keeps the previous pose with velocity zeroed instead --
+        an approximate "stop at the boundary," fine at the map's raster resolution."""
+        # Ground truth, not read_state(): physics shouldn't see the world through the sensor.
+        previous_state = self.state
+        speed_multiplier = environment.speed_multiplier_at(previous_state.x, previous_state.y)
+        new_state = self.calculate_dynamics(previous_state, self._pending_controls, dt, speed_multiplier)
+        if environment.is_blocked(new_state.x, new_state.y):
+            new_state = WorldState(t=new_state.t, x=previous_state.x, y=previous_state.y,
+                                   theta=previous_state.theta)
+        self.state = new_state

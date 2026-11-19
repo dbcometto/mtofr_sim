@@ -12,12 +12,11 @@ try:
 except tk.TclError:
     TK_AVAILABLE = False
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.database import KnowledgeDatabase, Location
+from mtofr.database import Location
 from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
 from mtofr.world.ground_plane.viz.plane_plotter import PlanePlotter
+from mtofr.world.platform import Platform
 from mtofr.world.world import World
 
 if TK_AVAILABLE:
@@ -28,9 +27,6 @@ if TK_AVAILABLE:
 @unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
 class TestMissionDashboard(unittest.TestCase):
     def setUp(self):
-        hardware = BicycleHardware()
-        self.frontseater = BicycleFrontseater(hardware=hardware)
-        knowledge = KnowledgeDatabase()
         mission_graph = {
             "knowledge": {
                 "goal": {"type": Location, "value": Location(2.0, 0.0)},
@@ -42,8 +38,9 @@ class TestMissionDashboard(unittest.TestCase):
             "edges": {},
             "start": "n1",
         }
-        backseater = Backseater(frontseater=self.frontseater, knowledge_database=knowledge, mission_graph=mission_graph)
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
+        platform = Platform(bicycle_ugv("ugv1", 0.0, 0.0, mission_graph=mission_graph))
+        self.frontseater = platform.frontseater
+        self.world = World(GroundPlaneEnv(), platforms={"ugv1": platform})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
         # These tests exercise the single-platform mission-graph/capability view,
         # so select a specific platform rather than relying on the default
@@ -65,7 +62,7 @@ class TestMissionDashboard(unittest.TestCase):
         self.assertIn("nav", self.dashboard.capability_tree.get_children())
 
     def test_capability_tree_shows_an_undeclared_binding_instead_of_crashing(self):
-        backseater = self.world.backseaters["ugv1"]
+        backseater = self.world.platforms["ugv1"].backseater
         status = {"overall_status": "halted", "primitives": {
             "nav": {"capability": "move_to", "status": "failed", "inputs": {"tolerance": "missing_key"}}}}
         self.dashboard._refresh_capability_tree(backseater, status)
@@ -179,10 +176,9 @@ class TestMissionDashboardEnvironmentPanZoom(unittest.TestCase):
     """Scroll-to-zoom and left-drag-to-pan on the environment plot, working
     directly without needing the matplotlib toolbar's own pan/zoom tools toggled on."""
     def setUp(self):
-        hardware = BicycleHardware()
-        self.frontseater = BicycleFrontseater(hardware=hardware)
-        backseater = Backseater(frontseater=self.frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
+        platform = Platform(bicycle_ugv("ugv1", 0.0, 0.0))
+        self.frontseater = platform.frontseater
+        self.world = World(GroundPlaneEnv(), platforms={"ugv1": platform})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
         self.dashboard.update()   # establishes the environment_ax's initial view limits
         self.ax = self.dashboard.environment_ax
@@ -261,10 +257,9 @@ class TestMissionDashboardDefaults(unittest.TestCase):
     """A dashboard's defaults on first construction, before anything selects
     a specific platform or side panel."""
     def setUp(self):
-        hardware = BicycleHardware()
-        self.frontseater = BicycleFrontseater(hardware=hardware)
-        backseater = Backseater(frontseater=self.frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
+        platform = Platform(bicycle_ugv("ugv1", 0.0, 0.0))
+        self.frontseater = platform.frontseater
+        self.world = World(GroundPlaneEnv(), platforms={"ugv1": platform})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
 
     def tearDown(self):
@@ -310,7 +305,6 @@ class TestMissionDashboardOverview(unittest.TestCase):
     knowledge panel in place of a single platform's own Knowledge (there is no
     canonical cross-platform store to show)."""
     def setUp(self):
-        knowledge = KnowledgeDatabase()
         mission_graph = {
             "knowledge": {"ugv1/arrived": {"type": bool, "value": False}},
             "nodes": {"n1": {"primitives": {
@@ -319,11 +313,9 @@ class TestMissionDashboardOverview(unittest.TestCase):
             "edges": {},
             "start": "n1",
         }
-        hardware = BicycleHardware()
-        self.frontseater = BicycleFrontseater(hardware=hardware)
-        backseater = Backseater(frontseater=self.frontseater, knowledge_database=knowledge,
-                                 mission_graph=mission_graph, platform_id="ugv1")
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": backseater})
+        platform = Platform(bicycle_ugv("ugv1", 0.0, 0.0, mission_graph=mission_graph))
+        self.frontseater = platform.frontseater
+        self.world = World(GroundPlaneEnv(), platforms={"ugv1": platform})
         self.dashboard = MissionDashboard(self.world, PlanePlotter())
         self.dashboard.selected_id.set(MISSION_OVERVIEW_ID)
 

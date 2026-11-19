@@ -1,16 +1,16 @@
-"""Defines frontseaters to be used with the ground_plane environment"""
+"""Defines the bicycle UGV platform's Frontseater (MPC navigation, for the ground_plane environment)"""
 import multiprocessing
 import numpy as np
 from mtofr.world.base import Frontseater, WorldState
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.mpc import run_mpc_worker
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.world.ground_plane.platforms.bicycle_ugv.mpc import run_mpc_worker
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
 from mtofr.database import Location
 
 
 class BicycleFrontseater(Frontseater):
     """The planning/control brain for a UGV with bicycle dynamics. Runs its internal MPC
-    in a dedicated, persistent worker process (see mtofr.world.ground_plane.mpc) so that
+    in a dedicated, persistent worker process (see mtofr.world.ground_plane.platforms.bicycle_ugv.mpc) so that
     multiple platforms' solves can overlap instead of serializing on one core -- this
     Frontseater never touches Hardware.state directly, only send_controls/read_state.
     set_active_primitives() is the one entry point Backseater calls; it farms out to

@@ -3,28 +3,25 @@ backseater, Knowledge, mission graph) ticked through the same World, to confirm 
 supports more than one platform with no shared state or cross-platform coupling."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.database import KnowledgeDatabase, Location
+from mtofr.database import Location
 from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.world.platform import Platform
 from mtofr.world.world import World
 
 
-def _build_platform(test_case, platform_id, target, tolerance_key, arrived_key):
-    hardware = BicycleHardware()
-    frontseater = BicycleFrontseater(hardware=hardware)
-    test_case.addCleanup(frontseater.shutdown)
-    knowledge = KnowledgeDatabase()
+def _build_platform(test_case, platform_id, target, tolerance_key, arrived_key) -> Platform:
+    """Builds a bicycle UGV whose one node drives to target, registering its shutdown."""
     # Target key is namespaced per platform, not shared as a bare "target" -- with
     # World now mesh-syncing Knowledge between every pair of platforms, a shared key
     # name would have one platform's target silently overwrite the other's.
     target_key = f"{platform_id}/target"
-    knowledge.declare(target_key, Location, target)
-    knowledge.declare(tolerance_key, float, 0.5)
-    knowledge.declare(arrived_key, bool, False)
     mission_graph = {
-        "knowledge": {},
+        "knowledge": {
+            target_key: {"type": Location, "value": target},
+            tolerance_key: {"type": float, "value": 0.5},
+            arrived_key: {"type": bool, "value": False},
+        },
         "nodes": {"n1": {"primitives": {
             "nav": {"capability": "move_to", "inputs": {"target": target_key, "tolerance": tolerance_key},
                     "outputs": {"arrived": arrived_key}},
@@ -32,19 +29,19 @@ def _build_platform(test_case, platform_id, target, tolerance_key, arrived_key):
         "edges": {},
         "start": "n1",
     }
-    backseater = Backseater(frontseater=frontseater, knowledge_database=knowledge,
-                             mission_graph=mission_graph, platform_id=platform_id)
-    return hardware, knowledge, backseater
+    platform = Platform(bicycle_ugv(platform_id, 0.0, 0.0, mission_graph=mission_graph))
+    test_case.addCleanup(platform.shutdown)
+    return platform
 
 
 class TestMultiPlatformWorld(unittest.TestCase):
     def setUp(self):
-        self.ugv1_hardware, self.ugv1_knowledge, ugv1_backseater = _build_platform(
-            self, "ugv1", Location(5.0, 0.0), "ugv1/tolerance", "ugv1/arrived")
-        self.ugv2_hardware, self.ugv2_knowledge, ugv2_backseater = _build_platform(
-            self, "ugv2", Location(-5.0, 0.0), "ugv2/tolerance", "ugv2/arrived")
+        ugv1 = _build_platform(self, "ugv1", Location(5.0, 0.0), "ugv1/tolerance", "ugv1/arrived")
+        ugv2 = _build_platform(self, "ugv2", Location(-5.0, 0.0), "ugv2/tolerance", "ugv2/arrived")
+        self.ugv1_hardware, self.ugv1_knowledge = ugv1.hardware, ugv1.knowledge_database
+        self.ugv2_hardware, self.ugv2_knowledge = ugv2.hardware, ugv2.knowledge_database
 
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater})
+        self.world = World(GroundPlaneEnv(), platforms={"ugv1": ugv1, "ugv2": ugv2})
 
     def test_both_platforms_keep_their_own_identity(self):
         self.assertEqual(self.ugv1_hardware.platform_id, "ugv1")

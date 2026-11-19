@@ -1,6 +1,6 @@
 """Defines MissionEditorWindow: the Tk Toplevel a MissionEditorFrontseater opens/
 closes as its show_interface capability starts/stops. Owns one draft mission-graph
-dict at a time (see mtofr.world.interface.mission_editor.graph_draft for the mutation helpers it
+dict at a time (see mtofr.world.anywhere.platforms.interface.mission_editor.graph_draft for the mutation helpers it
 calls), independent of any live platform until explicitly pushed via the
 privilege-gated Backseater.write_mission() path. Form/table-based (Treeviews plus
 small modal dialogs for adding/editing entries, each double-click-to-edit too),
@@ -23,8 +23,8 @@ from mtofr.capability.capability import find_binding_problems
 from mtofr.condition.condition import parse_condition, ConditionSyntaxError
 from mtofr.database import verify_mission_structure, MissionStructuralError
 from mtofr.viz.mission_graph_view import MissionGraphViewer
-from mtofr.world.interface.mission_editor import graph_draft
-from mtofr.world.interface.mission_editor.serialization import (
+from mtofr.world.anywhere.platforms.interface.mission_editor import graph_draft
+from mtofr.world.anywhere.platforms.interface.mission_editor.serialization import (
     KNOWLEDGE_TYPES_BY_NAME, KNOWLEDGE_TYPE_NAMES, SCALAR_CASTERS,
     is_compound_knowledge_type, constructor_fields, save_mission_graph, load_mission_graph,
 )
@@ -123,7 +123,7 @@ class MissionEditorWindow(tk.Toplevel):
         top.pack(side=tk.TOP, fill=tk.X, padx=6, pady=6)
 
         ttk.Label(top, text="Target platform:").pack(side=tk.LEFT, padx=(0, 4))
-        platform_ids = list(self.world.backseaters.keys())
+        platform_ids = list(self.world.platforms.keys())
         self.platform_dropdown = ttk.Combobox(top, values=platform_ids, textvariable=self.target_platform_id,
                                                state="readonly", width=14)
         if platform_ids:
@@ -341,7 +341,7 @@ class MissionEditorWindow(tk.Toplevel):
         if self.assistant_window is not None and self.assistant_window.winfo_exists():
             self.assistant_window.lift()
             return
-        from mtofr.world.interface.mission_editor.assistant_window import AssistantWindow   # lazy: keeps the editor free of the assistant's imports until used
+        from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow   # lazy: keeps the editor free of the assistant's imports until used
         self.assistant_window = AssistantWindow(self)
 
     def _apply_draft(self, new_draft: dict) -> None:
@@ -380,7 +380,7 @@ class MissionEditorWindow(tk.Toplevel):
 
     def _on_load_live(self) -> None:
         target_id = self.target_platform_id.get()
-        backseater = self.world.backseaters.get(target_id)
+        backseater = self._backseater_of(target_id)
         if backseater is None:
             self._log("Load Live failed: no target platform selected.")
             return
@@ -432,7 +432,7 @@ class MissionEditorWindow(tk.Toplevel):
             return
         # Also check the draft against what the target platform can actually bind (the same check a push enforces).
         target_id = self.target_platform_id.get()
-        backseater = self.world.backseaters.get(target_id)
+        backseater = self._backseater_of(target_id)
         problems = find_binding_problems(self.draft, backseater.capabilities() if backseater is not None else None)
         if problems:
             self._log(f"Validation failed for '{target_id}':")
@@ -445,7 +445,7 @@ class MissionEditorWindow(tk.Toplevel):
 
     def _on_push(self) -> None:
         target_id = self.target_platform_id.get()
-        backseater = self.world.backseaters.get(target_id)
+        backseater = self._backseater_of(target_id)
         if backseater is None:
             self._log("Push failed: no target platform selected.")
             return
@@ -568,8 +568,13 @@ class MissionEditorWindow(tk.Toplevel):
         self._set_draft(graph_draft.remove_primitive(self.draft, self.selected_node_id, self.selected_primitive_name))
         self.selected_primitive_name = None
 
+    def _backseater_of(self, platform_id: str):
+        """The named platform's Backseater, or None if no such platform exists (e.g. none selected)."""
+        platform = self.world.platforms.get(platform_id)
+        return platform.backseater if platform is not None else None
+
     def _target_capability_registry(self):
-        backseater = self.world.backseaters.get(self.target_platform_id.get())
+        backseater = self._backseater_of(self.target_platform_id.get())
         return backseater.capabilities() if backseater is not None else None
 
     def _on_target_platform_changed(self) -> None:
@@ -585,7 +590,7 @@ class MissionEditorWindow(tk.Toplevel):
         # since this refresh fires on its own every second regardless of
         # anything you're doing, not just after an edit you made yourself.
         self.live_knowledge_tree.delete(*self.live_knowledge_tree.get_children())
-        backseater = self.world.backseaters.get(self.target_platform_id.get())
+        backseater = self._backseater_of(self.target_platform_id.get())
         if backseater is None:
             self.selected_live_knowledge_key = None
             return
@@ -605,7 +610,7 @@ class MissionEditorWindow(tk.Toplevel):
 
     def _on_edit_live_knowledge_value(self) -> None:
         target_id = self.target_platform_id.get()
-        backseater = self.world.backseaters.get(target_id)
+        backseater = self._backseater_of(target_id)
         if backseater is None:
             self._log("Edit live value failed: no target platform selected.")
             return
@@ -789,7 +794,7 @@ class MissionEditorWindow(tk.Toplevel):
         self.preview_ax.set_facecolor(GRAPH_PLOT_BACKGROUND)
         if self.preview_mode.get() == "live":
             target_id = self.target_platform_id.get()
-            backseater = self.world.backseaters.get(target_id)
+            backseater = self._backseater_of(target_id)
             if backseater is None:
                 self.preview_mode_note.config(text="No target platform selected.")
             else:
@@ -1056,7 +1061,7 @@ class _EdgeDialog(tk.Toplevel):
 
 class _KnowledgeDialog(tk.Toplevel):
     """Modal dialog for declaring or editing a Knowledge key: name, type (from
-    mtofr.world.interface.mission_editor.serialization's type registry, the same set the editor
+    mtofr.world.anywhere.platforms.interface.mission_editor.serialization's type registry, the same set the editor
     can round-trip to/from a saved file), and one labeled field per constructor
     parameter of the chosen type -- generic via constructor_fields() introspection
     rather than a hardcoded per-type form, so a future KnowledgeEntry subclass

@@ -4,7 +4,7 @@ import math
 import numpy as np
 from scipy.optimize import minimize
 
-from mtofr.world.ground_plane.dynamics import bicycle_step
+from mtofr.world.ground_plane.platforms.bicycle_ugv.dynamics import bicycle_step
 
 
 #==========# Solve #==========#

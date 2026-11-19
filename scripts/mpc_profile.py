@@ -30,11 +30,11 @@ def _report(label: str, sorted_data: list) -> None:
 
 def _logging_worker(request_queue, response_queue, nav_horizon, nav_dt, wheelbase,
                      min_speed, max_speed, min_steer, max_steer) -> None:
-    """Same as mtofr.world.ground_plane.mpc.run_mpc_worker, but wraps minimize() to
+    """Same as mtofr.world.ground_plane.platforms.bicycle_ugv.mpc.run_mpc_worker, but wraps minimize() to
     also record each solve's (elapsed time, iterations, rollout evals) -- this replaces
     the worker entry point for the duration of this profiling run only."""
     import numpy as np
-    import mtofr.world.ground_plane.mpc as mpc_module
+    import mtofr.world.ground_plane.platforms.bicycle_ugv.mpc as mpc_module
     from scipy.optimize import minimize as real_minimize
 
     solve_log = []   # (elapsed_seconds, nit, nfev)
@@ -46,7 +46,7 @@ def _logging_worker(request_queue, response_queue, nav_horizon, nav_dt, wheelbas
         return result
 
     mpc_module.minimize = logging_minimize
-    from mtofr.world.ground_plane.mpc import solve_mpc
+    from mtofr.world.ground_plane.platforms.bicycle_ugv.mpc import solve_mpc
 
     prev_solution = np.zeros(nav_horizon * 2)
     avoid_regions = []
@@ -74,14 +74,13 @@ def _logging_worker(request_queue, response_queue, nav_horizon, nav_dt, wheelbas
 
 
 def main() -> None:
-    import mtofr.world.ground_plane.frontseater as frontseater_module
+    import mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater as frontseater_module
     frontseater_module.run_mpc_worker = _logging_worker
 
     from mtofr.world.world import World
     from mtofr.world.ground_plane.env import GroundPlaneEnv
-    from mtofr.world.ground_plane.hardware import BicycleHardware
-    from mtofr.backseater.backseater import Backseater
-    from mtofr.database import KnowledgeDatabase
+    from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+    from mtofr.world.platform import Platform, PlatformSpec
     from mtofr.missions import mission_split_ugv1, mission_split_ugv2
 
     import tempfile
@@ -90,18 +89,16 @@ def main() -> None:
     if os.path.exists(solve_log_path):
         os.remove(solve_log_path)
 
-    ugv1_hardware = BicycleHardware()
-    ugv1_frontseater = frontseater_module.BicycleFrontseater(hardware=ugv1_hardware)
-    ugv1_knowledge = KnowledgeDatabase()
-    ugv1_backseater = Backseater(frontseater=ugv1_frontseater, knowledge_database=ugv1_knowledge,
-                                  mission_graph=mission_split_ugv1, platform_id="ugv1")
-    ugv2_hardware = BicycleHardware()
-    ugv2_frontseater = frontseater_module.BicycleFrontseater(hardware=ugv2_hardware)
-    ugv2_knowledge = KnowledgeDatabase()
-    ugv2_backseater = Backseater(frontseater=ugv2_frontseater, knowledge_database=ugv2_knowledge,
-                                  mission_graph=mission_split_ugv2, platform_id="ugv2")
+    # Built via frontseater_module (not a spec factory) so the patched run_mpc_worker above is used.
+    def build_frontseater(debug: bool = False):
+        """Builds a default BicycleHardware/BicycleFrontseater pair at the origin."""
+        return frontseater_module.BicycleFrontseater(hardware=BicycleHardware())
+    platforms = {
+        "ugv1": Platform(PlatformSpec("ugv1", build_frontseater, mission_graph=mission_split_ugv1)),
+        "ugv2": Platform(PlatformSpec("ugv2", build_frontseater, mission_graph=mission_split_ugv2)),
+    }
     environment = GroundPlaneEnv()
-    world = World(environment, backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater})
+    world = World(environment, platforms=platforms)
 
     tick_times = []
     try:
@@ -112,7 +109,7 @@ def main() -> None:
     finally:
         # shutdown() blocks on the worker's queue, so route the log path through the
         # same "shutdown" message rather than a second round-trip.
-        for frontseater in (ugv1_frontseater, ugv2_frontseater):
+        for frontseater in (platform.frontseater for platform in platforms.values()):
             if frontseater._worker_process.is_alive():
                 frontseater._request_queue.put({"type": "shutdown", "log_path": solve_log_path})
                 frontseater._worker_process.join(timeout=5.0)

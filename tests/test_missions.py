@@ -7,6 +7,8 @@ from mtofr.missions import (
     mission_village_ugv1, mission_village_ugv2,
 )
 from mtofr.world.base import Frontseater
+from mtofr.world.platform import PlatformSpec
+from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
 
 ALL_MISSION_GRAPHS = (
     mission_split_ugv1, mission_split_ugv2, mission_wait_ugv1, mission_wait_ugv2,
@@ -18,30 +20,33 @@ class TestMissionSet(unittest.TestCase):
     def test_mission_set_has_split_wait_village_and_village_default(self):
         self.assertEqual({member.name for member in MissionSet}, {"SPLIT", "WAIT", "VILLAGE", "VILLAGE_DEFAULT"})
 
-    def test_every_mission_set_has_a_config_with_matching_platform_keys(self):
-        # mission_graphs need not cover every platform_builders key -- a platform_id
-        # missing from it boots onto its own Frontseater.default_mission_graph()
-        # instead (see MissionSetConfig's docstring; VILLAGE_DEFAULT exercises this).
+    def test_every_mission_set_has_a_config_with_at_least_one_platform(self):
         for mission_set in MissionSet:
             self.assertIn(mission_set, MISSION_SETS)
             config = MISSION_SETS[mission_set]
             self.assertIsInstance(config, MissionSetConfig)
-            self.assertTrue(set(config.platform_builders))
-            self.assertTrue(set(config.mission_graphs) <= set(config.platform_builders))
+            self.assertTrue(config.platforms)
+            for spec in config.platforms:
+                self.assertIsInstance(spec, PlatformSpec)
+
+    def test_duplicate_platform_ids_are_rejected(self):
+        with self.assertRaises(ValueError):
+            MissionSetConfig(map_name=None, platforms=[bicycle_ugv("ugv1", 0.0, 0.0), bicycle_ugv("ugv1", 1.0, 1.0)])
 
     def test_village_default_has_no_explicit_mission_graphs(self):
+        # A spec with no mission_graph boots onto its own Frontseater.default_mission_graph().
         config = MISSION_SETS[MissionSet.VILLAGE_DEFAULT]
-        self.assertEqual(set(config.platform_builders), {"ugv1", "ugv2", "interface"})
-        self.assertEqual(config.mission_graphs, {})
+        self.assertEqual({spec.platform_id for spec in config.platforms}, {"ugv1", "ugv2", "interface"})
+        self.assertTrue(all(spec.mission_graph is None for spec in config.platforms))
 
     def test_village_default_gives_the_interface_platform_higher_privilege(self):
-        config = MISSION_SETS[MissionSet.VILLAGE_DEFAULT]
-        self.assertLess(config.privilege_levels["interface"], config.privilege_levels.get("ugv1", 1))
+        specs = {spec.platform_id: spec for spec in MISSION_SETS[MissionSet.VILLAGE_DEFAULT].platforms}
+        self.assertLess(specs["interface"].privilege_level, specs["ugv1"].privilege_level)
 
-    def test_platform_builders_produce_a_frontseater_per_platform(self):
+    def test_every_spec_builds_a_frontseater(self):
         for mission_set in MissionSet:
-            for platform_id, build_frontseater in MISSION_SETS[mission_set].platform_builders.items():
-                frontseater = build_frontseater(False)
+            for spec in MISSION_SETS[mission_set].platforms:
+                frontseater = spec.build_frontseater(False)
                 self.addCleanup(frontseater.shutdown)
                 self.assertIsInstance(frontseater, Frontseater)
 

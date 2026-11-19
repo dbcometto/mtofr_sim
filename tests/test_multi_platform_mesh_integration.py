@@ -7,36 +7,33 @@ increment). Also covers a privileged Mission write propagating to a peer the sam
 way, since Mission entries are gossiped by the same mesh sync."""
 import unittest
 
-from mtofr.backseater.backseater import Backseater
-from mtofr.database import KnowledgeDatabase, PlatformRecord
+from mtofr.database import PlatformRecord
 from mtofr.missions import mission_wait_ugv1, mission_wait_ugv2
 from mtofr.world.ground_plane.env import GroundPlaneEnv
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.world.platform import Platform
 from mtofr.world.world import World
 
 
-def _build_stack(test_case, mission_graph, platform_id, privilege_level=1):
-    hardware = BicycleHardware()
-    frontseater = BicycleFrontseater(hardware=hardware)
-    test_case.addCleanup(frontseater.shutdown)
-    knowledge = KnowledgeDatabase()
+def _build_stack(test_case, mission_graph, platform_id, privilege_level=1) -> Platform:
+    """Builds a bicycle UGV that re-syncs every tick, registering its shutdown."""
+    spec = bicycle_ugv(platform_id, 0.0, 0.0, mission_graph=mission_graph, privilege_level=privilege_level)
     # sync_interval=0.0: every World.step() re-syncs immediately rather than waiting
     # on real wall-clock time to elapse, which would make this test's timing depend
     # on how long BicycleFrontseater's MPC solve actually takes.
-    backseater = Backseater(frontseater=frontseater, knowledge_database=knowledge,
-                             mission_graph=mission_graph, platform_id=platform_id,
-                             privilege_level=privilege_level, sync_interval=0.0)
-    return knowledge, backseater
+    spec.sync_interval = 0.0
+    platform = Platform(spec)
+    test_case.addCleanup(platform.shutdown)
+    return platform
 
 
 class TestMeshMissionIntegration(unittest.TestCase):
     def setUp(self):
-        self.ugv1_knowledge, ugv1_backseater = _build_stack(self, mission_wait_ugv1, "ugv1")
-        self.ugv2_knowledge, ugv2_backseater = _build_stack(self, mission_wait_ugv2, "ugv2")
-        self.ugv1_backseater = ugv1_backseater
-        self.ugv2_backseater = ugv2_backseater
-        self.world = World(GroundPlaneEnv(), backseaters={"ugv1": ugv1_backseater, "ugv2": ugv2_backseater})
+        ugv1 = _build_stack(self, mission_wait_ugv1, "ugv1")
+        ugv2 = _build_stack(self, mission_wait_ugv2, "ugv2")
+        self.ugv1_knowledge, self.ugv1_backseater = ugv1.knowledge_database, ugv1.backseater
+        self.ugv2_knowledge, self.ugv2_backseater = ugv2.knowledge_database, ugv2.backseater
+        self.world = World(GroundPlaneEnv(), platforms={"ugv1": ugv1, "ugv2": ugv2})
 
     def test_ugv2_never_locally_writes_ugv1_arrived(self):
         # ugv2's mission graph only ever reads "ugv1/arrived" -- nothing in ugv2's
@@ -73,13 +70,11 @@ class TestMeshMissionEntryGossipIntegration(unittest.TestCase):
     of that entry propagating afterward, the same way Knowledge does."""
     def setUp(self):
         empty_graph = {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
-        self.commander_knowledge, self.commander_backseater = _build_stack(
-            self, empty_graph, "commander", privilege_level=0)
-        self.ugv1_knowledge, self.ugv1_backseater = _build_stack(
-            self, empty_graph, "ugv1", privilege_level=1)
-        self.world = World(GroundPlaneEnv(), backseaters={
-            "commander": self.commander_backseater, "ugv1": self.ugv1_backseater,
-        })
+        commander = _build_stack(self, empty_graph, "commander", privilege_level=0)
+        ugv1 = _build_stack(self, empty_graph, "ugv1", privilege_level=1)
+        self.commander_knowledge, self.commander_backseater = commander.knowledge_database, commander.backseater
+        self.ugv1_knowledge, self.ugv1_backseater = ugv1.knowledge_database, ugv1.backseater
+        self.world = World(GroundPlaneEnv(), platforms={"commander": commander, "ugv1": ugv1})
 
     def test_a_platforms_mission_entry_reaches_a_peer_via_world_step(self):
         # One tick first, so ugv1 and commander have already gossiped each other's

@@ -4,8 +4,8 @@ running anything per-tick like a normal capability. No real Tk window is
 involved; a fake window stands in for MissionEditorWindow."""
 import unittest
 
-from mtofr.world.interface.hardware import ConsoleHardware
-from mtofr.world.interface.frontseater import MissionEditorFrontseater
+from mtofr.world.anywhere.platforms.interface.hardware import ConsoleHardware
+from mtofr.world.anywhere.platforms.interface.frontseater import MissionEditorFrontseater
 
 
 class _FakeWindow:
@@ -70,6 +70,29 @@ class TestMissionEditorFrontseater(unittest.TestCase):
 
     def test_shutdown_with_no_window_open_is_a_no_op(self):
         self.frontseater.shutdown()   # must not raise
+
+    def test_attach_without_a_window_root_installs_a_null_window(self):
+        frontseater = MissionEditorFrontseater(hardware=ConsoleHardware())
+        frontseater.attach(world=object(), window_root=None)
+        frontseater.set_active_primitives({"interface": {"capability": "show_interface", "inputs": {}, "outputs": {}}})
+        self.assertEqual(frontseater.describe_status()["overall"], "showing interface")
+        frontseater.set_active_primitives({})   # the null window's close() must not raise
+        self.assertEqual(frontseater.describe_status()["overall"], "idle")
+
+    def test_attach_with_a_window_root_builds_a_mission_editor_window_from_it(self):
+        import mtofr.world.anywhere.platforms.interface.mission_editor.window as window_module
+        built_with = []
+        original_window = window_module.MissionEditorWindow
+        window_module.MissionEditorWindow = lambda root, world, platform_id: built_with.append(
+            (root, world, platform_id)) or _FakeWindow()
+        self.addCleanup(setattr, window_module, "MissionEditorWindow", original_window)
+
+        frontseater = MissionEditorFrontseater(hardware=ConsoleHardware())
+        frontseater.platform_id = "interface"
+        world = object()
+        frontseater.attach(world, window_root="root")
+        frontseater.set_active_primitives({"interface": {"capability": "show_interface", "inputs": {}, "outputs": {}}})
+        self.assertEqual(built_with, [("root", world, "interface")])
 
 
 if __name__ == "__main__":

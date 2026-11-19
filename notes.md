@@ -1,6 +1,118 @@
 # Notes
 
 
+## Status 19 Nov 26 (later) — platform types live under their environment; dynamics belong to the platform
+
+(Written by Claude. Reverses the "compatible with, not owned by" decision in the entry below.)
+
+**Why.** The earlier split left platform types floating in `world/platforms/`, disassociated from
+the environments they can actually live in — but a bicycle UGV can only live in the ground plane,
+and the code already said so implicitly: the terrain parameter `max_speed_multiplier` sat on the
+*base* `Hardware` ABC though only `GroundPlaneEnv` ever passed it (`ConsoleHardware` had to accept
+and ignore it), and nothing stopped a platform from being put in an environment it can't live in.
+Separately, `GroundPlaneEnv.step_dynamics_all()` applied one terrain response to every vehicle,
+though how terrain affects a vehicle is that vehicle's business (a UAV ignores a wall; a tracked
+vehicle in mud slows differently from a wheeled one). The interface platform, meanwhile, lived in a
+kind of "nowhere."
+
+**Rule now.** A platform type lives under the environment it needs,
+`world/<environment_name>/platforms/<type>/`, next to that environment's `env.py` and the Hardware
+base its vehicles subclass (`world/<environment_name>/hardware.py`). A type that needs no
+environment lives in `world/anywhere/platforms/<type>/`, on `world/anywhere/hardware.py`'s
+`StationaryHardware`. `Platform`/`PlatformSpec` are generic, so they moved up to `world/platform.py`;
+`world/platforms/` is gone.
+
+**What changed:**
+- Base `Hardware`: one abstract method, `step_dynamics(dt, environment)`; `calculate_dynamics` and
+  `max_speed_multiplier` left the base. Every subclass declares `environment_type` (an Environment
+  class, or `None` = any) — deliberately no base default, so forgetting it is an error.
+- `Environment` is now passive (no `step_dynamics_all`, no abstract methods): `GroundPlaneEnv`
+  answers `speed_multiplier_at(x, y)` / `is_blocked(x, y)` and steps nothing.
+- New `GroundPlaneHardware` (`environment_type = GroundPlaneEnv`, abstract pure
+  `calculate_dynamics(..., max_speed_multiplier)`): its default `step_dynamics` is the old
+  `step_dynamics_all` body for one vehicle (wheeled-vehicle response), using ground-truth
+  `self.state` rather than `read_state()`. `BicycleHardware` subclasses it, unchanged otherwise.
+- New `StationaryHardware` (`environment_type = None`, only advances `t`); `ConsoleHardware` is now
+  a docstring-only subclass. The interface platform keeps its map position (interviewed: a
+  placeable ground station, since position will matter for comms range), rather than moving to a
+  separate position-less "virtual" environment, which would have needed a multi-environment World.
+- `World.__init__` raises `TypeError` for a platform its environment can't host (also for a
+  hardware that never declared `environment_type`). `World.step()` calls
+  `hardware.step_dynamics(dt, environment)` per platform, isolated like the other phases, and still
+  for a platform whose brain faulted that tick (a real vehicle keeps coasting).
+- `main.py`: a setup failure after the platforms are built (e.g. that `TypeError`) now shuts them
+  down before re-raising, rather than orphaning their MPC worker processes.
+- Moved with plain `mv` again (git sees delete + untracked), imports updated with Edit. Tests:
+  `test_ground_plane_env.py` now covers the passive queries; its stepping tests moved to the new
+  `test_ground_plane_hardware.py`; `test_console_hardware.py` became `test_stationary_hardware.py`;
+  `test_world.py` gained the hosting check and hardware-fault isolation.
+
+**Open, noted only:** `WorldState` itself is still 2D (x, y, theta) and lives in the base layer. A
+future 3D environment (e.g. for a UAV) would need its own state type alongside its Hardware base.
+
+**Verified:** full suite (507) passes. Scripted smoke run of `VILLAGE_DEFAULT` wired like `main.py`,
+headless and with the real dashboard: identical ugv1 trajectory to before the change (physics
+unchanged by moving the terrain response into the hardware), ugv1 driven at the central building
+stops at its edge and never enters a blocked cell, the console never moves, and no worker processes
+are left after shutdown. A bicycle UGV given a non-ground environment raises
+`Platform 'ugv1': BicycleHardware can only live in a GroundPlaneEnv, but this World's environment is
+a NotAGroundPlane`, again leaving no child processes. `scripts/mpc_profile.py` still runs.
+
+
+## Status 19 Nov 26 — `Platform` object; World owns platforms; platform types moved to `world/platforms/`
+
+(Written by Claude)
+
+**Why.** A "platform" used to exist only by convention: a Hardware → Frontseater → Backseater
+stack sharing a `platform_id`, defined across four places — `missions.py`'s builder closures plus
+three parallel `platform_id`-keyed dicts in `MissionSetConfig` (`platform_builders`,
+`mission_graphs`, `privilege_levels`), `main.py`'s stack-building loop with two more parallel dicts,
+a post-construction `isinstance(MissionEditorFrontseater)` pass in `main.py` to wire the editor
+window, and `World`, which held only backseaters and reached hardware via
+`backseater.frontseater.hardware`. Separately, `world/ground_plane/` mixed an environment with one
+platform type (the bicycle UGV), while `world/interface/` was a platform type sitting where an
+environment would.
+
+**What changed** (three increments, suite green after each):
+- **A.** `world/platforms/platform.py`: `PlatformSpec` (declarative: id, `build_frontseater`,
+  `mission_graph`, `privilege_level`, `clock`, `sync_interval`) and `Platform` (builds the stack +
+  its `KnowledgeDatabase`, exposes each layer, owns `attach()`/`shutdown()`). Each platform type
+  exports a spec factory (`bicycle_ugv(...)`, `interface(...)`, the latter defaulting to privilege 0).
+  `MissionSetConfig` is now `map_name` + `platforms: list[PlatformSpec]` (duplicate ids raise).
+  New concrete no-op `Frontseater.attach(world, window_root=None)`; `MissionEditorFrontseater`
+  overrides it to install its window factory (`_NullWindow` moved there from `main.py` for headless),
+  so `main.py` no longer special-cases any platform type.
+- **B.** `World(environment, platforms)` replaces `World(environment, backseaters)`; every caller
+  migrated (no `world.backseaters` compatibility shim). `MissionEditorWindow` gained a small
+  `_backseater_of(platform_id)` helper (None-safe) used by it and `AssistantWindow`.
+  `PlatformOverviewViewer.render()` still takes a backseaters dict (it only needs backseaters);
+  the dashboard builds it. Backfilled `World` fault-isolation tests (`test_world.py`), previously
+  untested.
+- **C.** `world/ground_plane/{hardware,frontseater,dynamics,mpc}.py` → `world/platforms/bicycle_ugv/`;
+  `world/interface/` (frontseater, hardware, `mission_editor/`, `agent/`) → `world/platforms/interface/`.
+  `world/ground_plane/` is now environment-only (`env.py`, `viz/plane_plotter.py`). Moved with a
+  plain filesystem `mv` (byte-identical, by request, rather than retyping ~3,100 lines), then import
+  paths updated with Edit; git will see delete + untracked. Earlier entries below keep the old paths.
+
+**Design decisions worth keeping:**
+- Platform is assembly/lifecycle only, **not** a runtime layer — the layers still call each other
+  directly, as separate processes would on a real robot. It's the sim's per-robot launch file.
+- World owns Platforms; Platforms hold no reference to World (only `attach()` is handed one, for a
+  platform like the editor whose UI genuinely needs it). That keeps a Platform meaningful where
+  there is no World at all, e.g. a hardware deployment where comms replaces World's mesh sync.
+- World still drives each phase across all platforms (no `Platform.step()`), since the
+  `begin_update()`/`finish_update()` split exists precisely so platforms' MPC solves overlap.
+- Platform types are kept apart from environments: a type is *compatible with* an environment
+  (bicycle UGV needs ground_plane; the stationary interface platform works anywhere), not owned by it.
+
+**Verified:** full suite (494) passes; a scripted smoke run of `VILLAGE_DEFAULT` wired exactly like
+`main.py` — headless (`_NullWindow` installed) and with the real dashboard (real
+`MissionEditorWindow` opened) — boots every platform onto its default graph, pushes a mission from
+`interface` onto ugv1 via `write_mission()` and sees ugv1 drive, and leaves no MPC worker processes
+after shutdown. `scripts/mpc_profile.py` still runs under the new module paths (spawned workers
+import fine).
+
+
 ## Status 1 Oct 26 (end of day) — LLM assistant: current state
 
 (Written by Claude. The entry below is the running log of how we got here; where it disagrees with this

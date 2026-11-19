@@ -2,16 +2,23 @@
 from typing import Callable, Optional
 
 from mtofr.world.base import Frontseater, WorldState
-from mtofr.world.interface.hardware import ConsoleHardware
+from mtofr.world.anywhere.platforms.interface.hardware import ConsoleHardware
 from mtofr.capability.capability import Capability, CapabilityRegistry
+
+
+class _NullWindow:
+    """Stand-in for MissionEditorWindow when running headless (no Tk root exists) --
+    lets show_interface start/stop without crashing, with nothing actually shown."""
+    def close(self) -> None:
+        """Nothing to close."""
 
 
 class MissionEditorFrontseater(Frontseater):
     """Hosts the mission-editor GUI as a side effect of its one capability,
     show_interface, rather than modeling graph-editing itself as capabilities --
     editing is entirely user-driven, not part of the mission-graph/capability
-    machinery any other platform uses (see mtofr.world.interface.mission_editor for the actual
-    editing logic and mtofr.world.interface.mission_editor.window for the GUI it opens/closes).
+    machinery any other platform uses (see mtofr.world.anywhere.platforms.interface.mission_editor for the actual
+    editing logic and mtofr.world.anywhere.platforms.interface.mission_editor.window for the GUI it opens/closes).
     Never computes real controls; ConsoleHardware ignores them regardless."""
 
     def __init__(self, hardware: ConsoleHardware, debug: bool = False):
@@ -31,11 +38,21 @@ class MissionEditorFrontseater(Frontseater):
     #==========# Window wiring #==========#
 
     def set_window_factory(self, window_factory: Callable[[], object]) -> None:
-        """Supplies the callable that builds this platform's MissionEditorWindow --
-        set post-construction (by main.py, after World/MissionDashboard exist),
-        since the window needs a Tk root and a World reference, neither of which
-        exist yet when this Frontseater itself is built."""
+        """Supplies the callable that builds this platform's window -- normally
+        called by attach() rather than directly; tests use it to inject a fake."""
         self._window_factory = window_factory
+
+    def attach(self, world, window_root=None) -> None:
+        """Installs the window factory, now that World and (unless headless) the
+        dashboard's Tk root exist: a real MissionEditorWindow under window_root,
+        or a do-nothing _NullWindow when window_root is None."""
+        if window_root is None:
+            self.set_window_factory(_NullWindow)
+            return
+        # Imported here rather than at module top: window.py pulls in Tk/matplotlib
+        # (and forces the TkAgg backend), which a headless run never needs.
+        from mtofr.world.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
+        self.set_window_factory(lambda: MissionEditorWindow(window_root, world, self.platform_id))
 
     #==========# Capability discovery #==========#
 
@@ -63,7 +80,7 @@ class MissionEditorFrontseater(Frontseater):
         if showing and self._window is None:
             if self._window_factory is None:
                 raise RuntimeError(
-                    "MissionEditorFrontseater has no window_factory set -- call set_window_factory() first"
+                    "MissionEditorFrontseater has no window_factory set -- call attach() first"
                 )
             self._window = self._window_factory()
             if self.debug:
@@ -90,8 +107,8 @@ class MissionEditorFrontseater(Frontseater):
 
     def shutdown(self) -> None:
         """No OS-level resource to tear down here (no worker process, unlike
-        BicycleFrontseater) -- but main.py calls shutdown() on every Frontseater
-        unconditionally at exit, so this must exist. Also closes the window if
+        BicycleFrontseater) -- but Platform.shutdown() calls shutdown() on every
+        Frontseater unconditionally at exit, so this must exist. Also closes the window if
         still open, since Tk widgets should be destroyed before interpreter exit."""
         if self._window is not None:
             self._window.close()

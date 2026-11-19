@@ -37,9 +37,14 @@ class PerfectSensor:
 
 class Hardware(ABC):
     """Owns physical state and executes low-level controls each tick — the
-    MCU/actuator-equivalent layer. Knows nothing about capabilities or missions;
-    only ever sees raw controls in and raw (sensed) state out."""
+    MCU/actuator-equivalent layer, including its own dynamics: step_dynamics() queries
+    the (passive) Environment for whatever it needs, since how the world affects a
+    vehicle is that vehicle's business. Knows nothing about capabilities or missions.
+    Every subclass must set `environment_type` -- the Environment class it can live in,
+    or None for any -- which World checks at construction; it's deliberately given no
+    default here, so forgetting it is an error rather than a silent "lives anywhere"."""
     state: WorldState
+    environment_type: type | None
 
     def __init__(self):
         self._sensor = PerfectSensor()
@@ -47,20 +52,14 @@ class Hardware(ABC):
         self.platform_id: str | None = None
 
     @abstractmethod
-    def calculate_dynamics(self, state: WorldState, controls: dict, dt: float,
-                            max_speed_multiplier: float = 1.0) -> WorldState:
-        """max_speed_multiplier scales the platform's own max speed (e.g. from an
-        Environment's terrain lookup); 1.0 is a no-op for a Hardware with no such
-        concept."""
+    def step_dynamics(self, dt: float, environment: "Environment") -> None:
+        """Advances self.state by dt under the last controls sent, in this environment."""
 
     def send_controls(self, controls: dict) -> None:
         self._pending_controls = controls
 
     def read_state(self) -> WorldState:
         return self._sensor.read(self.state)
-
-    def step_dynamics(self, dt: float, max_speed_multiplier: float = 1.0) -> None:
-        self.state = self.calculate_dynamics(self.state, self._pending_controls, dt, max_speed_multiplier)
 
 
 class Frontseater(ABC):
@@ -94,6 +93,13 @@ class Frontseater(ABC):
         this with whatever "safe idle" behavior actually suits its platform type
         (e.g. loitering for a UGV, hovering for a UAV)."""
         return {"knowledge": {}, "nodes": {"startup": {"primitives": {}}}, "edges": {}, "start": "startup"}
+
+    def attach(self, world, window_root=None) -> None:
+        """Called once by Platform.attach() after World (and, unless headless, the
+        dashboard's Tk root as window_root) exist -- for setup that can't happen at
+        construction because those objects don't exist yet. Base implementation does
+        nothing; a Frontseater that opens its own windows (e.g. MissionEditorFrontseater)
+        overrides it, so main.py never needs to special-case a platform type."""
 
     def begin_update(self) -> None:
         """Starts this tick's control computation. Default: computes synchronously and
@@ -149,8 +155,7 @@ class Frontseater(ABC):
 
 
 class Environment(ABC):
-    """Steps physical dynamics for a set of hardware instances"""
-
-    @abstractmethod
-    def step_dynamics_all(self, hardware: dict, dt: float) -> None:
-        """hardware: eid -> Hardware. Mutates each hardware's state in place."""
+    """A passive description of the world (terrain, bounds, ...) that each Hardware
+    queries while stepping its own dynamics -- it never steps anything itself. Each
+    concrete environment defines whatever queries its vehicles need (e.g.
+    GroundPlaneEnv.is_blocked()), alongside the Hardware base those vehicles subclass."""

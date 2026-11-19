@@ -3,8 +3,8 @@ import json
 
 from mtofr.capability.capability import find_binding_problems, find_primitive_problems
 from mtofr.condition.condition import parse_condition
-from mtofr.world.interface.mission_editor import graph_draft
-from mtofr.world.interface.mission_editor.serialization import (
+from mtofr.world.anywhere.platforms.interface.mission_editor import graph_draft
+from mtofr.world.anywhere.platforms.interface.mission_editor.serialization import (
     KNOWLEDGE_TYPES_BY_NAME, SCALAR_CASTERS, constructor_fields, is_compound_knowledge_type,
 )
 

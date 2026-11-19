@@ -6,8 +6,8 @@ query/publish) instead of a full Backseater."""
 import unittest
 
 from mtofr.database import Location
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
 
 class _FakeBackseater:

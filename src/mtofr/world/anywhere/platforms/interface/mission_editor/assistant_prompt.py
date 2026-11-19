@@ -1,5 +1,5 @@
 """Defines the assistant's system prompt and the per-turn draft-state block injected into each user message."""
-from mtofr.world.interface.mission_editor.serialization import KNOWLEDGE_TYPE_NAMES
+from mtofr.world.anywhere.platforms.interface.mission_editor.serialization import KNOWLEDGE_TYPE_NAMES
 
 #==========# System prompt #==========#
 # Written for a 4B model: short imperative rules, one worked example, no fixed reply format (a MISSION:/PLAN:

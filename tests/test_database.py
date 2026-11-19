@@ -16,8 +16,8 @@ from mtofr.database import (
     PlatformRecord,
     PlatformStatus,
 )
-from mtofr.world.ground_plane.hardware import BicycleHardware
-from mtofr.world.ground_plane.frontseater import BicycleFrontseater
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.world.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
 
 class TestMissionDatabase(unittest.TestCase):

@@ -2,16 +2,18 @@
 from dataclasses import dataclass
 
 
-#==========# Schema #==========#
+#========================================#
+# Schema
+#========================================#
 
 @dataclass(frozen=True)
 class ParamSpec:
-    """Describes one named field of a capability — either an input its inputs dict must
-    contain, or an output it may write via poll_status(); the same shape serves both.
-    Every field is a Knowledge reference: the mission graph always supplies a Knowledge
-    key (str), and Backseater always resolves/commits it as an instance of `type` — there
-    is no separate "raw value" path. A capability may omit any declared output on a given
-    poll, whichever are meaningful for its current status."""
+    """Describes one named field of a capability: either an input its inputs dict must
+    contain, or an output it may publish; the same shape serves both. Every field is a
+    Knowledge reference: the mission graph always supplies a Knowledge key (str) whose
+    declared type must be exactly `type`; there is no separate "raw value" path. A
+    capability may leave any declared output unwritten, whichever are meaningful for its
+    current status."""
     name: str
     type: type
     description: str
@@ -27,8 +29,8 @@ class ParamSpec:
 @dataclass(frozen=True)
 class Capability:
     """One platform-agnostic action a Frontseater can perform. `ipl_type` is the
-    mission-graph-facing name — what a primitive's "capability" field must match, and what
-    Backseater passes straight through to Frontseater.actuate()."""
+    mission-graph-facing name: what a primitive's "capability" field must match, and what
+    Backseater hands to Frontseater.set_active_primitives()."""
     ipl_type: str
     description: str
     inputs: tuple[ParamSpec, ...] = ()
@@ -44,13 +46,21 @@ class Capability:
         return "\n".join(lines)
 
 
-#==========# Registry #==========#
+
+
+
+
+
+#========================================#
+# Registry
+#========================================#
 
 class CapabilityRegistry:
     """Read-only lookup of a Frontseater's advertised capabilities, keyed by mission-graph
     IPL type name. This is the query path a Backseater (and eventually a planner) uses instead
     of assuming what a platform can do."""
     def __init__(self, capabilities: list[Capability]):
+        """Indexes `capabilities` by ipl_type."""
         self._by_ipl_type = {capability.ipl_type: capability for capability in capabilities}
 
     def get(self, ipl_type: str) -> Capability | None:
@@ -66,7 +76,14 @@ class CapabilityRegistry:
         return "\n".join(capability.describe() for capability in self._by_ipl_type.values())
 
 
-#==========# Binding check #==========#
+
+
+
+
+
+#========================================#
+# Binding Check
+#========================================#
 
 def find_primitive_problems(primitive: dict, declared_knowledge: dict, capability_registry) -> list:
     """Every reason `primitive` (a mission-graph {"capability", "inputs", "outputs"} dict) could not be bound by

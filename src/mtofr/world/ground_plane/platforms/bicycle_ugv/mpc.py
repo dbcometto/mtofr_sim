@@ -7,46 +7,81 @@ from scipy.optimize import minimize
 from mtofr.world.ground_plane.platforms.bicycle_ugv.dynamics import bicycle_step
 
 
-#==========# Solve #==========#
+#========================================#
+# Config
+#========================================#
+
+CONTROLS_PER_STEP = 2   # (vel, steer)
+
+# Cost weights. The control weights are R = diag([VELOCITY_WEIGHT, STEER_WEIGHT]);
+# the target-distance weight Q = eye(2) is implicit.
+HEADING_ERROR_WEIGHT = 20.0   # per rad^2 of heading error toward the target
+VELOCITY_WEIGHT = 1.0         # per (m/s)^2
+STEER_WEIGHT = 0.1            # per rad^2
+AVOID_PENETRATION_WEIGHT = 100.0   # per m^2 inside an avoid-region's radius
+AVOID_HEADING_WEIGHT = 10.0        # scales the heading-at-obstacle penalty
+AVOID_PROXIMITY_SOFTENING = 0.5    # m added to the distance, so proximity stays finite at the obstacle
+
+# NOTE: capped well below scipy's default of 100: since this re-solves every tick with a
+# warm start anyway (standard receding-horizon MPC practice), an unconverged solve
+# near a hard obstacle-avoidance case would otherwise burn the full 100 iterations
+# trying to reach an optimum that isn't much better than what a much shorter budget
+# already finds, at several times the wall-clock cost -- see docs/notes.md (note 14)
+# for the measurements behind this number.
+MPC_MAX_ITERATIONS = 20
+
+
+
+
+
+
+
+#========================================#
+# Solve
+#========================================#
 
 def solve_mpc(nav_horizon: int, nav_dt: float, wheelbase: float, min_speed: float, max_speed: float,
               min_steer: float, max_steer: float, prev_solution: np.ndarray, state_xytheta: tuple,
               target_xy: tuple, avoid_regions: list) -> tuple:
-    """Solves for the next (vel, steer) via a receding-horizon rollout, warm-started from
-    prev_solution. Operates only on plain floats/tuples/arrays -- no Frontseater/Hardware/
-    Location objects -- so it runs identically whether called in-process or from a worker
-    process, with minimal data crossing that boundary. Returns (vel, steer, new_prev_solution).
+    """Solves for the next (vel, steer) (m/s, rad) via a receding-horizon rollout of
+    `nav_horizon` steps of `nav_dt` (s), warm-started from prev_solution. Positions are
+    m in the world frame, theta in rad. Operates only on plain floats/tuples/arrays --
+    no Frontseater/Hardware/Location objects -- so it runs identically whether called
+    in-process or from a worker process, with minimal data crossing that boundary.
+    Returns (vel, steer, new_prev_solution).
     """
     state_x, state_y, state_theta = state_xytheta
     target_x, target_y = target_xy
 
-    # Plain math (not numpy arrays/matrices): this closure runs ~150+ times per solve
+    # NOTE: plain math (not numpy arrays/matrices): this closure runs ~150+ times per solve
     # (rollout length x finite-difference gradient probes), where numpy's per-call
-    # dispatch overhead swamps the actual arithmetic for scalars. R = diag([1.0, 0.1])
-    # and Q = eye(2) are fixed, so their quadratic forms are inlined as scalar sums.
+    # dispatch overhead swamps the actual arithmetic for scalars, so the fixed R and Q
+    # quadratic forms are inlined as scalar sums.
     def cost_fn(x, y, theta, vel, steer):
+        """Stage cost of one rollout step: heading, control effort, target distance, and avoid-regions."""
         bearing = math.atan2(target_y - y, target_x - x)
         heading_error = math.atan2(math.sin(theta - bearing), math.cos(theta - bearing))
-        platform_cost = 20 * heading_error**2
+        platform_cost = HEADING_ERROR_WEIGHT * heading_error**2
 
-        standard_cost = vel * vel * 1.0 + steer * steer * 0.1
+        standard_cost = vel * vel * VELOCITY_WEIGHT + steer * steer * STEER_WEIGHT
 
         error_x, error_y = x - target_x, y - target_y
         mission_cost = error_x * error_x + error_y * error_y
         for point_x, point_y, radius in avoid_regions:
-            d = math.hypot(x - point_x, y - point_y)
-            mission_cost += 100.0 * max(0.0, radius - d)**2
+            distance = math.hypot(x - point_x, y - point_y)
+            mission_cost += AVOID_PENETRATION_WEIGHT * max(0.0, radius - distance)**2
 
             # Penalize heading directly at the obstacle, scaled by proximity
             avoid_bearing = math.atan2(point_y - y, point_x - x)
             heading_toward_avoid = math.atan2(math.sin(theta - avoid_bearing), math.cos(theta - avoid_bearing))
-            proximity = 1.0 / (d + 0.5)   # stronger penalty the closer you are
-            mission_cost += 10.0 * proximity * math.cos(heading_toward_avoid)**2
+            proximity = 1.0 / (distance + AVOID_PROXIMITY_SOFTENING)   # stronger penalty the closer you are
+            mission_cost += AVOID_HEADING_WEIGHT * proximity * math.cos(heading_toward_avoid)**2
 
         return platform_cost + standard_cost + mission_cost
 
-    def rollout_cost(control_seq):
-        controls = control_seq.reshape(nav_horizon, 2)
+    def rollout_cost(control_sequence):
+        """Total cost of rolling the bicycle model forward under a flattened control sequence."""
+        controls = control_sequence.reshape(nav_horizon, CONTROLS_PER_STEP)
         x, y, theta = state_x, state_y, state_theta
         cost = 0.0
         for vel, steer in controls:
@@ -55,22 +90,27 @@ def solve_mpc(nav_horizon: int, nav_dt: float, wheelbase: float, min_speed: floa
             cost += cost_fn(x, y, theta, vel, steer)
         return cost
 
-    prev = prev_solution.reshape(nav_horizon, 2)
-    x0 = np.vstack([prev[1:], prev[-1]]).flatten()
+
+    # Warm start: shift the previous solution one step, repeating its last control
+    previous = prev_solution.reshape(nav_horizon, CONTROLS_PER_STEP)
+    initial_guess = np.vstack([previous[1:], previous[-1]]).flatten()
     bounds = [(min_speed, max_speed), (min_steer, max_steer)] * nav_horizon
 
-    # Capped well below scipy's default of 100: since this re-solves every tick with a
-    # warm start anyway (standard receding-horizon MPC practice), an unconverged solve
-    # near a hard obstacle-avoidance case would otherwise burn the full 100 iterations
-    # trying to reach an optimum that isn't much better than what a much shorter budget
-    # already finds, at several times the wall-clock cost -- see docs/notes.md (note 14)
-    # for the measurements behind this number.
-    result = minimize(rollout_cost, x0, bounds=bounds, method="SLSQP", options={"maxiter": 20})
+
+    result = minimize(rollout_cost, initial_guess, bounds=bounds, method="SLSQP",
+                      options={"maxiter": MPC_MAX_ITERATIONS})
     vel, steer = result.x[0], result.x[1]
     return vel, steer, result.x
 
 
-#==========# Worker process #==========#
+
+
+
+
+
+#========================================#
+# Worker Process
+#========================================#
 
 def run_mpc_worker(request_queue, response_queue, nav_horizon: int, nav_dt: float, wheelbase: float,
                     min_speed: float, max_speed: float, min_steer: float, max_steer: float) -> None:
@@ -78,27 +118,21 @@ def run_mpc_worker(request_queue, response_queue, nav_horizon: int, nav_dt: floa
     by BicycleFrontseater, not per-tick). Holds the warm-start solution and avoid-region
     list resident for the platform's lifetime -- both are that platform's own persistent
     planning state, so only the current hardware state and target need to cross the
-    process boundary each tick, not the full solver state. Naive request/response loop,
-    no timeout or crash recovery -- matches this project's other placeholder comms seams
-    (e.g. Relay's clock sync) ahead of the real comms-boundary work planned for build order
-    step 4."""
-    prev_solution = np.zeros(nav_horizon * 2)
-    avoid_regions = []   # [(point_x, point_y, radius), ...]
+    process boundary each tick, not the full solver state. Serves requests until a
+    "shutdown" request arrives."""
+    # TODO: naive request/response loop with no timeout or crash recovery, a placeholder
+    # ahead of the real comms-boundary work (see roadmap.md).
+    prev_solution = np.zeros(nav_horizon * CONTROLS_PER_STEP)
+    avoid_regions = []   # [(point_x, point_y, radius), ...], m, world frame
 
-    while True:
-        request = request_queue.get()
-        request_type = request["type"]
-
-        if request_type == "shutdown":
-            return
-
-        if request_type == "add_avoid_region":
+    request = request_queue.get()
+    while request["type"] != "shutdown":
+        if request["type"] == "add_avoid_region":
             avoid_regions.append((request["point_x"], request["point_y"], request["radius"]))
-            continue
-
-        if request_type == "compute":
+        elif request["type"] == "compute":
             vel, steer, prev_solution = solve_mpc(
                 nav_horizon, nav_dt, wheelbase, min_speed, max_speed, min_steer, max_steer,
                 prev_solution, request["state"], request["target"], avoid_regions,
             )
             response_queue.put({"vel": vel, "steer": steer})
+        request = request_queue.get()

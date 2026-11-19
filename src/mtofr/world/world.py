@@ -7,7 +7,8 @@ class World:
     real deployment's platforms would need a World for. Platforms never reference World
     back. Refuses at construction any platform whose Hardware can't live in this
     environment (see Hardware.environment_type)."""
-    def __init__(self, environment, platforms: dict, debug=False):
+    def __init__(self, environment, platforms: dict, debug: bool = False):
+        """Takes `platforms` (platform_id -> Platform); raises TypeError for any the environment can't host."""
         for platform_id, platform in platforms.items():
             _check_hosts(environment, platform_id, platform.hardware)
         self.environment = environment
@@ -16,7 +17,8 @@ class World:
         self.debug = debug
 
     def step(self, dt: float) -> None:
-        # Each phase is isolated per platform: a bespoke Frontseater raising (e.g. a
+        """Advances every platform and the mesh by one tick of `dt` (s)."""
+        # NOTE: each phase is isolated per platform: a bespoke Frontseater raising (e.g. a
         # broken set_active_primitives() implementation, or a real hardware fault a
         # future deployment would see) skips only that platform for the rest of this
         # tick, rather than crashing the whole simulation step. In a real deployment
@@ -24,6 +26,8 @@ class World:
         # isolation rather than inventing new behavior.
         failed_platform_ids = set()
 
+
+        # Backseaters
         for platform_id, platform in self.platforms.items():
             if self.debug:
                 print(f"[World] Updating backseater '{platform_id}'")
@@ -33,28 +37,30 @@ class World:
                 print(f"[World] Backseater '{platform_id}' update() failed: {error} — skipping this tick.")
                 failed_platform_ids.add(platform_id)
 
-        # Split across all platforms rather than looping platform-by-platform:
+
+        # Frontseaters
+        # NOTE: split across all platforms rather than looping platform-by-platform:
         # begin_update() lets a Frontseater dispatch its (possibly expensive) control
         # computation to a worker process without blocking, so every platform's work
-        # is in flight before finish_update() collects any one of them -- letting
+        # is in flight before finish_update() collects any one of them, letting
         # independent platforms' solves overlap instead of serializing.
         for platform_id, platform in self.platforms.items():
-            if platform_id in failed_platform_ids:
-                continue
-            try:
-                platform.frontseater.begin_update()
-            except Exception as error:
-                print(f"[World] Frontseater '{platform_id}' begin_update() failed: {error} — skipping this tick.")
-                failed_platform_ids.add(platform_id)
+            if platform_id not in failed_platform_ids:
+                try:
+                    platform.frontseater.begin_update()
+                except Exception as error:
+                    print(f"[World] Frontseater '{platform_id}' begin_update() failed: {error} — skipping this tick.")
+                    failed_platform_ids.add(platform_id)
         for platform_id, platform in self.platforms.items():
-            if platform_id in failed_platform_ids:
-                continue
-            try:
-                platform.frontseater.finish_update()
-            except Exception as error:
-                print(f"[World] Frontseater '{platform_id}' finish_update() failed: {error} — skipping this tick.")
+            if platform_id not in failed_platform_ids:
+                try:
+                    platform.frontseater.finish_update()
+                except Exception as error:
+                    print(f"[World] Frontseater '{platform_id}' finish_update() failed: {error} — skipping this tick.")
 
-        # Every platform's hardware steps itself against the (passive) environment --
+
+        # Hardware
+        # Every platform's hardware steps itself against the (passive) environment,
         # including one whose brain faulted above, since a real vehicle keeps coasting
         # on its last controls regardless. Isolated per platform, like the phases above.
         for platform_id, platform in self.platforms.items():
@@ -63,13 +69,13 @@ class World:
             except Exception as error:
                 print(f"[World] Hardware '{platform_id}' step_dynamics() failed: {error} — skipping this tick.")
 
-        # Mesh sync happens last, after every backseater has committed this tick's
-        # fresh Knowledge — a synced fact lands in time for *next* tick's edge
-        # evaluation, not necessarily this one; fine, since in a real deployment
-        # platforms update asynchronously anyway and one tick of lag doesn't matter.
-        # Full connectivity is assumed for now (every backseater treats every other
-        # backseater as a peer in comms range); partial/topological connectivity is
-        # explicitly deferred.
+
+        # Mesh sync
+        # Happens last, after every backseater has committed this tick's fresh Knowledge,
+        # so a synced fact lands in time for *next* tick's edge evaluation; fine, since in
+        # a real deployment platforms update asynchronously anyway.
+        # TODO: full connectivity is assumed (every backseater treats every other as a
+        # peer in comms range); partial/topological connectivity is deferred.
         for platform_id, platform in self.platforms.items():
             peers = [peer.backseater for peer_id, peer in self.platforms.items() if peer_id != platform_id]
             platform.backseater.sync_with_stale_peers(peers)

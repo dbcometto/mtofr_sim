@@ -1,4 +1,6 @@
-"""Example mission graphs for main.py's demo platforms."""
+"""Example mission graphs for main.py's demo platforms. Every coordinate here is in
+meters in the world frame (origin at the map center, +y up); tolerances and radii are
+meters, durations seconds."""
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -7,6 +9,10 @@ from mtofr.world.platform import PlatformSpec
 from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
 from mtofr.world.anywhere.platforms.interface.spec import interface
 
+
+#========================================#
+# Mission Set Types
+#========================================#
 
 class MissionSet(IntEnum):
     """Which mission set main.py wires up."""
@@ -21,7 +27,7 @@ class MissionSet(IntEnum):
 @dataclass
 class MissionSetConfig:
     """Everything main.py needs to wire up one mission set: which GroundMap to use
-    (see mtofr.maps; None for the old unbounded mapless mode), and one PlatformSpec per
+    (see mtofr.maps; None for the unbounded mapless mode), and one PlatformSpec per
     platform -- built via each platform type's own spec factory (e.g. bicycle_ugv()), so
     different mission sets can mix platform types freely. A spec with no mission_graph
     boots onto its own Frontseater.default_mission_graph() instead."""
@@ -36,7 +42,15 @@ class MissionSetConfig:
             raise ValueError(f"Duplicate platform_id in mission set: {platform_ids}")
 
 
-#==========# split: independent per-platform loops, no cross-platform coordination #==========#
+
+
+
+
+
+#========================================#
+# Split
+#========================================#
+# Independent per-platform loops, no cross-platform coordination.
 
 mission_split_ugv1 = {
     "knowledge": {
@@ -103,7 +117,15 @@ mission_split_ugv2 = {
 }
 
 
-#==========# wait: ugv2 waits on a mesh-synced fact that originates on ugv1 #==========#
+
+
+
+
+
+#========================================#
+# Wait
+#========================================#
+# ugv2 waits on a mesh-synced fact that originates on ugv1.
 
 mission_wait_ugv1 = {
     "knowledge": {
@@ -150,7 +172,15 @@ mission_wait_ugv2 = {
 }
 
 
-#==========# village: exercises simple_village's road/blocked terrain #==========#
+
+
+
+
+
+#========================================#
+# Village
+#========================================#
+# Exercises simple_village's road/blocked terrain.
 
 mission_village_ugv1 = {
     "knowledge": {
@@ -214,7 +244,15 @@ mission_village_ugv2 = {
 }
 
 
-#==========# Mission sets: what main.py actually wires up #==========#
+
+
+
+
+
+#========================================#
+# Mission Sets
+#========================================#
+# What main.py actually wires up.
 
 MISSION_SETS = {
     MissionSet.SPLIT: MissionSetConfig(

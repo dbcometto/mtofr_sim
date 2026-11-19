@@ -1,7 +1,6 @@
-"""Tests for step 5: a platform's default mission graph — what a Backseater falls back
-to when constructed with mission_graph=None, so a platform boots into a safe idle
-behavior before a real mission is delegated to it (see docs/roadmap.md's build
-order, step 5)."""
+"""Tests for a platform's default mission graph: what a Backseater falls back to when
+constructed with mission_graph=None, so a platform boots into a safe idle behavior
+before a real mission is delegated to it."""
 import unittest
 
 from mtofr.backseater.backseater import Backseater
@@ -21,24 +20,29 @@ class _BareFrontseater(Frontseater):
     """A Frontseater that doesn't override default_mission_graph() — exercises the base
     Frontseater implementation directly."""
     def __init__(self):
+        """Advertise the one "idle" capability."""
         self.hardware = _FakeHardware()
         self._registry = CapabilityRegistry([Capability(ipl_type="idle", description="Does nothing.")])
 
     def compute_controls(self, state) -> dict:
+        """Command nothing."""
         return {}
 
     def capabilities(self) -> CapabilityRegistry:
+        """Return the one-capability ("idle") registry."""
         return self._registry
 
     def set_active_primitives(self, primitives: dict) -> None:
-        pass
+        """Ignore primitive changes; nothing runs."""
 
     def describe_status(self) -> dict:
+        """Report a fixed idle status."""
         return {"overall": "idle", "primitives": {}}
 
 
 class TestBaseFrontseaterDefaultMissionGraph(unittest.TestCase):
     def test_base_default_mission_graph_is_an_inert_placeholder(self):
+        """The base default graph is a single primitive-free "startup" node with no edges."""
         graph = _BareFrontseater().default_mission_graph()
         self.assertEqual(graph["start"], "startup")
         self.assertEqual(graph["nodes"], {"startup": {"primitives": {}}})
@@ -47,12 +51,14 @@ class TestBaseFrontseaterDefaultMissionGraph(unittest.TestCase):
 
 class TestBackseaterFallsBackToFrontseaterDefault(unittest.TestCase):
     def test_backseater_with_no_mission_graph_uses_the_frontseaters_default(self):
+        """With mission_graph=None, the Backseater runs the Frontseater's default from its "startup" node."""
         frontseater = _BareFrontseater()
         backseater = Backseater(frontseater=frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
         self.assertEqual(backseater.mission_graph, frontseater.default_mission_graph())
         self.assertEqual(backseater.active_node_id, "startup")
 
     def test_backseater_with_an_explicit_mission_graph_does_not_use_the_default(self):
+        """An explicit mission graph is used instead of the default, starting at its own start node."""
         frontseater = _BareFrontseater()
         explicit_graph = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {}, "start": "n1"}
         backseater = Backseater(frontseater=frontseater, knowledge_database=KnowledgeDatabase(),
@@ -62,17 +68,20 @@ class TestBackseaterFallsBackToFrontseaterDefault(unittest.TestCase):
 
 class TestBicycleFrontseaterDefaultMissionEndToEnd(unittest.TestCase):
     def setUp(self):
+        """Build a bicycle stack with no mission graph, registering the Frontseater's shutdown."""
         self.hardware = BicycleHardware()
         self.frontseater = BicycleFrontseater(hardware=self.hardware)
         self.addCleanup(self.frontseater.shutdown)
         self.backseater = Backseater(frontseater=self.frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
 
     def test_boots_onto_the_startup_node_running_the_stopwatch(self):
+        """The bicycle boots on "startup", and its first update starts the "loiter" primitive."""
         self.assertEqual(self.backseater.active_node_id, "startup")
         self.backseater.update()
         self.assertIn("loiter", self.frontseater.describe_status()["primitives"])
 
     def test_elapsed_time_advances_as_the_default_mission_runs(self):
+        """The default stopwatch publishes elapsed sim time to "startup/elapsed_time"."""
         # Backseater only hands the primitive set to the Frontseater; actually running
         # it (and publishing elapsed_time) happens in the Frontseater's own update(),
         # driven independently every tick (see World.step()).

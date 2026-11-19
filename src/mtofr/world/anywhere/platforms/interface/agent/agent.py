@@ -3,10 +3,27 @@ import ollama
 
 from . import config
 
-# Defined once and used for every request. If the warm-up and the real calls
+
+#========================================#
+# Config
+#========================================#
+
+# NOTE: defined once and used for every request. If the warm-up and the real calls
 # used different options, Ollama would reload the model and the warm-up would be wasted.
 OPTIONS = {"num_ctx": config.NUM_CTX, "temperature": config.TEMPERATURE}
+WARM_UP_MAX_TOKENS = 1
+NANOSECONDS_PER_SECOND = 1e9   # Ollama reports every duration in ns
+LENGTH_CAP_DONE_REASON = "length"   # Ollama's done_reason for a reply that hit num_predict
 
+
+
+
+
+
+
+#========================================#
+# Model Calls
+#========================================#
 
 def warm_up(messages, tools, options=OPTIONS):
     """Load the model into RAM and process the starting prompt, before the user types.
@@ -17,7 +34,7 @@ def warm_up(messages, tools, options=OPTIONS):
         model=config.MODEL,
         messages=messages,
         tools=tools,  # same tools as real calls, so the cached prompt prefix matches
-        options={**options, "num_predict": 1},  # same options, plus: generate 1 token at most
+        options={**options, "num_predict": WARM_UP_MAX_TOKENS},  # same options, plus a 1-token cap
         keep_alive=config.KEEP_ALIVE,
     )
 
@@ -27,7 +44,7 @@ def stream_reply(messages, think, emit, tools, options=OPTIONS, should_stop=None
 
     Returns (message, interrupted). The message is ready to append to the history
     and includes "tool_calls" if the model asked for any. `should_stop`, if given, is
-    polled once per chunk -- the GUI's stand-in for Ctrl+C, which can't reach a worker thread.
+    polled once per chunk: the GUI's stand-in for Ctrl+C, which can't reach a worker thread.
     If `meta` (a dict) is given, meta["truncated"] is set to True when the reply hit the num_predict cap.
     """
 
@@ -45,9 +62,10 @@ def stream_reply(messages, think, emit, tools, options=OPTIONS, should_stop=None
     content = ""      # the answer text, accumulated chunk by chunk
     thinking = ""     # the reasoning text, accumulated the same way
     tool_calls = []   # tool requests; they arrive as whole objects inside chunks
-    last = None       # the final chunk carries timing statistics
+    last_chunk = None   # the final chunk carries timing statistics
     interrupted = False
     chunk_count = 0
+
 
     # Iterate through tokens
     try:
@@ -57,7 +75,7 @@ def stream_reply(messages, think, emit, tools, options=OPTIONS, should_stop=None
             chunk_count += 1
             if chunk_count == 1:
                 emit("generating", None)   # the first chunk only arrives after the prompt has been read
-            last = chunk
+            last_chunk = chunk
             if chunk.message.thinking:
                 thinking += chunk.message.thinking
                 emit("thinking", chunk.message.thinking)
@@ -75,18 +93,26 @@ def stream_reply(messages, think, emit, tools, options=OPTIONS, should_stop=None
             # Tell the model its reply was cut off, so it doesn't treat it as complete.
             content += " [interrupted by user]"
 
-    if last and last.eval_count and last.eval_duration:
-        rate = last.eval_count / (last.eval_duration / 1e9)  # duration is in nanoseconds
-        prompt_seconds = (getattr(last, "prompt_eval_duration", None) or 0) / 1e9
-        emit("stats", {"tokens": last.eval_count, "rate": rate, "seconds": last.eval_duration / 1e9,
-                       "prompt_tokens": getattr(last, "prompt_eval_count", None) or 0, "prompt_seconds": prompt_seconds,
-                       # eval/prompt durations exclude model (re)loading, which total_duration includes
-                       "load_seconds": (getattr(last, "load_duration", None) or 0) / 1e9,
-                       "total_seconds": (getattr(last, "total_duration", None) or 0) / 1e9})
+
+    # Report stats
+    if last_chunk and last_chunk.eval_count and last_chunk.eval_duration:
+        generation_seconds = last_chunk.eval_duration / NANOSECONDS_PER_SECOND
+        emit("stats", {
+            "tokens": last_chunk.eval_count,
+            "rate": last_chunk.eval_count / generation_seconds,   # tokens/s
+            "seconds": generation_seconds,
+            "prompt_tokens": getattr(last_chunk, "prompt_eval_count", None) or 0,
+            "prompt_seconds": _seconds(last_chunk, "prompt_eval_duration"),
+            # eval/prompt durations exclude model (re)loading, which total_duration includes
+            "load_seconds": _seconds(last_chunk, "load_duration"),
+            "total_seconds": _seconds(last_chunk, "total_duration"),
+        })
 
     if meta is not None:
-        meta["truncated"] = getattr(last, "done_reason", None) == "length"   # Ollama's marker for hitting num_predict
+        meta["truncated"] = getattr(last_chunk, "done_reason", None) == LENGTH_CAP_DONE_REASON
 
+
+    # Build the message
     # Thinking stays in history so the next loop of this same turn doesn't redo it; AssistantSession drops it when the turn ends.
     message = {"role": "assistant", "content": content}
     if thinking:
@@ -95,6 +121,20 @@ def stream_reply(messages, think, emit, tools, options=OPTIONS, should_stop=None
         message["tool_calls"] = tool_calls
     return message, interrupted
 
+
+def _seconds(chunk, duration_field: str) -> float:
+    """One of a chunk's optional duration fields (ns), in seconds; 0 if absent."""
+    return (getattr(chunk, duration_field, None) or 0) / NANOSECONDS_PER_SECOND
+
+
+
+
+
+
+
+#========================================#
+# Agent Turn
+#========================================#
 
 def run_agent_turn(messages, think, emit, tools, run_tool, options=OPTIONS, should_stop=None, detect_stall=None):
     """The agentic loop: handle one user message, which may take several model calls.
@@ -110,7 +150,7 @@ def run_agent_turn(messages, think, emit, tools, run_tool, options=OPTIONS, shou
         ("generating", None)   the first chunk of a model call arrived: the prompt has been read, output has begun
     `detect_stall(content, truncated)`, if given, returns a retry message when a reply with no real tool calls
     looks like a stall rather than a finished answer (calls typed as text, cut off by the length cap, or
-    announcing a next step without doing it -- small-model failure modes), else None; at most MAX_NUDGES per turn.
+    announcing a next step without doing it: small-model failure modes), else None; at most MAX_NUDGES per turn.
     """
     nudges = 0
     for iteration in range(1, config.MAX_ITERATIONS + 1):
@@ -129,26 +169,25 @@ def run_agent_turn(messages, think, emit, tools, run_tool, options=OPTIONS, shou
         if reply["content"] or reply.get("tool_calls"):
             messages.append(reply)
 
-        # No tool calls means the model has finished its answer.
         if not reply.get("tool_calls"):
+            # No tool calls means the model has finished its answer, unless it stalled
             retry_message = detect_stall(reply["content"], meta.get("truncated", False)) if detect_stall else None
-            if retry_message and nudges < config.MAX_NUDGES:
-                nudges += 1
-                emit("nudge", retry_message)
-                messages.append({"role": "user", "content": retry_message})
-                continue
-            return
+            if not retry_message or nudges >= config.MAX_NUDGES:
+                return
+            nudges += 1
+            emit("nudge", retry_message)
+            messages.append({"role": "user", "content": retry_message})
+        else:
+            # Otherwise run each requested tool and feed the results back
+            for call in reply["tool_calls"]:
+                name = call.function.name
+                arguments = call.function.arguments
+                emit("tool_call", {"name": name, "arguments": arguments})
 
-        # Otherwise run each requested tool and feed the results back.
-        for call in reply["tool_calls"]:
-            name = call.function.name
-            arguments = call.function.arguments
-            emit("tool_call", {"name": name, "arguments": arguments})
+                result = run_tool(name, arguments)
+                emit("tool_result", {"name": name, "result": result})
 
-            result = run_tool(name, arguments)
-            emit("tool_result", {"name": name, "result": result})
-
-            messages.append({"role": "tool", "tool_name": name, "content": result})
-        # ...and loop: the model is called again and sees the results.
+                messages.append({"role": "tool", "tool_name": name, "content": result})
+        # ...and loop: the model is called again and sees the results (or the nudge).
 
     emit("limit", None)

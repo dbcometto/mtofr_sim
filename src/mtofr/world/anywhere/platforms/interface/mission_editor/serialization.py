@@ -12,19 +12,35 @@ import json
 
 from mtofr.database import KnowledgeEntry, Location
 
+
+#========================================#
+# Config
+#========================================#
+
 KNOWLEDGE_TYPES_BY_NAME = {"bool": bool, "float": float, "int": int, "str": str, "Location": Location}
 KNOWLEDGE_TYPE_NAMES = {value: name for name, value in KNOWLEDGE_TYPES_BY_NAME.items()}
+TRUE_TEXTS = ("true", "1", "yes")   # lowercase text a bool field reads as True
+JSON_INDENT = 2
 
 # Casts a field's raw text to its annotated type -- shared by the editor's generic
 # per-field form and this module's decode path. bool is handled specially since
 # bool("False") is truthy for any non-empty string.
 SCALAR_CASTERS = {
-    bool: lambda text: text.strip().lower() in ("true", "1", "yes"),
+    bool: lambda text: text.strip().lower() in TRUE_TEXTS,
     float: float,
     int: int,
     str: str,
 }
 
+
+
+
+
+
+
+#========================================#
+# Type Introspection
+#========================================#
 
 def is_compound_knowledge_type(entry_type: type) -> bool:
     """True for any KnowledgeEntry subclass (has multiple named fields, needs a
@@ -39,26 +55,34 @@ def constructor_fields(entry_type: type) -> list:
     Lets the editor build an add/edit form, and this module encode/decode a saved
     file, for any KnowledgeEntry subclass without hardcoding its fields."""
     parameters = inspect.signature(entry_type.__init__).parameters
-    fields = []
-    for name, parameter in parameters.items():
-        if name == "self":
-            continue
-        annotation = parameter.annotation if parameter.annotation is not inspect.Parameter.empty else str
-        fields.append((name, annotation))
-    return fields
+    return [
+        (name, parameter.annotation if parameter.annotation is not inspect.Parameter.empty else str)
+        for name, parameter in parameters.items() if name != "self"
+    ]
 
 
 def _encode_value(value):
+    """A KnowledgeEntry as a {field_name: value} dict; any other value unchanged."""
     if isinstance(value, KnowledgeEntry):
         return {field_name: getattr(value, field_name) for field_name, _ in constructor_fields(type(value))}
     return value
 
 
 def _decode_value(entry_type: type, encoded):
+    """Reverses _encode_value() for a value declared as `entry_type`."""
     if is_compound_knowledge_type(entry_type):
         return entry_type(**encoded)
     return encoded
 
+
+
+
+
+
+
+#========================================#
+# Save/Load
+#========================================#
 
 def save_mission_graph(mission_graph: dict, file_path) -> None:
     """Serializes `mission_graph` to `file_path` as JSON."""
@@ -73,7 +97,7 @@ def save_mission_graph(mission_graph: dict, file_path) -> None:
         "start": mission_graph.get("start"),
     }
     with open(file_path, "w") as file:
-        json.dump(encoded, file, indent=2)
+        json.dump(encoded, file, indent=JSON_INDENT)
 
 
 def load_mission_graph(file_path) -> dict:

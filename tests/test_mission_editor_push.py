@@ -14,24 +14,30 @@ from mtofr.world.base import Frontseater
 
 
 class _FakeHardware:
+    """Minimal stand-in for Hardware, only used as the platform_id cascade target."""
     platform_id: str | None = None
 
 
 class _FakeFrontseater(Frontseater):
+    """Fake Frontseater advertising only the "idle" capability."""
     def __init__(self):
+        """Advertise the one "idle" capability."""
         self.hardware = _FakeHardware()
         self._registry = CapabilityRegistry([Capability(ipl_type="idle", description="Does nothing.")])
 
     def compute_controls(self, state) -> dict:
+        """Command nothing."""
         return {}
 
     def capabilities(self) -> CapabilityRegistry:
+        """Return the one-capability ("idle") registry."""
         return self._registry
 
     def set_active_primitives(self, primitives: dict) -> None:
-        pass
+        """Ignore primitive changes; nothing runs."""
 
     def describe_status(self) -> dict:
+        """Report a fixed idle status."""
         return {"overall": "idle", "primitives": {}}
 
 
@@ -39,13 +45,15 @@ _EMPTY_GRAPH = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {
 
 
 def _make_backseater(platform_id: str, privilege_level: int) -> Backseater:
+    """Build a Backseater over a fake Frontseater at the given privilege level."""
     return Backseater(frontseater=_FakeFrontseater(), knowledge_database=KnowledgeDatabase(),
                        mission_graph=dict(_EMPTY_GRAPH), platform_id=platform_id, privilege_level=privilege_level)
 
 
 class TestMissionEditorPushPrivilege(unittest.TestCase):
     def setUp(self):
-        self.interface = _make_backseater("interface", privilege_level=0)
+        """Build a privilege-0 interface and a privilege-1 ugv1 that already know each other's PlatformRecord."""
+        self.interface =_make_backseater("interface", privilege_level=0)
         self.ugv1 = _make_backseater("ugv1", privilege_level=1)
         # The two platforms must know of each other's PlatformRecord for the
         # privilege gate to resolve -- normally seeded by mesh sync, done directly here.
@@ -53,16 +61,19 @@ class TestMissionEditorPushPrivilege(unittest.TestCase):
         self.interface.platform_database.declare("ugv1", self.ugv1.platform_database.get("ugv1"))
 
     def test_higher_privilege_platform_can_push_a_mission_onto_a_lower_privilege_one(self):
+        """The interface's push onto ugv1 stores the graph in ugv1's Mission entry."""
         graph = {"knowledge": {}, "nodes": {"n2": {"primitives": {}}}, "edges": {}, "start": "n2"}
         self.ugv1.write_mission(graph, writer_platform_id="interface")
         self.assertIs(self.ugv1.mission_database.get("ugv1"), graph)
 
     def test_lower_privilege_platform_cannot_push_onto_a_higher_privilege_one(self):
+        """ugv1 pushing onto the interface raises PermissionError."""
         graph = {"knowledge": {}, "nodes": {"n2": {"primitives": {}}}, "edges": {}, "start": "n2"}
         with self.assertRaises(PermissionError):
             self.interface.write_mission(graph, writer_platform_id="ugv1")
 
     def test_structurally_invalid_graph_is_rejected(self):
+        """A graph whose condition uses an undeclared key raises MissionStructuralError."""
         bad_graph = {
             "knowledge": {},   # references "arrived" below without declaring it
             "nodes": {"n2": {"primitives": {}}},
@@ -73,7 +84,7 @@ class TestMissionEditorPushPrivilege(unittest.TestCase):
             self.ugv1.write_mission(bad_graph, writer_platform_id="interface")
 
     def test_graph_the_target_cannot_bind_is_rejected_and_not_stored(self):
-        """Regression: a primitive naming a capability the platform lacks used to be accepted, then halt the mission."""
+        """A primitive naming a capability the target lacks is rejected at write time, leaving the stored graph as is."""
         before = self.ugv1.mission_database.all().get("ugv1")
         graph = {"knowledge": {}, "edges": {}, "start": "n2",
                  "nodes": {"n2": {"primitives": {"go": {"capability": "move_to", "inputs": {}, "outputs": {}}}}}}
@@ -82,6 +93,7 @@ class TestMissionEditorPushPrivilege(unittest.TestCase):
         self.assertIs(self.ugv1.mission_database.all().get("ugv1"), before)
 
     def test_graph_using_a_capability_the_target_has_is_accepted(self):
+        """A primitive using a capability the target has is accepted and stored."""
         graph = {"knowledge": {}, "edges": {}, "start": "n2",
                  "nodes": {"n2": {"primitives": {"wait": {"capability": "idle", "inputs": {}, "outputs": {}}}}}}
         self.ugv1.write_mission(graph, writer_platform_id="interface")

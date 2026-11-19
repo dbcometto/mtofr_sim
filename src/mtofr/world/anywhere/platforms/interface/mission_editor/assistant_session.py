@@ -5,6 +5,10 @@ from mtofr.world.anywhere.platforms.interface.agent import config
 from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_prompt import SYSTEM_PROMPT, compose_user_message
 
 
+#========================================#
+# Config
+#========================================#
+
 TEXT_CALL_NUDGE = ("Those tool calls were written as text, so nothing happened. "
                   "Make each one now as a real tool call, without repeating the explanation.")
 TRUNCATED_NUDGE = ("Your reply was cut off because it ran too long, and no tool call was made. "
@@ -17,16 +21,26 @@ INTENT_NUDGE = ("You said what you will do next but did not do it, and a message
 _INTENT_PATTERN = re.compile(r"\b(?:I will|I'll|I am going to|I'm going to|I need to|Let me|Now I|Next,? I|First,? I)\b", re.IGNORECASE)
 
 
+
+
+
+
+
+#========================================#
+# Session
+#========================================#
+
 class AssistantSession:
     """Owns the message history across turns. Each turn the model sees the full current draft (injected into
     that turn's user message), but only the plain request text and the final reply are kept afterward --
     otherwise every past turn would carry a stale copy of the draft and its tool exchanges in the context window."""
 
     def __init__(self, toolbox, options: dict = None):
+        """`options` defaults to the agent config's context size, temperature, and reply-token cap."""
         self.toolbox = toolbox
         self.options = options or {"num_ctx": config.NUM_CTX, "temperature": config.TEMPERATURE,
                                    "num_predict": config.MAX_REPLY_TOKENS}
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]   # the system prompt stays at index 0
 
     def run_turn(self, user_text: str, draft: dict, capability_registry, target_platform_id: str, emit,
                  think: bool = False, should_stop=None, run_tool=None, agent_turn=None,

@@ -5,9 +5,12 @@ from mtofr.world.anywhere.platforms.interface.frontseater import MissionEditorFr
 from mtofr.world.platform import PlatformSpec
 
 
+INTERFACE_PRIVILEGE_LEVEL = 0   # the highest; outranks every default-privilege platform
+
+
 def interface(platform_id: str, start_x: float, start_y: float, mission_graph: dict | None = None,
-              privilege_level: int = 0) -> PlatformSpec:
-    """A PlatformSpec for the mission-editor platform, fixed at (start_x, start_y) -- only
+              privilege_level: int = INTERFACE_PRIVILEGE_LEVEL) -> PlatformSpec:
+    """A PlatformSpec for the mission-editor platform, fixed at (start_x, start_y) (m, world frame) -- only
     safe on a map with no blocking terrain there. Defaults to privilege 0 (not the usual 1),
     since pushing mission graphs onto other platforms is this platform's whole job and
     write_mission()'s privilege gate requires strictly outranking the target."""

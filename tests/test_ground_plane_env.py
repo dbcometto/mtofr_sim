@@ -20,22 +20,27 @@ def uniform_ground_map(traversability_type: TraversabilityType) -> GroundMap:
 
 class TestGroundPlaneEnvWithoutMap(unittest.TestCase):
     def test_speed_multiplier_is_a_no_op(self):
+        """With no map, the speed multiplier is 1.0 everywhere."""
         self.assertEqual(GroundPlaneEnv().speed_multiplier_at(123.0, -45.0), 1.0)
 
     def test_nothing_is_blocked(self):
+        """With no map, even a far-away point is not blocked."""
         self.assertFalse(GroundPlaneEnv().is_blocked(1e6, 1e6))
 
 
 class TestGroundPlaneEnvWithGroundMap(unittest.TestCase):
     def test_speed_multiplier_comes_from_the_map(self):
+        """The speed multiplier is the terrain type's own multiplier from the map."""
         environment = GroundPlaneEnv(uniform_ground_map(TraversabilityType("slow", blocking=False, speed_multiplier=0.5)))
         self.assertEqual(environment.speed_multiplier_at(0.0, 0.0), 0.5)
 
     def test_blocking_terrain_is_blocked(self):
+        """A point on blocking terrain reports blocked."""
         environment = GroundPlaneEnv(uniform_ground_map(TraversabilityType("wall", blocking=True, speed_multiplier=1.0)))
         self.assertTrue(environment.is_blocked(0.0, 0.0))
 
     def test_clear_terrain_is_not_blocked_but_off_map_is(self):
+        """Clear in-map terrain is passable, while a point off the map is blocked."""
         environment = GroundPlaneEnv(uniform_ground_map(TraversabilityType("clear", blocking=False, speed_multiplier=1.0)))
         self.assertFalse(environment.is_blocked(0.0, 0.0))
         self.assertTrue(environment.is_blocked(100.0, 100.0))

@@ -12,8 +12,11 @@ from mtofr.maps import GroundMap
 from mtofr.missions import MissionSet, MISSION_SETS
 
 
-#==========# Config #==========#
-DT = 0.1
+#========================================#
+# Config
+#========================================#
+
+DT = 0.1   # s per sim step
 ENABLE_HEADLESS = False
 DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
 # SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via mesh sync. VILLAGE: exercises
@@ -21,15 +24,27 @@ DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
 # map, but every platform (including the mission-editor "interface" platform) boots onto
 # its own default_mission_graph() -- author/push a real mission live via its window.
 ACTIVE_MISSION_SET = MissionSet.VILLAGE_DEFAULT
+MAX_BACKLOG_STEPS = 5   # once the loop falls further behind than this many steps, drop the backlog
+IDLE_SLEEP_SECONDS = 0.001   # yields the CPU when there's no step/redraw to do
 
 
-# Setup and the main loop both live inside this guard, not just the loop: BicycleFrontseater
-# spawns a worker process per platform, and multiprocessing's default "spawn" start method
-# on Windows re-imports this file as __main__ in every worker process. Unguarded top-level
-# setup code would re-run there too -- reconstructing the whole world (and spawning more
-# worker processes) inside each worker, recursively.
+
+
+
+
+
+#========================================#
+# Run
+#========================================#
+
+# NOTE: setup and the main loop both live inside this guard, not just the loop:
+# BicycleFrontseater spawns a worker process per platform, and multiprocessing's default
+# "spawn" start method on Windows re-imports this file as __main__ in every worker process.
+# Unguarded top-level setup code would re-run there too -- reconstructing the whole world
+# (and spawning more worker processes) inside each worker, recursively.
 if __name__ == "__main__":
-    #==========# Set up #==========#
+    #===============# Set Up #===============#
+
     mission_set = MISSION_SETS[ACTIVE_MISSION_SET]
 
     platforms = {spec.platform_id: Platform(spec, debug=DEBUG) for spec in mission_set.platforms}
@@ -39,11 +54,11 @@ if __name__ == "__main__":
             else GroundMap.load(Path(maps_package.__file__).parent / mission_set.map_name)
         environment = GroundPlaneEnv(ground_map=ground_map)
         world = World(environment, platforms=platforms, debug=DEBUG)
-        vizualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter(ground_map=ground_map))
+        visualizer = None if ENABLE_HEADLESS else MissionDashboard(world, PlanePlotter(ground_map=ground_map))
 
         # Only now do World and the dashboard's Tk root exist -- some platforms (e.g. the
         # mission editor) need them for setup they couldn't do at construction.
-        window_root = None if vizualizer is None else vizualizer.root
+        window_root = None if visualizer is None else visualizer.root
         for platform in platforms.values():
             platform.attach(world, window_root)
     except BaseException:
@@ -53,31 +68,33 @@ if __name__ == "__main__":
             platform.shutdown()
         raise
 
-    #==========# Main #==========#
-    accumulator = 0.0
-    render_accumulator = 0.0   # throttles vizualizer.update() to ~1/DT, even while paused
+
+
+
+
+    #===============# Main Loop #===============#
+
+    accumulator = 0.0          # s of wall time not yet stepped
+    render_accumulator = 0.0   # s since the last redraw; throttles visualizer.update() to ~1/DT, even while paused
     last_time = time.perf_counter()
     try:
-        while True:
-            if vizualizer is not None and not vizualizer.is_open():
-                break
-
+        while visualizer is None or visualizer.is_open():
             current_time = time.perf_counter()
             frame_dt = current_time - last_time
             accumulator += frame_dt
             render_accumulator += frame_dt
             last_time = current_time
 
-            paused = vizualizer is not None and vizualizer.is_paused()
+            paused = visualizer is not None and visualizer.is_paused()
             did_work = False
             if paused:
                 accumulator = 0.0   # don't build up backlog while paused
-                if vizualizer is not None and render_accumulator >= DT:
-                    vizualizer.update()
+                if visualizer is not None and render_accumulator >= DT:
+                    visualizer.update()
                     render_accumulator = 0.0
                     did_work = True
             else:
-                if accumulator > 5 * DT:
+                if accumulator > MAX_BACKLOG_STEPS * DT:
                     if DEBUG:
                         print(f"[main.py] Falling behind, skipping {accumulator - DT:.3f}s")
                     accumulator = DT   # drop the backlog instead of stepping through it
@@ -88,25 +105,22 @@ if __name__ == "__main__":
                     did_work = True
 
                 # Refresh once per outer-loop iteration rather than after every step:
-                # a catch-up burst (up to 5*DT of backlog) still stays visually smooth
-                # since it's at most a handful of steps, and this avoids redrawing the
+                # a catch-up burst (up to MAX_BACKLOG_STEPS of backlog) still stays visually
+                # smooth since it's at most a handful of steps, and this avoids redrawing the
                 # whole dashboard (mission graph, knowledge/capability trees, plot)
                 # once per physics step, which was the dominant per-tick viz cost.
-                if did_work and vizualizer is not None:
-                    vizualizer.update()
+                if did_work and visualizer is not None:
+                    visualizer.update()
                     render_accumulator = 0.0
 
             # Without this, the loop busy-spins as fast as the CPU allows whenever
             # there's no step/redraw to do (e.g. paused, or waiting for the next DT
             # to accumulate), permanently maxing out one core doing nothing.
             if not did_work:
-                time.sleep(0.001)
+                time.sleep(IDLE_SLEEP_SECONDS)
 
     except KeyboardInterrupt:
         pass
-
-    except Exception as e:
-        raise
 
     finally:
         print("Shutting down...")

@@ -1,8 +1,12 @@
 """Defines the assistant's system prompt and the per-turn draft-state block injected into each user message."""
 from mtofr.world.anywhere.platforms.interface.mission_editor.serialization import KNOWLEDGE_TYPE_NAMES
 
-#==========# System prompt #==========#
-# Written for a 4B model: short imperative rules, one worked example, no fixed reply format (a MISSION:/PLAN:
+
+#========================================#
+# System Prompt
+#========================================#
+
+# NOTE: written for a 4B model: short imperative rules, one worked example, no fixed reply format (a MISSION:/PLAN:
 # header made the model emit "MISSION" as a tool call). The Ranger Handbook's eight Troop Leading Procedures are
 # collapsed to the five that do work for an editing assistant with no subordinate units to brief: receive the
 # mission; tentative plan (the warning order folds into it as one announcing sentence); start movement and
@@ -82,7 +86,14 @@ I renamed the start node to match the planned movement phase, and gave the node 
 """
 
 
-#==========# Per-turn state block #==========#
+
+
+
+
+
+#========================================#
+# Per-Turn State Block
+#========================================#
 
 def describe_world(ground_map, platform_state) -> str:
     """The coordinate frame, map extent/corners/regions/terrain, and the target platform's position, as text."""
@@ -96,9 +107,9 @@ def describe_world(ground_map, platform_state) -> str:
                      f"bottom-left ({-half_width:g}, {-half_height:g}), bottom-right ({half_width:g}, {-half_height:g}).")
         width_pixels = ground_map.width_meters / ground_map.meters_per_pixel
         height_pixels = ground_map.height_meters / ground_map.meters_per_pixel
-        for region in ground_map.regions_lookup.values():   # region centers are stored in top-left-origin pixels
-            x = (region.center_x - width_pixels / 2) * ground_map.meters_per_pixel
-            y = (height_pixels / 2 - region.center_y) * ground_map.meters_per_pixel
+        for region in ground_map.regions_lookup.values():   # region centers are stored in top-left-origin pixels (rows down)
+            x = (region.center_x - width_pixels / 2) * ground_map.meters_per_pixel    # m, world frame
+            y = (height_pixels / 2 - region.center_y) * ground_map.meters_per_pixel   # m, world frame, +y up
             lines.append(f"Region '{region.name}': center ({x:.0f}, {y:.0f}).")
         for terrain in ground_map.traversability_lookup.values():
             effect = "blocked, never route through" if terrain.blocking else f"speed x{terrain.speed_multiplier:g}"

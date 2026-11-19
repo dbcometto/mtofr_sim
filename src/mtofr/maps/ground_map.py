@@ -6,53 +6,85 @@ import matplotlib.image as mpimg
 import yaml
 
 
+#========================================#
+# Config
+#========================================#
+
+COLOR_CHANNEL_MAX = 255   # 0-255 RGB channels
+RGB_CHANNEL_COUNT = 3     # drops alpha
+HEX_BASE = 16
+HEX_CHANNEL_OFFSETS = (0, 2, 4)   # character offsets of r, g, b in "rrggbb"
+OFF_MAP_SPEED_MULTIPLIER = 1.0    # no speed effect off-map (it's blocked anyway)
+
+
+
+
+
+
+
+#========================================#
+# Terrain and Region Types
+#========================================#
+
 @dataclass
 class TraversabilityType:
     """One traversability color's terrain properties."""
     name: str
     blocking: bool
-    speed_multiplier: float
+    speed_multiplier: float   # scales a vehicle's max speed
 
 
 @dataclass
 class RegionType:
-    """One region color's label and pixel-space center (top-left origin), for
-    display only -- no functional region-membership query exists yet."""
+    """One region color's label and pixel-space center (px, top-left image origin,
+    rows increasing downward), for display only."""
+    # TODO: no functional region-membership query exists yet.
     name: str
     center_x: float
     center_y: float
 
 
 # Returned by traversability_at() for an in-bounds pixel color that doesn't match
-# any declared traversability color -- passable, no speed effect.
+# any declared traversability color: passable, no speed effect.
 _DEFAULT_TRAVERSABILITY = TraversabilityType(name="unmapped", blocking=False, speed_multiplier=1.0)
 
+
+
+
+
+
+
+#========================================#
+# Ground Map
+#========================================#
 
 class GroundMap:
     """An image-based map for the ground_plane environment: a cosmetic layer (always
     shown), a traversability layer (blocks motion / scales max speed), and a regions
     layer (currently display-only), all aligned via a shared meters_per_pixel. World
-    coordinates are centered on the map (x=0, y=0 at the image center) with y increasing
-    upward, matching the bicycle model's existing math convention -- the opposite of
+    coordinates (m) are centered on the map (x=0, y=0 at the image center) with y
+    increasing upward, matching the bicycle model's math convention: the opposite of
     image row order, so pixel sampling flips vertically. A pixel color with no exact
     match in a map's declared palette is snapped to its nearest declared color, since
     PNG anti-aliasing blends a few pixels along every color boundary."""
 
     def __init__(self, name: str, meters_per_pixel: float, cosmetic_image, traversability_image,
                  traversability_lookup: dict, regions_image, regions_lookup: dict):
+        """Wraps already-loaded layer images and lookups; see load() for reading them from disk."""
         self.name = name
-        self.meters_per_pixel = meters_per_pixel
+        self.meters_per_pixel = meters_per_pixel   # m/px
         self.cosmetic_image = cosmetic_image
         self.traversability_image = traversability_image
         self.traversability_lookup = traversability_lookup   # (r, g, b) 0-255 -> TraversabilityType
         self.regions_image = regions_image
         self.regions_lookup = regions_lookup   # (r, g, b) 0-255 -> RegionType
 
-        height_px, width_px = traversability_image.shape[:2]
-        self.width_meters = width_px * meters_per_pixel
-        self.height_meters = height_px * meters_per_pixel
+        height_pixels, width_pixels = traversability_image.shape[:2]
+        self.width_meters = width_pixels * meters_per_pixel
+        self.height_meters = height_pixels * meters_per_pixel
 
-    #=====# Loading #=====#
+    #===============# Loading #===============#
+
     @classmethod
     def load(cls, map_directory: str) -> "GroundMap":
         """Loads a map from a directory containing one yaml file plus the cosmetic/
@@ -83,20 +115,26 @@ class GroundMap:
             regions_lookup=regions_lookup,
         )
 
-    #=====# Sampling #=====#
+
+
+
+
+    #===============# Sampling #===============#
+
     def _pixel_indices_at(self, x: float, y: float) -> tuple | None:
-        """Converts world meters to (row, column) indices into the map's raster
-        images, or None if (x, y) falls outside the mapped area."""
-        height_px, width_px = self.traversability_image.shape[:2]
+        """Converts (x, y) (m, world frame, +y up) to (row, column) indices into the map's
+        raster images (rows increasing downward), or None if (x, y) falls outside the
+        mapped area."""
+        height_pixels, width_pixels = self.traversability_image.shape[:2]
         column = int((x + self.width_meters / 2) / self.meters_per_pixel)
         row_from_bottom = int((y + self.height_meters / 2) / self.meters_per_pixel)
-        row = height_px - 1 - row_from_bottom
-        if 0 <= row < height_px and 0 <= column < width_px:
+        row = height_pixels - 1 - row_from_bottom   # flip: image rows count down from the top
+        if 0 <= row < height_pixels and 0 <= column < width_pixels:
             return row, column
         return None
 
     def traversability_at(self, x: float, y: float) -> TraversabilityType | None:
-        """Returns the TraversabilityType at (x, y), or None if off the mapped area."""
+        """Returns the TraversabilityType at (x, y) (m, world frame), or None if off the mapped area."""
         indices = self._pixel_indices_at(x, y)
         if indices is None:
             return None
@@ -104,20 +142,29 @@ class GroundMap:
         return _nearest_lookup(rgb, self.traversability_lookup) or _DEFAULT_TRAVERSABILITY
 
     def is_blocked(self, x: float, y: float) -> bool:
-        """True if (x, y) is off the mapped area or a declared blocking terrain type."""
+        """True if (x, y) (m, world frame) is off the mapped area or a declared blocking terrain type."""
         terrain = self.traversability_at(x, y)
         return terrain is None or terrain.blocking
 
     def speed_multiplier_at(self, x: float, y: float) -> float:
-        """Returns the speed multiplier at (x, y); 1.0 (no effect) when off-map."""
+        """Returns the speed multiplier at (x, y) (m, world frame); no effect when off-map."""
         terrain = self.traversability_at(x, y)
-        return 1.0 if terrain is None else terrain.speed_multiplier
+        return OFF_MAP_SPEED_MULTIPLIER if terrain is None else terrain.speed_multiplier
 
+
+
+
+
+
+
+#========================================#
+# Color Helpers
+#========================================#
 
 def _hex_to_rgb(hex_color: str) -> tuple:
     """Converts "#rrggbb" to an (r, g, b) tuple of 0-255 ints."""
     hex_color = hex_color.lstrip("#")
-    return tuple(int(hex_color[index:index + 2], 16) for index in (0, 2, 4))
+    return tuple(int(hex_color[offset:offset + 2], HEX_BASE) for offset in HEX_CHANNEL_OFFSETS)
 
 
 def _sample_rgb(image, row: int, column: int) -> tuple:
@@ -125,17 +172,18 @@ def _sample_rgb(image, row: int, column: int) -> tuple:
     regardless of whether the image array is stored as floats in [0, 1] or uint8."""
     pixel = image[row, column]
     if pixel.dtype.kind == "f":
-        return tuple(int(round(channel * 255)) for channel in pixel[:3])
-    return tuple(int(channel) for channel in pixel[:3])
+        return tuple(int(round(channel * COLOR_CHANNEL_MAX)) for channel in pixel[:RGB_CHANNEL_COUNT])
+    return tuple(int(channel) for channel in pixel[:RGB_CHANNEL_COUNT])
 
 
 def _nearest_lookup(rgb: tuple, lookup: dict):
     """Returns lookup[rgb] on an exact match, otherwise the value for the nearest
-    declared color by squared RGB distance -- absorbs PNG anti-aliasing at color
+    declared color by squared RGB distance, absorbing PNG anti-aliasing at color
     boundaries. Returns None if lookup is empty."""
     if rgb in lookup:
         return lookup[rgb]
     if not lookup:
         return None
-    nearest_color = min(lookup, key=lambda color: sum((a - b) ** 2 for a, b in zip(color, rgb)))
+    nearest_color = min(lookup, key=lambda color: sum((declared - sampled) ** 2
+                                                      for declared, sampled in zip(color, rgb)))
     return lookup[nearest_color]

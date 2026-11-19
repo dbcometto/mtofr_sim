@@ -15,11 +15,11 @@ class GroundPlaneHardware(Hardware):
     @abstractmethod
     def calculate_dynamics(self, state: WorldState, controls: dict, dt: float,
                             max_speed_multiplier: float = 1.0) -> WorldState:
-        """Pure: the state after dt, with this vehicle's own max speed scaled by max_speed_multiplier."""
+        """Pure: the state after dt (s), with this vehicle's own max speed scaled by max_speed_multiplier."""
 
     def step_dynamics(self, dt: float, environment: GroundPlaneEnv) -> None:
         """Steps under the terrain's speed multiplier at the current position; if that
-        lands in a blocked cell, keeps the previous pose with velocity zeroed instead --
+        lands in a blocked cell, keeps the previous pose with velocity zeroed instead:
         an approximate "stop at the boundary," fine at the map's raster resolution."""
         # Ground truth, not read_state(): physics shouldn't see the world through the sensor.
         previous_state = self.state

@@ -15,13 +15,14 @@ class _NullWindow:
 
 class MissionEditorFrontseater(Frontseater):
     """Hosts the mission-editor GUI as a side effect of its one capability,
-    show_interface, rather than modeling graph-editing itself as capabilities --
+    show_interface, rather than modeling graph-editing itself as capabilities:
     editing is entirely user-driven, not part of the mission-graph/capability
-    machinery any other platform uses (see mtofr.world.anywhere.platforms.interface.mission_editor for the actual
-    editing logic and mtofr.world.anywhere.platforms.interface.mission_editor.window for the GUI it opens/closes).
-    Never computes real controls; ConsoleHardware ignores them regardless."""
+    machinery any other platform uses (see the sibling mission_editor package for the
+    editing logic and the window it opens/closes). Never computes real controls;
+    ConsoleHardware ignores them regardless."""
 
     def __init__(self, hardware: ConsoleHardware, debug: bool = False):
+        """Registers show_interface; the window factory comes later, from attach()."""
         self.hardware = hardware
         self.backseater = None   # set by Backseater's constructor
         self.debug = debug
@@ -35,7 +36,7 @@ class MissionEditorFrontseater(Frontseater):
             ),
         ])
 
-    #==========# Window wiring #==========#
+    #===============# Window Wiring #===============#
 
     def set_window_factory(self, window_factory: Callable[[], object]) -> None:
         """Supplies the callable that builds this platform's window -- normally
@@ -49,19 +50,24 @@ class MissionEditorFrontseater(Frontseater):
         if window_root is None:
             self.set_window_factory(_NullWindow)
             return
-        # Imported here rather than at module top: window.py pulls in Tk/matplotlib
+        # NOTE: imported here rather than at module top: window.py pulls in Tk/matplotlib
         # (and forces the TkAgg backend), which a headless run never needs.
         from mtofr.world.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
         self.set_window_factory(lambda: MissionEditorWindow(window_root, world, self.platform_id))
 
-    #==========# Capability discovery #==========#
+
+
+
+
+    #===============# Capability Discovery #===============#
 
     def capabilities(self) -> CapabilityRegistry:
+        """The one capability: show_interface."""
         return self._capability_registry
 
     def default_mission_graph(self) -> dict:
         """Always active: a single node with no edges, running show_interface
-        unconditionally -- the "interface platform" pattern from docs/notes.md (note 16)."""
+        unconditionally (the "interface platform" pattern)."""
         return {
             "knowledge": {},
             "nodes": {"operating": {"primitives": {
@@ -71,7 +77,11 @@ class MissionEditorFrontseater(Frontseater):
             "start": "operating",
         }
 
-    #==========# Capability lifecycle #==========#
+
+
+
+
+    #===============# Capability Lifecycle #===============#
 
     def set_active_primitives(self, primitives: dict) -> None:
         """The one entry point Backseater calls -- diffs by whether "interface" is
@@ -91,25 +101,39 @@ class MissionEditorFrontseater(Frontseater):
             if self.debug:
                 print("[Frontseater] show_interface -> window closed")
 
-    #==========# Status introspection #==========#
+
+
+
+
+    #===============# Status Introspection #===============#
 
     def describe_status(self) -> dict:
+        """"showing interface" while the window is open, else "idle"."""
         if self._window is None:
             return {"overall": "idle", "primitives": {}}
         return {"overall": "showing interface", "primitives": {"interface": "open"}}
 
-    #==========# Controls #==========#
+
+
+
+
+    #===============# Controls #===============#
 
     def compute_controls(self, state: WorldState) -> dict:
+        """No controls: the console never moves."""
         return {}
 
-    #==========# Lifecycle #==========#
+
+
+
+
+    #===============# Lifecycle #===============#
 
     def shutdown(self) -> None:
-        """No OS-level resource to tear down here (no worker process, unlike
-        BicycleFrontseater) -- but Platform.shutdown() calls shutdown() on every
-        Frontseater unconditionally at exit, so this must exist. Also closes the window if
-        still open, since Tk widgets should be destroyed before interpreter exit."""
+        """Closes the window if still open, since Tk widgets should be destroyed
+        before interpreter exit. There is no OS-level resource to tear down here, but
+        Platform.shutdown() calls shutdown() on every Frontseater at exit, so this must
+        exist."""
         if self._window is not None:
             self._window.close()
             self._window = None

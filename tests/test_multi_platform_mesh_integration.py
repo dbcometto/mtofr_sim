@@ -1,13 +1,10 @@
-"""End-to-end test for World-driven peer-to-peer mesh sync (mesh redesign increment
-6): ugv2's edge condition references "ugv1/arrived", a fact that originates entirely
-on ugv1's own Knowledge and never existed on ugv2 until World.step()'s pairwise
-sync_with_stale_peers() carried it across — replacing the old Relay-mediated version
-of this same demonstration (test_relay_mission_integration.py, deleted this
-increment). Also covers a privileged Mission write propagating to a peer the same
-way, since Mission entries are gossiped by the same mesh sync."""
+"""End-to-end test for World-driven peer-to-peer mesh sync: ugv2's edge condition
+references "ugv1/arrived", a fact that originates entirely on ugv1's own Knowledge and
+never exists on ugv2 until World.step()'s pairwise sync_with_stale_peers() carries it
+across. Also covers a privileged Mission write propagating to a peer the same way,
+since Mission entries are gossiped by the same mesh sync."""
 import unittest
 
-from mtofr.database import PlatformRecord
 from mtofr.missions import mission_wait_ugv1, mission_wait_ugv2
 from mtofr.world.ground_plane.env import GroundPlaneEnv
 from mtofr.world.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
@@ -29,6 +26,7 @@ def _build_stack(test_case, mission_graph, platform_id, privilege_level=1) -> Pl
 
 class TestMeshMissionIntegration(unittest.TestCase):
     def setUp(self):
+        """Put ugv1 and ugv2, running the WAIT mission set, in one World."""
         ugv1 = _build_stack(self, mission_wait_ugv1, "ugv1")
         ugv2 = _build_stack(self, mission_wait_ugv2, "ugv2")
         self.ugv1_knowledge, self.ugv1_backseater = ugv1.knowledge_database, ugv1.backseater
@@ -36,6 +34,7 @@ class TestMeshMissionIntegration(unittest.TestCase):
         self.world = World(GroundPlaneEnv(), platforms={"ugv1": ugv1, "ugv2": ugv2})
 
     def test_ugv2_never_locally_writes_ugv1_arrived(self):
+        """No primitive in ugv2's graph binds "ugv1/arrived" as an output."""
         # ugv2's mission graph only ever reads "ugv1/arrived" -- nothing in ugv2's
         # own graph declares it as an output, so any value ugv2 sees for that key
         # must have arrived via mesh sync.
@@ -48,12 +47,13 @@ class TestMeshMissionIntegration(unittest.TestCase):
         self.assertNotIn("ugv1/arrived", outputs)
 
     def test_ugv2_waits_until_ugv1_arrives_then_drives_elsewhere_via_mesh_sync(self):
+        """ugv2 leaves stay_at_start for drive_elsewhere once ugv1's arrival reaches it through mesh sync."""
         self.assertEqual(self.ugv2_backseater.active_node_id, "stay_at_start")
 
-        for _ in range(3000):
+        step_count = 0
+        while self.ugv2_backseater.active_node_id != "drive_elsewhere" and step_count < 3000:
             self.world.step(0.1)
-            if self.ugv2_backseater.active_node_id == "drive_elsewhere":
-                break
+            step_count += 1
 
         self.assertTrue(self.ugv1_knowledge.get("ugv1/arrived"))
         self.assertEqual(self.ugv2_backseater.active_node_id, "drive_elsewhere")
@@ -69,7 +69,8 @@ class TestMeshMissionEntryGossipIntegration(unittest.TestCase):
     "real comms boundary" step being deferred); what's networked is a peer's *view*
     of that entry propagating afterward, the same way Knowledge does."""
     def setUp(self):
-        empty_graph = {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
+        """Put a privilege-0 commander and a privilege-1 ugv1, both on empty graphs, in one World."""
+        empty_graph ={"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
         commander = _build_stack(self, empty_graph, "commander", privilege_level=0)
         ugv1 = _build_stack(self, empty_graph, "ugv1", privilege_level=1)
         self.commander_knowledge, self.commander_backseater = commander.knowledge_database, commander.backseater
@@ -77,6 +78,7 @@ class TestMeshMissionEntryGossipIntegration(unittest.TestCase):
         self.world = World(GroundPlaneEnv(), platforms={"commander": commander, "ugv1": ugv1})
 
     def test_a_platforms_mission_entry_reaches_a_peer_via_world_step(self):
+        """ugv1's Mission entry, written there by commander, reaches commander's Mission database via World steps."""
         # One tick first, so ugv1 and commander have already gossiped each other's
         # PlatformRecord -- required for the privilege check inside write_mission().
         self.world.step(0.1)

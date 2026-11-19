@@ -10,14 +10,51 @@ from mtofr.world.anywhere.platforms.interface.agent import config
 from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_prompt import describe_live, describe_world
 from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_session import AssistantSession
 from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox
+from mtofr.world.anywhere.platforms.interface.mission_editor.window import AT_BOTTOM_FRACTION
 
-# How often the Tk thread drains events from the worker thread, in milliseconds.
-EVENT_POLL_MS = 50
 
+#========================================#
+# Config
+#========================================#
+
+EVENT_POLL_MS = 50   # how often the Tk thread drains events from the worker thread
+TOOL_RESULT_POLL_SECONDS = 0.1   # how often a waiting worker checks whether the window closed
+ACTIVITY_BAR_STEP_MS = 15
+
+
+# Layout (px unless noted)
+WINDOW_GEOMETRY = "560x720"
+PAD_SMALL = 4
+PAD_MEDIUM = 6
+PAD_LARGE = 12
+PLATFORM_DROPDOWN_WIDTH = 14   # characters
+ACTIVITY_BAR_LENGTH = 70
+
+
+# Transcript
+TRANSCRIPT_TAG_STYLES = {
+    "user": {"foreground": "#1a4fa0", "font": ("TkDefaultFont", 10, "bold")},
+    "tool": {"foreground": "#6a6a6a", "font": ("TkFixedFont", 9)},
+    "thinking": {"foreground": "#9a9a9a", "font": ("TkDefaultFont", 9, "italic")},
+    "error": {"foreground": "#b00020"},
+    "separator": {"foreground": "#2e7d32", "font": ("TkFixedFont", 9, "bold")},
+}
+TURN_DONE_SEPARATOR = "\n" + "=" * 18 + " done -- waiting for you " + "=" * 18 + "\n"
+
+
+
+
+
+
+
+#========================================#
+# Assistant Window
+#========================================#
 
 class _ToolRequest:
     """A tool call the worker thread needs run on the Tk thread, plus where its result goes."""
     def __init__(self, name: str, arguments: dict):
+        """A pending call of tool `name` with `arguments`."""
         self.name = name
         self.arguments = arguments
         self.result = None
@@ -31,9 +68,10 @@ class AssistantWindow(tk.Toplevel):
     All edits from one user message form a single undo step in the editor."""
 
     def __init__(self, editor, agent_turn=None):
+        """Opens over `editor`, warming up the model unless a fake `agent_turn` is injected."""
         super().__init__(editor)
         self.title("Mission Assistant")
-        self.geometry("560x720")
+        self.geometry(WINDOW_GEOMETRY)
         self.editor = editor
         self.agent_turn = agent_turn   # None = the real Ollama loop; tests inject a fake
         self.toolbox = DraftToolbox(get_draft=lambda: editor.draft, apply_draft=editor.apply_draft_edit,
@@ -46,7 +84,7 @@ class AssistantWindow(tk.Toplevel):
         self._busy = False
         self._poll_job = None
         self._phase = None                  # "reading" / "generating" / "tool" while a turn runs, for the live status line
-        self._phase_started = 0.0           # time.monotonic() when the phase began
+        self._phase_started = 0.0           # time.monotonic() (s) when the phase began
         self._segment = None                # kind of text last written ("thinking"/"content"/"tool"), for line breaks between kinds
         self._noted_target = editor.target_platform_id.get()   # last target platform written to the transcript
         self._pending_tool_arguments = ""   # formatted args of the tool call awaiting its result, for the Console line
@@ -66,53 +104,56 @@ class AssistantWindow(tk.Toplevel):
             self._start_warm_up()
         self._poll_job = self.after(EVENT_POLL_MS, self._poll)
 
-    #==========# Layout #==========#
+    #===============# Layout #===============#
 
     def _build_layout(self) -> None:
+        """Builds the target dropdown, the transcript, and the input/button row."""
         top = ttk.Frame(self)
-        top.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 0))
-        ttk.Label(top, text="Target platform:").pack(side=tk.LEFT, padx=(0, 4))
-        self.platform_dropdown = ttk.Combobox(top, values=list(self.editor.world.platforms), state="readonly", width=14,
+        top.pack(side=tk.TOP, fill=tk.X, padx=PAD_MEDIUM, pady=(PAD_MEDIUM, 0))
+        ttk.Label(top, text="Target platform:").pack(side=tk.LEFT, padx=(0, PAD_SMALL))
+        self.platform_dropdown = ttk.Combobox(top, values=list(self.editor.world.platforms), state="readonly",
+                                              width=PLATFORM_DROPDOWN_WIDTH,
                                               textvariable=self.editor.target_platform_id)
         self.platform_dropdown.pack(side=tk.LEFT)
         self.platform_dropdown.bind("<<ComboboxSelected>>", lambda event: self.editor._on_target_platform_changed())
 
+
+        # Input and buttons
         bottom = ttk.Frame(self)
-        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=6)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=PAD_MEDIUM, pady=PAD_MEDIUM)
         self.input_entry = ttk.Entry(bottom)
-        self.input_entry.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
+        self.input_entry.pack(side=tk.TOP, fill=tk.X, pady=(0, PAD_SMALL))
         self.input_entry.bind("<Return>", lambda event: self._on_send())
         buttons = ttk.Frame(bottom)
         buttons.pack(side=tk.TOP, fill=tk.X)
         self.send_button = ttk.Button(buttons, text="Send", command=self._on_send)
-        self.send_button.pack(side=tk.LEFT, padx=(0, 4))
+        self.send_button.pack(side=tk.LEFT, padx=(0, PAD_SMALL))
         self.stop_button = ttk.Button(buttons, text="Stop", command=self._on_stop, state="disabled")
-        self.stop_button.pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="New Chat", command=self._on_new_chat).pack(side=tk.LEFT, padx=4)
-        ttk.Checkbutton(buttons, text="Enable thinking (slower)", variable=self.think).pack(side=tk.LEFT, padx=12)
+        self.stop_button.pack(side=tk.LEFT, padx=PAD_SMALL)
+        ttk.Button(buttons, text="New Chat", command=self._on_new_chat).pack(side=tk.LEFT, padx=PAD_SMALL)
+        ttk.Checkbutton(buttons, text="Enable thinking (slower)", variable=self.think).pack(side=tk.LEFT, padx=PAD_LARGE)
         ttk.Label(buttons, textvariable=self.status_text).pack(side=tk.RIGHT)
         # Moves while a turn runs, so a long silent stretch (e.g. the model writing a tool call) still shows the window is alive.
-        self.activity_bar = ttk.Progressbar(buttons, mode="indeterminate", length=70)
-        self.activity_bar.pack(side=tk.RIGHT, padx=6)
+        self.activity_bar = ttk.Progressbar(buttons, mode="indeterminate", length=ACTIVITY_BAR_LENGTH)
+        self.activity_bar.pack(side=tk.RIGHT, padx=PAD_MEDIUM)
 
+
+        # Transcript
         text_frame = ttk.Frame(self)
-        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
+        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=PAD_MEDIUM, pady=(PAD_MEDIUM, 0))
         self.transcript = tk.Text(text_frame, state="disabled", wrap="word")
         scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.transcript.yview)
         self.transcript.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.transcript.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.transcript.tag_configure("user", foreground="#1a4fa0", font=("TkDefaultFont", 10, "bold"))
-        self.transcript.tag_configure("tool", foreground="#6a6a6a", font=("TkFixedFont", 9))
-        self.transcript.tag_configure("thinking", foreground="#9a9a9a", font=("TkDefaultFont", 9, "italic"))
-        self.transcript.tag_configure("error", foreground="#b00020")
-        self.transcript.tag_configure("separator", foreground="#2e7d32", font=("TkFixedFont", 9, "bold"))
+        for tag, style in TRANSCRIPT_TAG_STYLES.items():
+            self.transcript.tag_configure(tag, **style)
 
     def _append(self, text: str, tag: str = None, segment: str = None) -> None:
         """Appends to the transcript. Follows the output only if the user was already scrolled to the bottom,
         so scrolling up to read earlier text isn't yanked back down. `segment` starts a new line (and, after
         thinking, a blank line) whenever the kind of text changes."""
-        at_bottom = self.transcript.yview()[1] >= 0.999
+        at_bottom = self.transcript.yview()[1] >= AT_BOTTOM_FRACTION
         self.transcript.configure(state="normal")
         if segment is not None and segment != self._segment:
             if self.transcript.get("end-2c", "end-1c") not in ("\n", ""):
@@ -137,9 +178,14 @@ class AssistantWindow(tk.Toplevel):
             self._noted_target = target_id
             self._append(f"[target platform: {target_id}]\n", "tool", segment="tool")
 
-    #==========# User actions #==========#
+
+
+
+
+    #===============# User Actions #===============#
 
     def _on_send(self) -> None:
+        """Starts a turn on a worker thread for the typed request, as one undo group."""
         user_text = self.input_entry.get().strip()
         if not user_text or self._busy or str(self.send_button.cget("state")) == "disabled":
             return
@@ -162,10 +208,12 @@ class AssistantWindow(tk.Toplevel):
         threading.Thread(target=self._run_turn_worker, args=arguments, daemon=True).start()
 
     def _on_stop(self) -> None:
+        """Asks the running turn to stop at its next chunk."""
         self._stop_requested.set()
         self.status_text.set("Stopping...")
 
     def _on_new_chat(self) -> None:
+        """Forgets the conversation and clears the transcript (not while a turn runs)."""
         if self._busy:
             return
         self.session.reset()
@@ -174,12 +222,13 @@ class AssistantWindow(tk.Toplevel):
         self.transcript.configure(state="disabled")
 
     def _set_busy(self, busy: bool) -> None:
+        """Enables/disables the controls and the activity bar for a running turn."""
         self._busy = busy
         self.stop_button.config(state="normal" if busy else "disabled")
         self.platform_dropdown.config(state="disabled" if busy else "readonly")   # the target is captured at Send
         self._phase = None
         if busy:
-            self.activity_bar.start(15)
+            self.activity_bar.start(ACTIVITY_BAR_STEP_MS)
             self.status_text.set("Working...")
         else:
             self.activity_bar.stop()
@@ -205,10 +254,15 @@ class AssistantWindow(tk.Toplevel):
         if self.status_text.get() != text:
             self.status_text.set(text)
 
-    #==========# Worker thread #==========#
+
+
+
+
+    #===============# Worker Thread #===============#
     # Nothing below this line may touch Tk widgets; it only puts events on self._events.
 
     def _run_turn_worker(self, user_text, draft, registry, target_id, think, world_description) -> None:
+        """Runs one session turn, reporting through the event queue and ending with a "done" event."""
         error = None
         try:
             self.session.run_turn(
@@ -227,7 +281,7 @@ class AssistantWindow(tk.Toplevel):
         """Hands a tool call to the Tk thread and blocks until it has run."""
         request = _ToolRequest(name, arguments)
         self._events.put(("tool", request))
-        while not request.done.wait(0.1):
+        while not request.done.wait(TOOL_RESULT_POLL_SECONDS):
             if self._closed.is_set():
                 return "Error: the assistant window was closed."
         return request.result
@@ -235,6 +289,7 @@ class AssistantWindow(tk.Toplevel):
     def _start_warm_up(self) -> None:
         """Loads the model in the background so the first request doesn't pay for it."""
         def warm_up_worker():
+            """Runs the warm-up call, reporting a failure as an event."""
             try:
                 from mtofr.world.anywhere.platforms.interface.agent.agent import warm_up
                 warm_up(self.session.messages, tools=self.toolbox.schemas, options=self.session.options)
@@ -242,9 +297,14 @@ class AssistantWindow(tk.Toplevel):
                 self._events.put(("emit", "warm_up_failed", f"{type(exception).__name__}: {exception}"))
         threading.Thread(target=warm_up_worker, daemon=True).start()
 
-    #==========# Tk thread event handling #==========#
+
+
+
+
+    #===============# Tk Thread Event Handling #===============#
 
     def _poll(self) -> None:
+        """Drains every queued event, refreshes the status line, and reschedules itself until closed."""
         self._poll_job = None
         try:
             while True:
@@ -256,6 +316,7 @@ class AssistantWindow(tk.Toplevel):
             self._poll_job = self.after(EVENT_POLL_MS, self._poll)
 
     def _handle_event(self, event: tuple) -> None:
+        """Runs a tool request, finishes a turn, or forwards an emit to _handle_emit()."""
         if event[0] == "tool":
             request = event[1]
             try:
@@ -269,11 +330,12 @@ class AssistantWindow(tk.Toplevel):
             if event[1]:
                 self._append(f"{event[1]}\n", "error")
                 self.editor._log(f"[assistant] {event[1]}")
-            self._append("\n" + "=" * 18 + " done -- waiting for you " + "=" * 18 + "\n", "separator", segment="separator")
+            self._append(TURN_DONE_SEPARATOR, "separator", segment="separator")
         else:
             self._handle_emit(event[1], event[2])
 
     def _handle_emit(self, kind: str, data) -> None:
+        """Writes one agent-loop report to the transcript and/or the editor's Console."""
         if kind == "loop":
             self._set_phase("reading")   # the model processes its whole input before the first token
             if data["iteration"] == 1:
@@ -288,7 +350,7 @@ class AssistantWindow(tk.Toplevel):
             self._append(data, segment="content")
         elif kind == "tool_call":
             self._set_phase("tool")
-            self._pending_tool_arguments =", ".join(f"{name}={value!r}" for name, value in data["arguments"].items())
+            self._pending_tool_arguments = ", ".join(f"{name}={value!r}" for name, value in data["arguments"].items())
             self._append(f"  > {data['name']}({self._pending_tool_arguments})\n", "tool", segment="tool")
         elif kind == "tool_result":
             self._append(f"  = {data['result']}\n", "tool", segment="tool")
@@ -311,7 +373,11 @@ class AssistantWindow(tk.Toplevel):
         elif kind == "warm_up_failed":
             self._append(f"Model warm-up failed: {data}\n", "error")
 
-    #==========# Lifecycle #==========#
+
+
+
+
+    #===============# Lifecycle #===============#
 
     def close(self) -> None:
         """Stops any running turn and destroys the window; tolerant of Tk already being torn down."""

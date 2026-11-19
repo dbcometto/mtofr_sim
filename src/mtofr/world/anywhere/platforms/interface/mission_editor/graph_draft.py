@@ -6,10 +6,26 @@ after every edit instead of returning a stale one keyed off the old identity.
 No Tk dependency -- independently testable from the GUI that calls it."""
 import copy
 
+from mtofr.condition.condition import KEY_FOLLOWER_TOKENS
 
-#==========# Loading #==========#
 
-def blank_graph(start_node_id: str = "start") -> dict:
+#========================================#
+# Config
+#========================================#
+
+DEFAULT_START_NODE_ID = "start"
+
+
+
+
+
+
+
+#========================================#
+# Loading
+#========================================#
+
+def blank_graph(start_node_id: str = DEFAULT_START_NODE_ID) -> dict:
     """A brand-new draft graph: one empty node, no edges."""
     return {"knowledge": {}, "nodes": {start_node_id: {"primitives": {}}}, "edges": {}, "start": start_node_id}
 
@@ -20,9 +36,17 @@ def load_draft(mission_graph: dict) -> dict:
     return copy.deepcopy(mission_graph)
 
 
-#==========# Nodes #==========#
+
+
+
+
+
+#========================================#
+# Nodes
+#========================================#
 
 def add_node(draft: dict, node_id: str) -> dict:
+    """Adds an empty node; raises ValueError if `node_id` already exists."""
     if node_id in draft["nodes"]:
         raise ValueError(f"Node '{node_id}' already exists")
     new_draft = dict(draft)
@@ -31,6 +55,7 @@ def add_node(draft: dict, node_id: str) -> dict:
 
 
 def remove_node(draft: dict, node_id: str) -> dict:
+    """Removes a node plus every edge into or out of it, moving the start to the first remaining node if needed."""
     new_draft = dict(draft)
     nodes = dict(draft["nodes"])
     nodes.pop(node_id, None)
@@ -48,6 +73,7 @@ def remove_node(draft: dict, node_id: str) -> dict:
 
 
 def rename_node(draft: dict, old_id: str, new_id: str) -> dict:
+    """Renames a node, along with every edge source/target and the start that reference it."""
     if old_id not in draft["nodes"]:
         raise ValueError(f"Node '{old_id}' does not exist")
     if new_id in draft["nodes"]:
@@ -72,15 +98,24 @@ def rename_node(draft: dict, old_id: str, new_id: str) -> dict:
 
 
 def set_start_node(draft: dict, node_id: str) -> dict:
+    """Makes `node_id` the start node; raises ValueError if it doesn't exist."""
     if node_id not in draft["nodes"]:
         raise ValueError(f"Node '{node_id}' does not exist")
     return {**draft, "start": node_id}
 
 
-#==========# Primitives #==========#
+
+
+
+
+
+#========================================#
+# Primitives
+#========================================#
 
 def add_primitive(draft: dict, node_id: str, primitive_name: str, capability: str,
                    inputs: dict, outputs: dict) -> dict:
+    """Adds a primitive to a node; raises ValueError if the name is already taken there."""
     node = draft["nodes"][node_id]
     if primitive_name in node["primitives"]:
         raise ValueError(f"Primitive '{primitive_name}' already exists on node '{node_id}'")
@@ -116,6 +151,7 @@ def edit_primitive(draft: dict, node_id: str, old_name: str, new_name: str, capa
 
 
 def remove_primitive(draft: dict, node_id: str, primitive_name: str) -> dict:
+    """Removes a primitive from a node (a missing name is a no-op)."""
     new_draft = dict(draft)
     new_nodes = dict(draft["nodes"])
     new_primitives = dict(new_nodes[node_id]["primitives"])
@@ -125,9 +161,17 @@ def remove_primitive(draft: dict, node_id: str, primitive_name: str) -> dict:
     return new_draft
 
 
-#==========# Edges #==========#
+
+
+
+
+
+#========================================#
+# Edges
+#========================================#
 
 def add_edge(draft: dict, source_id: str, target_id: str, condition: list) -> dict:
+    """Appends an edge to the end of `source_id`'s edge list (checked last)."""
     new_draft = dict(draft)
     new_edges = dict(draft["edges"])
     new_edges[source_id] = [*new_edges.get(source_id, []), {"condition": condition, "to": target_id}]
@@ -140,21 +184,12 @@ def edit_edge(draft: dict, source_id: str, index: int, new_source_id: str, new_t
     """Replaces an existing edge in place -- removes the edge at `index` in
     `source_id`'s list, then adds the edited version (possibly under a different
     source/target) back, same as remove_edge followed by add_edge in one step."""
-    new_draft = dict(draft)
-    new_edges = dict(draft["edges"])
-    edge_list = [dict(edge) for edge in new_edges.get(source_id, [])]
-    del edge_list[index]
-    if edge_list:
-        new_edges[source_id] = edge_list
-    else:
-        new_edges.pop(source_id, None)
-
-    new_edges[new_source_id] = [*new_edges.get(new_source_id, []), {"condition": condition, "to": new_target_id}]
-    new_draft["edges"] = new_edges
-    return new_draft
+    new_draft = remove_edge(draft, source_id, index)
+    return add_edge(new_draft, new_source_id, new_target_id, condition)
 
 
 def remove_edge(draft: dict, source_id: str, index: int) -> dict:
+    """Removes the edge at `index` in `source_id`'s list, dropping the list once empty."""
     new_draft = dict(draft)
     new_edges = dict(draft["edges"])
     edge_list = [dict(edge) for edge in new_edges.get(source_id, [])]
@@ -167,9 +202,17 @@ def remove_edge(draft: dict, source_id: str, index: int) -> dict:
     return new_draft
 
 
-#==========# Knowledge #==========#
+
+
+
+
+
+#========================================#
+# Knowledge
+#========================================#
 
 def add_knowledge_key(draft: dict, key: str, entry_type: type, value) -> dict:
+    """Declares a new knowledge key; raises ValueError if it's already declared."""
     if key in draft["knowledge"]:
         raise ValueError(f"Knowledge key '{key}' already declared")
     new_draft = dict(draft)
@@ -189,18 +232,15 @@ def edit_knowledge_key(draft: dict, key: str, entry_type: type, value) -> dict:
     return new_draft
 
 
-# A key token in a pre-tokenized condition (see mtofr.condition.condition) is
-# always immediately followed by a comparison operator or "is" -- the grammar
-# never places a literal value there (after key+operator+value, the next token
-# must be "and"/"or"/")"/end) -- so this positional check identifies exactly the
-# key-reference tokens, with no risk of renaming a same-valued string literal.
-_CONDITION_OPERATOR_TOKENS = {"==", "!=", "<", "<=", ">", ">=", "is"}
-
-
 def _rename_key_in_condition(condition: list, old_key: str, new_key: str) -> list:
+    """Renames every key-reference token equal to `old_key` in a pre-tokenized condition."""
+    # NOTE: a key token is always immediately followed by a comparison operator or
+    # "is" (see KEY_FOLLOWER_TOKENS); the grammar never places a literal value there,
+    # so this positional check identifies exactly the key-reference tokens, with no
+    # risk of renaming a same-valued string literal.
     renamed = list(condition)
     for index, token in enumerate(renamed[:-1]):
-        if token == old_key and renamed[index + 1] in _CONDITION_OPERATOR_TOKENS:
+        if token == old_key and renamed[index + 1] in KEY_FOLLOWER_TOKENS:
             renamed[index] = new_key
     return renamed
 
@@ -217,10 +257,14 @@ def rename_knowledge_key(draft: dict, old_key: str, new_key: str) -> dict:
 
     new_draft = dict(draft)
 
+
+    # Declaration
     knowledge = dict(draft["knowledge"])
     knowledge[new_key] = knowledge.pop(old_key)
     new_draft["knowledge"] = knowledge
 
+
+    # Primitive bindings
     new_nodes = {}
     for node_id, node in draft["nodes"].items():
         new_primitives = {}
@@ -235,6 +279,8 @@ def rename_knowledge_key(draft: dict, old_key: str, new_key: str) -> dict:
         new_nodes[node_id] = {"primitives": new_primitives}
     new_draft["nodes"] = new_nodes
 
+
+    # Edge conditions
     new_edges = {}
     for source_id, edge_list in draft["edges"].items():
         new_edges[source_id] = [
@@ -243,10 +289,12 @@ def rename_knowledge_key(draft: dict, old_key: str, new_key: str) -> dict:
         ]
     new_draft["edges"] = new_edges
 
+
     return new_draft
 
 
 def remove_knowledge_key(draft: dict, key: str) -> dict:
+    """Removes a knowledge key's declaration (references to it are left for validation to flag)."""
     new_draft = dict(draft)
     knowledge = dict(draft["knowledge"])
     knowledge.pop(key, None)

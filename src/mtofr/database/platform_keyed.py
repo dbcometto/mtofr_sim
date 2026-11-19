@@ -9,23 +9,25 @@ from mtofr.capability.capability import CapabilityRegistry
 from mtofr.condition.condition import parse_condition
 
 
-#==========# Shared base #==========#
+#========================================#
+# Shared Base
+#========================================#
 
 class PlatformKeyedDatabase:
     """One value per platform_id, type-locked to a single fixed type declared by a
-    subclass's `value_type` — unlike KnowledgeDatabase, which locks a type per
-    arbitrary key, every entry here is the same shape (a mission graph, a capability
-    registry snapshot, a status). Every declare/set records a timestamp (defaulting to
+    subclass's `value_type`. Unlike KnowledgeDatabase, which locks a type per
+    arbitrary key, every entry here is the same shape (a mission graph, a platform
+    record). Every declare/set records a timestamp (seconds, local clock frame;
     wall-clock time if not given) and an origin_platform_id (the platform that held
-    this entry at its most recently locally-converted timestamp, transitively) — this
-    is what a future mesh sync's last-write-wins conflict resolution and privilege
-    checks will key off of."""
+    this entry at its most recently locally-converted timestamp, transitively), which
+    mesh sync's last-write-wins conflict resolution keys off."""
 
     value_type: type = object
 
     def __init__(self):
+        """Starts empty."""
         self._entries = {}     # platform_id -> current value
-        self._timestamps = {}  # platform_id -> timestamp of the value currently stored
+        self._timestamps = {}  # platform_id -> timestamp (s, local frame) of the value currently stored
         self._origins = {}     # platform_id -> origin_platform_id of the value currently stored
 
     def declare(self, platform_id: str, value, timestamp: float = None, origin_platform_id: str = None) -> None:
@@ -47,11 +49,12 @@ class PlatformKeyedDatabase:
         self._origins[platform_id] = origin_platform_id
 
     def get(self, platform_id: str):
+        """Returns `platform_id`'s current value; raises KeyError if it hasn't been declared."""
         return self._entries[platform_id]
 
     def timestamp_of(self, platform_id: str) -> float | None:
-        """Returns the timestamp of the value currently stored for `platform_id`, or
-        None if it hasn't been declared."""
+        """Returns the timestamp (s, local frame) of the value currently stored for
+        `platform_id`, or None if it hasn't been declared."""
         return self._timestamps.get(platform_id)
 
     def origin_of(self, platform_id: str) -> str | None:
@@ -65,13 +68,21 @@ class PlatformKeyedDatabase:
         return dict(self._entries)
 
     def _check_type(self, value) -> None:
+        """Raises ValueError if `value` isn't an instance of this database's `value_type`."""
         if not isinstance(value, self.value_type):
             raise ValueError(
                 f"{type(self).__name__} expected {self.value_type.__name__}, got {type(value).__name__}"
             )
 
 
-#==========# Mission #==========#
+
+
+
+
+
+#========================================#
+# Mission
+#========================================#
 
 class MissionDatabase(PlatformKeyedDatabase):
     """Keyed by platform_id, one mission_graph value per platform. Direct declare()/set()
@@ -94,6 +105,8 @@ def verify_mission_structure(mission_graph: dict) -> None:
     Primitive bindings are checked here (not only at Backseater's bind time) so a bad graph is
     rejected at push instead of being accepted and then halting the running mission."""
     declared_keys = set(mission_graph.get("knowledge", {}).keys())
+
+    # Collect every key an edge condition or a primitive binding references
     referenced_keys = set()
     for edges in mission_graph.get("edges", {}).values():
         for edge in edges:
@@ -103,6 +116,7 @@ def verify_mission_structure(mission_graph: dict) -> None:
             referenced_keys |= set(primitive.get("inputs", {}).values())
             referenced_keys |= set(primitive.get("outputs", {}).values())
 
+
     missing_keys = referenced_keys - declared_keys
     if missing_keys:
         raise MissionStructuralError(
@@ -110,7 +124,14 @@ def verify_mission_structure(mission_graph: dict) -> None:
         )
 
 
-#==========# Platform #==========#
+
+
+
+
+
+#========================================#
+# Platform
+#========================================#
 
 @dataclass(frozen=True)
 class PlatformStatus:
@@ -132,11 +153,11 @@ class PlatformRecord:
 
 
 class PlatformDatabase(PlatformKeyedDatabase):
-    """Keyed by platform_id, one PlatformRecord per platform — self-write-only once mesh
-    sync exists, but that restriction isn't enforced yet (except for privilege_level,
-    which is never self-write-only even once sync exists: only a strictly
-    higher-privilege platform may change it). Gossiped across the mesh (once sync
-    exists) so an operator/LLM can observe a remote platform's health, capabilities, or
-    privilege level without local access. This is also the lookup Backseater's Mission
-    write gate uses to resolve both sides' privilege levels."""
+    """Keyed by platform_id, one PlatformRecord per platform, gossiped across the mesh so
+    an operator/LLM can observe a remote platform's health, capabilities, or privilege
+    level without local access. Also the lookup Backseater's Mission write gate uses to
+    resolve both sides' privilege levels."""
+    # TODO: status and capabilities are meant to be self-write-only, but that isn't
+    # enforced yet (privilege_level is the exception: only a strictly higher-privilege
+    # platform may change it).
     value_type = PlatformRecord

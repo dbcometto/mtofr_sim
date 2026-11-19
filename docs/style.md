@@ -29,6 +29,7 @@ This document describes the desired code style.
 ## Tests
 
 - Stdlib `unittest` only (no pytest), one flat `tests/` directory.
+- Rule 7 applies to tests too: every `test_*` method and helper gets a one-line docstring saying what it verifies.
 - Any test that constructs a `Frontseater` owning a real OS-level resource (currently `BicycleFrontseater`'s MPC worker process and queues) must tear it down explicitly with `tearDown()` or `self.addCleanup(frontseater.shutdown)` (`platform.shutdown` for a `Platform`), never relying on garbage collection: the whole suite runs in one process, where GC-timed cleanup can crash the interpreter.  A helper that builds the stack per test takes the `TestCase` (`self`) and registers the cleanup itself.
 - Tests that open Tk windows skip when no display is available (`TK_AVAILABLE` guard).
 

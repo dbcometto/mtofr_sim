@@ -11,11 +11,13 @@ from mtofr.world.anywhere.platforms.interface.mission_editor.serialization impor
 
 class TestMissionGraphSerialization(unittest.TestCase):
     def setUp(self):
+        """Create a temporary directory (cleaned up after the test) and a graph file path inside it."""
         self._temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp_dir.cleanup)
         self.file_path = Path(self._temp_dir.name) / "graph.json"
 
     def test_round_trips_a_graph_with_plain_and_location_knowledge_types(self):
+        """Saving then loading preserves plain and Location knowledge types/values, nodes, edges, and start."""
         graph = {
             "knowledge": {
                 "arrived": {"type": bool, "value": False},

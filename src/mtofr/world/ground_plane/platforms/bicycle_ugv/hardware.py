@@ -4,6 +4,27 @@ from mtofr.world.ground_plane.hardware import GroundPlaneHardware
 from mtofr.world.ground_plane.platforms.bicycle_ugv.dynamics import bicycle_step
 
 
+#========================================#
+# Config
+#========================================#
+
+DEFAULT_WHEELBASE = 0.33   # m, F1Tenth-class
+DEFAULT_MIN_SPEED = -2.0   # m/s
+DEFAULT_MAX_SPEED = 8.0    # m/s
+DEFAULT_MIN_STEER = -0.4   # rad
+DEFAULT_MAX_STEER = 0.4    # rad
+IDLE_CONTROLS = {"vel": 0.0, "steer": 0.0}   # stopped, wheels straight
+
+
+
+
+
+
+
+#========================================#
+# Hardware
+#========================================#
+
 class BicycleHardware(GroundPlaneHardware):
     """The MCU/actuator-equivalent layer for a UGV with bicycle dynamics. Uses
     GroundPlaneHardware's default (wheeled-vehicle) terrain response as-is.
@@ -12,19 +33,21 @@ class BicycleHardware(GroundPlaneHardware):
     - "vel": desired forward speed in m/s
     - "steer": desired steering angle in rad around +z
     """
-    def __init__(self, wheelbase=0.33, min_speed=-2.0, max_speed=8.0,
-                 min_steer=-0.4, max_steer=0.4, initial_state: WorldState = None):
+    def __init__(self, wheelbase=DEFAULT_WHEELBASE, min_speed=DEFAULT_MIN_SPEED, max_speed=DEFAULT_MAX_SPEED,
+                 min_steer=DEFAULT_MIN_STEER, max_steer=DEFAULT_MAX_STEER, initial_state: WorldState = None):
+        """A stopped vehicle at `initial_state` (the origin by default) with the given limits."""
         super().__init__()
-        self.wheelbase = wheelbase
-        self.min_speed = min_speed
-        self.max_speed = max_speed
-        self.min_steer = min_steer
-        self.max_steer = max_steer
+        self.wheelbase = wheelbase   # m
+        self.min_speed = min_speed   # m/s
+        self.max_speed = max_speed   # m/s
+        self.min_steer = min_steer   # rad
+        self.max_steer = max_steer   # rad
         self.state = initial_state or WorldState()
-        self._pending_controls = {"vel": 0.0, "steer": 0.0}
+        self._pending_controls = dict(IDLE_CONTROLS)
 
     def calculate_dynamics(self, state: WorldState, controls: dict, dt: float,
                             max_speed_multiplier: float = 1.0) -> WorldState:
+        """One bicycle_step() of dt (s) under `controls`, with max speed scaled by the terrain multiplier."""
         x, y, theta, vx, vy, vtheta = bicycle_step(
             state.x, state.y, state.theta, controls["vel"], controls["steer"],
             self.wheelbase, self.min_speed, self.max_speed * max_speed_multiplier,

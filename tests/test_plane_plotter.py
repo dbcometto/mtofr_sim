@@ -14,6 +14,7 @@ from mtofr.maps.ground_map import GroundMap, TraversabilityType, RegionType
 
 class TestPlanePlotter(unittest.TestCase):
     def setUp(self):
+        """Build a map-less PlanePlotter, an Axes to draw on, and two platform states."""
         self.fig, self.ax = plt.subplots()
         self.plotter = PlanePlotter()
         self.states = {
@@ -22,37 +23,45 @@ class TestPlanePlotter(unittest.TestCase):
         }
 
     def tearDown(self):
+        """Close the test figure."""
         plt.close(self.fig)
 
     def test_is_an_environment_viewer(self):
+        """PlanePlotter is an EnvironmentViewer."""
         self.assertIsInstance(self.plotter, EnvironmentViewer)
 
     def test_configure_ax_sets_limits(self):
+        """configure_ax() applies the plotter's own x and y limits to the Axes."""
         self.plotter.configure_ax(self.ax)
         self.assertEqual(self.ax.get_xlim(), self.plotter.xlim)
         self.assertEqual(self.ax.get_ylim(), self.plotter.ylim)
 
     def test_render_draws_a_marker_per_platform(self):
+        """render() creates one marker per platform state."""
         self.plotter.render(self.ax, self.states, selected_id="ugv1")
         self.assertEqual(set(self.plotter.markers), {"ugv1", "ugv2"})
 
     def test_render_highlights_selected_platform(self):
+        """The selected platform's marker is drawn larger than the others."""
         self.plotter.render(self.ax, self.states, selected_id="ugv1")
         selected_size = self.plotter.markers["ugv1"].get_markersize()
         unselected_size = self.plotter.markers["ugv2"].get_markersize()
         self.assertGreater(selected_size, unselected_size)
 
     def test_render_with_no_selection_does_not_raise(self):
+        """render() works with no platform selected."""
         self.plotter.render(self.ax, self.states, selected_id=None)
 
     def test_render_with_empty_states_does_not_raise(self):
+        """render() works with no platforms at all."""
         self.plotter.render(self.ax, {}, selected_id=None)
 
     def test_heading_marker_stays_a_fixed_pixel_distance_from_the_dot_across_zoom(self):
         """The heading marker is offset from the dot by a fixed number of points, not
         a fixed number of data units -- so its on-screen (pixel) distance from the dot
-        should be the same whether zoomed in or out, unlike the old data-space arrow."""
+        should be the same whether zoomed in or out."""
         def pixel_distance():
+            """Render, then return the on-screen distance in pixels between ugv1's dot and heading marker."""
             self.plotter.render(self.ax, self.states, selected_id="ugv1")
             dot_display = self.ax.transData.transform(self.plotter.markers["ugv1"].get_data())
             heading_display = self.ax.transData.transform(self.plotter.arrows["ugv1"].get_data())
@@ -68,10 +77,12 @@ class TestPlanePlotter(unittest.TestCase):
         self.assertAlmostEqual(zoomed_out_distance, zoomed_in_distance, places=3)
 
     def test_background_color_defaults_to_white_with_no_map(self):
+        """Without a map the background is white."""
         self.assertEqual(self.plotter.background_color, "white")
 
 
 def _tiny_ground_map() -> GroundMap:
+    """Build an all-black 4x4 GroundMap with one passable traversability type and one region."""
     image = np.zeros((4, 4, 3), dtype=float)
     return GroundMap(
         name="tiny", meters_per_pixel=1.0, cosmetic_image=image, traversability_image=image,
@@ -83,38 +94,47 @@ def _tiny_ground_map() -> GroundMap:
 
 class TestPlanePlotterWithGroundMap(unittest.TestCase):
     def setUp(self):
+        """Build a PlanePlotter over the tiny map, an Axes to draw on, and one platform state."""
         self.fig, self.ax = plt.subplots()
         self.ground_map = _tiny_ground_map()
         self.plotter = PlanePlotter(ground_map=self.ground_map)
         self.states = {"ugv1": WorldState(x=0.0, y=0.0, theta=0.0)}
 
     def tearDown(self):
+        """Close the test figure."""
         plt.close(self.fig)
 
     def test_background_color_marks_off_map_area_when_a_map_is_given(self):
+        """With a map the background is not white, so off-map area stands out."""
         self.assertNotEqual(self.plotter.background_color, "white")
 
     def test_configure_ax_uses_map_extent_as_limits(self):
+        """configure_ax() sets the Axes limits to the map's centered extent in meters."""
         self.plotter.configure_ax(self.ax)
         self.assertEqual(self.ax.get_xlim(), (-2.0, 2.0))
         self.assertEqual(self.ax.get_ylim(), (-2.0, 2.0))
 
     def test_render_with_layers_hidden_does_not_raise(self):
+        """render() works with both overlays hidden."""
         self.plotter.render(self.ax, self.states, selected_id="ugv1")
 
     def test_render_with_traversability_shown_does_not_raise(self):
+        """render() works with the traversability overlay shown."""
         self.plotter.render(self.ax, self.states, selected_id="ugv1", show_traversability=True)
 
     def test_render_with_regions_shown_does_not_raise(self):
+        """render() works with the regions overlay shown."""
         self.plotter.render(self.ax, self.states, selected_id="ugv1", show_regions=True)
 
     def test_legend_includes_traversability_swatch_when_shown(self):
+        """With traversability shown, the legend lists both the terrain types and the platforms."""
         self.plotter.render(self.ax, self.states, selected_id="ugv1", show_traversability=True)
         legend_labels = {text.get_text() for text in self.ax.get_legend().get_texts()}
         self.assertIn("clear", legend_labels)
         self.assertIn("ugv1", legend_labels)
 
     def test_legend_omits_traversability_swatch_when_hidden(self):
+        """With traversability hidden, the legend leaves out the terrain types."""
         self.plotter.render(self.ax, self.states, selected_id="ugv1", show_traversability=False)
         legend_labels = {text.get_text() for text in self.ax.get_legend().get_texts()}
         self.assertNotIn("clear", legend_labels)

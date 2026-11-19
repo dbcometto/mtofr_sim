@@ -36,6 +36,7 @@ def _fake_agent_turn(messages, think, emit, tools, run_tool, options, should_sto
 @unittest.skipUnless(TK_AVAILABLE, "no Tk display available in this environment")
 class TestAssistantWindow(unittest.TestCase):
     def setUp(self):
+        """Open a mission editor on a one-UGV world, with an assistant window driven by the fake agent turn."""
         platform = Platform(bicycle_ugv("ugv1", 0.0, 0.0))
         self.frontseater = platform.frontseater
         self.addCleanup(platform.shutdown)
@@ -48,6 +49,7 @@ class TestAssistantWindow(unittest.TestCase):
         self.editor.assistant_window = self.assistant   # so editor.close() tears it down, as the real button path does
 
     def _send(self, text):
+        """Type text into the assistant, send it, and pump Tk until the turn finishes (failing after a timeout)."""
         self.assistant.input_entry.insert(0, text)
         self.assistant._on_send()
         deadline = time.time() + 5
@@ -57,11 +59,13 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertFalse(self.assistant._busy, "turn did not finish")
 
     def test_turn_edits_the_editor_draft_through_the_tools(self):
+        """The agent's tool calls add their nodes to the editor's draft."""
         self._send("add two nodes")
         self.assertIn("b", self.editor.draft["nodes"])
         self.assertIn("c", self.editor.draft["nodes"])
 
     def test_whole_turn_is_one_undo_step(self):
+        """All of a turn's tool edits form a single undo step that restores the pre-turn draft."""
         before = self.editor.draft
         self._send("add two nodes")
         self.assertEqual(len(self.editor.undo_stack), 1)
@@ -69,11 +73,13 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertIs(self.editor.draft, before)
 
     def test_manual_edits_after_a_turn_are_separate_undo_steps(self):
+        """A manual edit after a turn gets its own undo step rather than joining the turn's."""
         self._send("add two nodes")
         self.editor.apply_draft_edit(dict(self.editor.draft))
         self.assertEqual(len(self.editor.undo_stack), 2)
 
     def test_tool_steps_are_mirrored_to_console_and_transcript(self):
+        """Each tool call appears in both the editor console and the chat transcript, alongside the request and reply."""
         self._send("add two nodes")
         console = self.editor.console_text.get("1.0", tk.END)
         self.assertIn("[assistant] add_node(node_id='b') -> ok: added node 'b'", console)
@@ -83,11 +89,14 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertIn("Added two nodes.", transcript)
 
     def test_send_is_ignored_while_busy_and_empty_input_does_nothing(self):
+        """Sending with an empty input starts no turn."""
         self.assistant._on_send()
         self.assertFalse(self.assistant._busy)
 
     def test_agent_error_is_reported_and_ui_recovers(self):
+        """A connection failure is reported in transcript and console, and the UI and undo grouping recover."""
         def failing(*args, **kwargs):
+            """Stand in for the agent turn and fail as if Ollama were unreachable."""
             raise ConnectionError("down")
         self.assistant.agent_turn = failing
         self._send("hi")
@@ -98,13 +107,16 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertFalse(self.editor._undo_group_open)
 
     def test_new_chat_clears_history_and_transcript(self):
+        """New chat resets the session to just its system message and empties the transcript."""
         self._send("add two nodes")
         self.assistant._on_new_chat()
         self.assertEqual(len(self.assistant.session.messages), 1)
         self.assertEqual(self.assistant.transcript.get("1.0", tk.END).strip(), "")
 
     def test_thinking_is_always_shown_and_separated_from_the_answer(self):
+        """Thinking text is displayed even with the toggle off, separated from the answer by a blank line."""
         def thinking_turn(messages, think, emit, tools, run_tool, options, should_stop, detect_stall=None):
+            """Emit some thinking, then a final answer, with no tool calls."""
             emit("loop", {"iteration": 1, "max": 5})
             emit("thinking", "pondering")
             emit("content", "The answer.")
@@ -116,11 +128,13 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertIn("pondering\n\nThe answer.", transcript)
 
     def test_done_separator_marks_the_turn_end(self):
+        """A finished turn writes a "done" separator to the transcript and returns the status to Ready."""
         self._send("add two nodes")
         self.assertIn("done -- waiting for you", self.assistant.transcript.get("1.0", tk.END))
         self.assertEqual(self.assistant.status_text.get(), "Ready")
 
     def test_transcript_only_follows_output_when_scrolled_to_the_bottom(self):
+        """The transcript auto-scrolls on new output only if the user was already at the bottom."""
         self.assistant.geometry("560x300")
         self.root.update()
         for number in range(200):
@@ -134,6 +148,7 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertLess(self.assistant.transcript.yview()[1], 0.5)             # scrolled up: left alone
 
     def test_console_only_follows_output_when_scrolled_to_the_bottom(self):
+        """The editor console doesn't jump to new output while the user is scrolled up."""
         for number in range(100):
             self.editor._log(f"entry {number}")
         self.root.update()
@@ -144,6 +159,7 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertLess(self.editor.console_text.yview()[1], 0.5)
 
     def test_target_platform_is_shown_and_changes_are_noted_from_either_dropdown(self):
+        """The transcript notes the target platform, and a change from the editor's dropdown syncs to the assistant's."""
         self.assertIn("[target platform: ugv1]", self.assistant.transcript.get("1.0", tk.END))
         self.assertEqual(self.assistant.platform_dropdown.get(), "ugv1")
         self.editor.target_platform_id.set("ugv2")   # as the editor's own dropdown would
@@ -151,12 +167,14 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertEqual(self.assistant.platform_dropdown.get(), "ugv2")
 
     def test_platform_dropdown_is_locked_while_a_turn_runs(self):
+        """The assistant's platform dropdown is disabled while busy and read-only otherwise."""
         self.assistant._set_busy(True)
         self.assertEqual(str(self.assistant.platform_dropdown.cget("state")), "disabled")
         self.assistant._set_busy(False)
         self.assertEqual(str(self.assistant.platform_dropdown.cget("state")), "readonly")
 
     def test_status_line_counts_the_wait_and_says_why_a_tool_call_is_slow(self):
+        """The status line tracks each phase of a model call, and notes that a tool call shows only once generated."""
         self.assistant._set_busy(True)
         self.assistant._handle_emit("loop", {"iteration": 2, "max": 12})
         self.assertTrue(self.assistant.status_text.get().startswith("Reading prompt..."))
@@ -169,6 +187,7 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertEqual(self.assistant.status_text.get(), "Ready")
 
     def test_model_call_stats_include_total_and_load_time_in_console_and_transcript(self):
+        """Per-call stats log prompt, total, and load times to the console and a short summary to the transcript."""
         self.assistant._handle_emit("stats", {"tokens": 61, "rate": 4.8, "seconds": 13.0, "prompt_tokens": 4336,
                                               "prompt_seconds": 4.0, "load_seconds": 9.0, "total_seconds": 27.0})
         console = self.editor.console_text.get("1.0", tk.END)
@@ -177,11 +196,13 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertIn("(27s, 61 tokens)", self.assistant.transcript.get("1.0", tk.END))
 
     def test_nudge_is_shown_and_logged(self):
+        """A stall nudge appears in the transcript and is logged to the console."""
         self.assistant._handle_emit("nudge", "Make the tool calls now.")
         self.assertIn("[nudge: Make the tool calls now.]", self.assistant.transcript.get("1.0", tk.END))
         self.assertIn("nudged", self.editor.console_text.get("1.0", tk.END))
 
     def test_assistant_button_opens_one_window_and_closing_editor_closes_it(self):
+        """Repeated "Assistant..." clicks reuse one window, and closing the editor destroys it."""
         self.assistant.close()
         self.editor._on_open_assistant()
         first = self.editor.assistant_window

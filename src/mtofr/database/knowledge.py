@@ -1,30 +1,29 @@
-"""Defines KnowledgeDatabase: the arbitrary-key-keyed typed store one Backseater owns
-(as opposed to MissionDatabase/PlatformDatabase in platform_keyed.py, which are keyed by
-platform_id instead of arbitrary key). Concrete entry types (e.g. Location) live in
-knowledge_types.py."""
+"""Defines KnowledgeDatabase: the arbitrary-key typed store one Backseater owns (as opposed
+to MissionDatabase/PlatformDatabase in platform_keyed.py, which are keyed by platform_id).
+Concrete entry types (e.g. Location) live in knowledge_types.py."""
 import time
 
 
 class KnowledgeDatabase:
     """Typed, type-locked store of known entities and values (locations, sensed flags,
     task outputs, etc). Every key must be declared with its type and a default value
-    before it can be read or written — this is what lets a Backseater reject a
-    Frontseater trying to write a wrong-typed value into a key. Currently one instance
-    per backseater; a planner-level Knowledge is expected later too. Every declare/set
-    also records a timestamp (defaulting to wall-clock time if not given) and an
+    before it can be read or written, which is what lets a Backseater reject a
+    Frontseater writing a wrong-typed value into a key. Every declare/set also records a
+    timestamp (seconds, local clock frame; wall-clock time if not given) and an
     origin_platform_id (the platform that held this entry at its most recently
-    locally-converted timestamp, transitively) — this is what lets a mesh sync's
-    last-write-wins conflict resolution and privilege checks work."""
+    locally-converted timestamp, transitively), which mesh sync's last-write-wins
+    conflict resolution keys off."""
 
     def __init__(self):
+        """Starts empty."""
         self._types = {}       # key -> declared type
         self._entries = {}     # key -> current value
-        self._timestamps = {}  # key -> timestamp of the value currently stored
+        self._timestamps = {}  # key -> timestamp (s, local frame) of the value currently stored
         self._origins = {}     # key -> origin_platform_id of the value currently stored
 
-    def declare(self, key: str, type: type, value, timestamp: float = None, origin_platform_id: str = None) -> None:
-        """Locks `key` to `type` for the life of this store and seeds it with `value`."""
-        self._types[key] = type
+    def declare(self, key: str, entry_type: type, value, timestamp: float = None, origin_platform_id: str = None) -> None:
+        """Locks `key` to `entry_type` for the life of this store and seeds it with `value`."""
+        self._types[key] = entry_type
         self._entries[key] = value
         self._timestamps[key] = timestamp if timestamp is not None else time.time()
         self._origins[key] = origin_platform_id
@@ -45,15 +44,15 @@ class KnowledgeDatabase:
 
     def set_or_declare(self, key: str, value, timestamp: float = None, origin_platform_id: str = None) -> None:
         """Behaves like set() if `key` is already declared; otherwise declares it on
-        the fly using `type(value)`. This is the rarely-needed bypass a future
-        replanning flow (a mesh sync pushing a fact no mission graph anticipated) uses
-        instead of the normal declare-before-use discipline."""
+        the fly using `type(value)`. The rare bypass mesh sync uses for a received fact
+        this platform never declared, instead of the normal declare-before-use discipline."""
         if key in self._types:
             self.set(key, value, timestamp=timestamp, origin_platform_id=origin_platform_id)
         else:
             self.declare(key, type(value), value, timestamp=timestamp, origin_platform_id=origin_platform_id)
 
     def get(self, key: str):
+        """Returns the current value of `key`; raises KeyError if it hasn't been declared."""
         return self._entries[key]
 
     def type_of(self, key: str) -> type | None:
@@ -61,8 +60,8 @@ class KnowledgeDatabase:
         return self._types.get(key)
 
     def timestamp_of(self, key: str) -> float | None:
-        """Returns the timestamp of the value currently stored for `key`, or None if
-        it hasn't been declared."""
+        """Returns the timestamp (s, local frame) of the value currently stored for
+        `key`, or None if it hasn't been declared."""
         return self._timestamps.get(key)
 
     def origin_of(self, key: str) -> str | None:
@@ -75,5 +74,6 @@ class KnowledgeDatabase:
         path a visualization tool or human uses to browse a platform's full knowledge."""
         return dict(self._entries)
 
-    def all_of_type(self, cls) -> dict:
-        return {key: value for key, value in self._entries.items() if isinstance(value, cls)}
+    def all_of_type(self, entry_type: type) -> dict:
+        """key -> value for every entry whose value is an instance of `entry_type`."""
+        return {key: value for key, value in self._entries.items() if isinstance(value, entry_type)}

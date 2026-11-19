@@ -10,7 +10,8 @@ def bicycle_step(x: float, y: float, theta: float, vel: float, steer: float, whe
     involved, so this same pure function can run identically inside BicycleHardware
     (real dynamics) and inside the MPC solver's rollout (predicted dynamics) -- including
     inside a separate worker process, where only plain floats need to cross the boundary.
-    Returns (x, y, theta, vx, vy, vtheta)."""
+    Units: x, y, wheelbase in m (world frame); theta, steer in rad; vel, speeds in m/s; dt in s.
+    Returns (x, y, theta, vx, vy, vtheta) in (m, m, rad, m/s, m/s, rad/s), world frame."""
     speed = min(max(vel, min_speed), max_speed)
     steer_clamped = min(max(steer, min_steer), max_steer)
 

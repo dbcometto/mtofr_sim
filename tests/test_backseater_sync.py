@@ -1,11 +1,10 @@
-"""Tests for Backseater.sync_with()/sync_with_stale_peers() (increment 5 of the
-peer-to-peer mesh redesign's build order step 3): pairwise last-write-wins
+"""Tests for Backseater.sync_with()/sync_with_stale_peers(): pairwise last-write-wins
 reconciliation across all three databases (Knowledge/Mission/Platform), the
 per-peer clock handshake, the checksum short-circuit that skips a full reconcile
 when nothing changed since the last sync with a given peer, and the staleness
 gate that decides when a sync is due. No World involved — sync_with()/
 sync_with_stale_peers() are called directly against manually constructed
-Backseaters (mesh redesign increment 5, docs/notes.md note 21)."""
+Backseaters."""
 import unittest
 
 from mtofr.backseater.backseater import Backseater
@@ -23,21 +22,25 @@ class _FakeFrontseater(Frontseater):
     """Fake Frontseater advertising one no-input, no-output capability, just enough
     for Backseater construction — no real MPC/hardware stack needed for sync tests."""
     def __init__(self):
+        """Advertise the one "idle" capability."""
         self.hardware = _FakeHardware()
         self._registry = CapabilityRegistry([
             Capability(ipl_type="idle", description="Does nothing."),
         ])
 
     def compute_controls(self, state) -> dict:
+        """Command nothing."""
         return {}
 
     def capabilities(self) -> CapabilityRegistry:
+        """Return the one-capability ("idle") registry."""
         return self._registry
 
     def set_active_primitives(self, primitives: dict) -> None:
-        pass
+        """Ignore primitive changes; nothing runs."""
 
     def describe_status(self) -> dict:
+        """Report a fixed idle status."""
         return {"overall": "idle", "primitives": {}}
 
 
@@ -45,6 +48,7 @@ _EMPTY_GRAPH = {"knowledge": {}, "nodes": {}, "edges": {}, "start": None}
 
 
 def _make_backseater(platform_id: str, privilege_level: int = 1, sync_interval: float = 1.0) -> Backseater:
+    """Build a Backseater over a fake Frontseater, running a copy of the empty graph."""
     return Backseater(frontseater=_FakeFrontseater(), knowledge_database=KnowledgeDatabase(),
                        mission_graph=dict(_EMPTY_GRAPH), platform_id=platform_id,
                        privilege_level=privilege_level, sync_interval=sync_interval)
@@ -52,6 +56,7 @@ def _make_backseater(platform_id: str, privilege_level: int = 1, sync_interval: 
 
 class TestClockHandshake(unittest.TestCase):
     def test_sync_with_records_a_peer_offset_on_both_sides(self):
+        """After sync_with(), each side has an explicit offset entry for the other."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         ugv1.sync_with(ugv2)
@@ -64,6 +69,7 @@ class TestClockHandshake(unittest.TestCase):
 
 class TestKnowledgeSync(unittest.TestCase):
     def test_pulls_a_peer_only_key_bidirectionally(self):
+        """A key held by only one side ends up on both, in both directions."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         ugv1.knowledge_database.declare("ugv1_only", float, 1.0, timestamp=100.0)
@@ -75,6 +81,7 @@ class TestKnowledgeSync(unittest.TestCase):
         self.assertEqual(ugv1.knowledge_database.get("ugv2_only"), 5)
 
     def test_newer_value_wins_on_both_sides(self):
+        """The peer's newer value replaces the older local one, and both sides agree."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         ugv1.knowledge_database.declare("battery", float, 0.9, timestamp=100.0)
@@ -86,6 +93,7 @@ class TestKnowledgeSync(unittest.TestCase):
         self.assertEqual(ugv2.knowledge_database.get("battery"), 0.5)
 
     def test_older_incoming_value_does_not_overwrite_a_fresher_local_one(self):
+        """The fresher local value is kept and pushed to the peer instead."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         ugv1.knowledge_database.declare("battery", float, 0.9, timestamp=200.0)
@@ -99,6 +107,7 @@ class TestKnowledgeSync(unittest.TestCase):
 
 class TestMissionSync(unittest.TestCase):
     def test_a_platforms_own_mission_graph_is_gossiped_to_a_peer(self):
+        """A platform's own Mission entry reaches the peer as the same graph object."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         graph = {"knowledge": {}, "nodes": {"n1": {"primitives": {}}}, "edges": {}, "start": "n1"}
@@ -109,6 +118,7 @@ class TestMissionSync(unittest.TestCase):
         self.assertIs(ugv2.mission_database.get("ugv1"), graph)
 
     def test_mission_sync_bypasses_the_privilege_gate(self):
+        """A lower-privilege peer's own Mission entry still lands via sync."""
         # ugv2 has lower privilege than ugv1 (higher number = lower privilege), so
         # ugv2 could never call ugv1.write_mission() itself -- but a sync carrying
         # ugv2's own already-published graph must still land, since the gate was
@@ -125,6 +135,7 @@ class TestMissionSync(unittest.TestCase):
 
 class TestPlatformSync(unittest.TestCase):
     def test_platform_records_are_gossiped_bidirectionally(self):
+        """Each side learns the other's PlatformRecord, with its privilege level."""
         ugv1 = _make_backseater("ugv1", privilege_level=2)
         ugv2 = _make_backseater("ugv2", privilege_level=3)
 
@@ -134,6 +145,7 @@ class TestPlatformSync(unittest.TestCase):
         self.assertEqual(ugv2.platform_database.get("ugv1").privilege_level, 2)
 
     def test_a_self_record_is_reconciled_the_same_as_any_other(self):
+        """A platform's fresher self-record beats a peer's stale copy of it, on both sides."""
         # ugv2 holds a stale copy of ugv1's own record (as if echoed back from an
         # earlier sync); ugv1 has since self-published a fresher one. Last-write-wins
         # naturally keeps ugv1's own fresher record with no self-record special-casing.
@@ -152,6 +164,7 @@ class TestPlatformSync(unittest.TestCase):
 
 class TestSyncIsSymmetricAndIdempotent(unittest.TestCase):
     def test_both_sides_converge_to_the_same_state(self):
+        """After one sync, both sides hold the same value with nearly equal timestamps."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         ugv1.knowledge_database.declare("battery", float, 0.9, timestamp=100.0)
@@ -167,6 +180,7 @@ class TestSyncIsSymmetricAndIdempotent(unittest.TestCase):
                                 ugv2.knowledge_database.timestamp_of("battery"), places=3)
 
     def test_a_second_consecutive_sync_skips_the_handshake_via_the_checksum_short_circuit(self):
+        """With nothing changed, a second sync skips the handshake, leaving a sentinel offset untouched."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         ugv1.sync_with(ugv2)
@@ -180,6 +194,7 @@ class TestSyncIsSymmetricAndIdempotent(unittest.TestCase):
         self.assertEqual(ugv1.clock.peer_offset("ugv2"), -12345.0)
 
     def test_a_change_after_the_first_sync_is_still_picked_up_by_a_later_sync(self):
+        """A change since the last sync defeats the checksum: the new key arrives and the handshake reruns."""
         ugv1 = _make_backseater("ugv1")
         ugv2 = _make_backseater("ugv2")
         ugv1.sync_with(ugv2)
@@ -194,6 +209,7 @@ class TestSyncIsSymmetricAndIdempotent(unittest.TestCase):
 
 class TestSyncWithStalePeers(unittest.TestCase):
     def test_a_never_synced_peer_is_synced_immediately(self):
+        """sync_with_stale_peers() syncs a peer it has never synced with, regardless of interval."""
         ugv1 = _make_backseater("ugv1", sync_interval=100.0)
         ugv2 = _make_backseater("ugv2", sync_interval=100.0)
         ugv2.knowledge_database.declare("ugv2_only", int, 5, timestamp=100.0)
@@ -203,6 +219,7 @@ class TestSyncWithStalePeers(unittest.TestCase):
         self.assertEqual(ugv1.knowledge_database.get("ugv2_only"), 5)
 
     def test_a_recently_synced_peer_within_the_interval_is_skipped(self):
+        """A peer synced within sync_interval is skipped, so its new key doesn't arrive."""
         ugv1 = _make_backseater("ugv1", sync_interval=100.0)
         ugv2 = _make_backseater("ugv2", sync_interval=100.0)
         ugv1.sync_with_stale_peers([ugv2])
@@ -213,6 +230,7 @@ class TestSyncWithStalePeers(unittest.TestCase):
         self.assertNotIn("new_key", ugv1.knowledge_database.all())
 
     def test_a_peer_past_the_interval_is_synced_again(self):
+        """A peer whose last sync is older than sync_interval is synced again."""
         ugv1 = _make_backseater("ugv1", sync_interval=100.0)
         ugv2 = _make_backseater("ugv2", sync_interval=100.0)
         ugv1.sync_with_stale_peers([ugv2])

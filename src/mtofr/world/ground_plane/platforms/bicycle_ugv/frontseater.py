@@ -2,15 +2,33 @@
 import multiprocessing
 import numpy as np
 from mtofr.world.base import Frontseater, WorldState
-from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
+from mtofr.world.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware, IDLE_CONTROLS
 from mtofr.world.ground_plane.platforms.bicycle_ugv.mpc import run_mpc_worker
 from mtofr.capability.capability import Capability, ParamSpec, CapabilityRegistry
 from mtofr.database import Location
 
 
+#========================================#
+# Config
+#========================================#
+
+DEFAULT_NAV_HORIZON = 10   # MPC rollout steps
+DEFAULT_NAV_DT = 0.1       # s per MPC rollout step
+WORKER_JOIN_TIMEOUT = 2.0  # s to wait for the MPC worker to exit at shutdown
+
+
+
+
+
+
+
+#========================================#
+# Frontseater
+#========================================#
+
 class BicycleFrontseater(Frontseater):
     """The planning/control brain for a UGV with bicycle dynamics. Runs its internal MPC
-    in a dedicated, persistent worker process (see mtofr.world.ground_plane.platforms.bicycle_ugv.mpc) so that
+    in a dedicated, persistent worker process (see the sibling mpc module) so that
     multiple platforms' solves can overlap instead of serializing on one core -- this
     Frontseater never touches Hardware.state directly, only send_controls/read_state.
     set_active_primitives() is the one entry point Backseater calls; it farms out to
@@ -18,25 +36,38 @@ class BicycleFrontseater(Frontseater):
     below -- a template for what implementing a new Frontseater looks like, not a
     general-purpose capability framework."""
 
-    #==========# Construction #==========#
-    def __init__(self, hardware: BicycleHardware, nav_horizon=10, nav_dt=0.1, debug=False):
-        #-----# Construction parameters #-----#
+    #===============# Construction #===============#
+
+    def __init__(self, hardware: BicycleHardware, nav_horizon=DEFAULT_NAV_HORIZON, nav_dt=DEFAULT_NAV_DT,
+                 debug: bool = False):
+        """Registers the capabilities and starts this platform's MPC worker process."""
+        #----------# Construction Parameters #----------#
+
         self.hardware = hardware
         self.nav_horizon = nav_horizon
-        self.nav_dt = nav_dt
+        self.nav_dt = nav_dt   # s
         self.debug = debug
 
-        #-----# Admin / cascaded state #-----#
+
+
+        #----------# Admin / Cascaded State #----------#
+
         self.backseater = None   # set by Backseater's constructor
         self._awaiting_response = False   # set in begin_update(), consumed in finish_update()
 
-        #-----# MPC target state #-----#
+
+
+        #----------# MPC Target State #----------#
+
         # Single-target only: at most one move_to primitive's target/tolerance drives
         # the MPC solve at a time, regardless of how many primitives are active.
-        self._active_target = None      # Location, live-queried each step while a move_to is active
-        self._active_tolerance = None   # float, live-queried each step while a move_to is active
+        self._active_target = None      # Location (m, world frame), live-queried each step while a move_to is active
+        self._active_tolerance = None   # float (m), live-queried each step while a move_to is active
 
-        #-----# Capability bookkeeping #-----#
+
+
+        #----------# Capability Bookkeeping #----------#
+
         self._active_primitive_specs = {}    # name -> {"capability", "inputs", "outputs"}, as given by Backseater
         self._primitive_runtime_state = {}   # name -> capability-specific state dict, owned by _start/_stop/_step
 
@@ -68,9 +99,12 @@ class BicycleFrontseater(Frontseater):
             ),
         ])
 
-        #-----# MPC worker process #-----#
+
+
+        #----------# MPC Worker Process #----------#
+
         # The worker holds the warm-start solution and avoid-region list resident for
-        # this platform's lifetime -- see run_mpc_worker. daemon=True so a forgotten
+        # this platform's lifetime (see run_mpc_worker). daemon=True so a forgotten
         # shutdown() doesn't keep the interpreter alive on exit.
         self._request_queue = multiprocessing.Queue()
         self._response_queue = multiprocessing.Queue()
@@ -84,9 +118,13 @@ class BicycleFrontseater(Frontseater):
         self._worker_process.start()
 
 
-    #==========# Capability discovery #==========#
+
+
+
+    #===============# Capability Discovery #===============#
 
     def capabilities(self) -> CapabilityRegistry:
+        """move_to, avoid, and stopwatch."""
         return self._capability_registry
 
     def default_mission_graph(self) -> dict:
@@ -107,7 +145,10 @@ class BicycleFrontseater(Frontseater):
         }
 
 
-    #==========# Capability lifecycle #==========#
+
+
+
+    #===============# Capability Lifecycle #===============#
 
     def set_active_primitives(self, primitives: dict) -> None:
         """The one entry point Backseater calls. Diffs `primitives` against what's
@@ -125,6 +166,7 @@ class BicycleFrontseater(Frontseater):
         self._active_primitive_specs = dict(primitives)
 
     def _start(self, name: str, primitive: dict) -> None:
+        """Starts one primitive: reads its inputs and sets up its runtime state."""
         capability, inputs = primitive["capability"], primitive.get("inputs", {})
 
         if capability == "move_to":
@@ -139,7 +181,7 @@ class BicycleFrontseater(Frontseater):
             self._primitive_runtime_state[name] = {}   # instantaneous, not a duration task
 
         elif capability == "stopwatch":
-            self._primitive_runtime_state[name] = {"start_time": self.hardware.read_state().t}
+            self._primitive_runtime_state[name] = {"start_time": self.hardware.read_state().t}   # s, sim time
 
         else:
             raise ValueError(f"Unknown capability: {capability}")
@@ -148,6 +190,7 @@ class BicycleFrontseater(Frontseater):
             print(f"[Frontseater] '{name}' ({capability}) -> started")
 
     def _stop(self, name: str) -> None:
+        """Stops one primitive and drops its runtime state."""
         capability = self._active_primitive_specs[name]["capability"]
 
         if capability == "move_to":
@@ -171,7 +214,7 @@ class BicycleFrontseater(Frontseater):
                 self._active_target = self.backseater.query("knowledge", inputs["target"])
                 self._active_tolerance = self.backseater.query("knowledge", inputs["tolerance"])
                 current_state = self.hardware.read_state()
-                distance = np.hypot(current_state.x - self._active_target.x, current_state.y - self._active_target.y)
+                distance = np.hypot(current_state.x - self._active_target.x, current_state.y - self._active_target.y)   # m
                 state["arrived"] = bool(distance <= self._active_tolerance)
                 if "arrived" in outputs:
                     self.backseater.publish("knowledge", outputs["arrived"], state["arrived"])
@@ -181,12 +224,15 @@ class BicycleFrontseater(Frontseater):
                     self.backseater.publish("knowledge", outputs["registered"], True)
 
             elif capability == "stopwatch":
-                elapsed_time = self.hardware.read_state().t - state["start_time"]
+                elapsed_time = self.hardware.read_state().t - state["start_time"]   # s
                 if "elapsed_time" in outputs:
                     self.backseater.publish("knowledge", outputs["elapsed_time"], elapsed_time)
 
 
-    #==========# Status introspection #==========#
+
+
+
+    #===============# Status Introspection #===============#
 
     def describe_status(self) -> dict:
         """Purely for display -- see Frontseater.describe_status."""
@@ -208,7 +254,10 @@ class BicycleFrontseater(Frontseater):
         return {"overall": overall, "primitives": primitive_lines}
 
 
-    #==========# Controls (internal MPC) #==========#
+
+
+
+    #===============# Controls (Internal MPC) #===============#
 
     def compute_controls(self, state: WorldState) -> dict:
         """Synchronous, single-process reference path: only ever idle here, since the
@@ -216,7 +265,7 @@ class BicycleFrontseater(Frontseater):
         process instead (see World.step(), which calls those, not this). Kept so
         BicycleFrontseater still satisfies Frontseater's abstract interface directly."""
         if self._active_target is None:
-            return {"vel": 0.0, "steer": 0.0}
+            return dict(IDLE_CONTROLS)
         raise NotImplementedError(
             "BicycleFrontseater solves the MPC via its worker process through "
             "begin_update()/finish_update(), not by calling compute_controls() directly."
@@ -231,7 +280,7 @@ class BicycleFrontseater(Frontseater):
         letting independent platforms' solves overlap instead of serializing on one core.
         Also steps every active primitive (capability queries/publishes), since this is
         the same per-tick cadence controls are computed on. If there's no active target,
-        there's nothing to solve -- skip the dispatch and let finish_update() send zero
+        there's nothing to solve -- skip the dispatch and let finish_update() send idle
         controls."""
         self._step_active_primitives()
 
@@ -253,14 +302,17 @@ class BicycleFrontseater(Frontseater):
         begin_update() has already run, so the blocking wait here overlaps with every
         other platform's solve rather than each platform waiting in turn."""
         if not self._awaiting_response:
-            self.hardware.send_controls({"vel": 0.0, "steer": 0.0})
+            self.hardware.send_controls(dict(IDLE_CONTROLS))
             return
 
         result = self._response_queue.get()
         self.hardware.send_controls({"vel": result["vel"], "steer": result["steer"]})
 
 
-    #==========# Lifecycle #==========#
+
+
+
+    #===============# Lifecycle #===============#
 
     def shutdown(self) -> None:
         """Stops this platform's worker process. Not called automatically by anything
@@ -269,9 +321,10 @@ class BicycleFrontseater(Frontseater):
         if not self._worker_process.is_alive():
             return
         self._request_queue.put({"type": "shutdown"})
-        self._worker_process.join(timeout=2.0)
+        self._worker_process.join(timeout=WORKER_JOIN_TIMEOUT)
 
     def __del__(self):
+        """Best-effort shutdown if a caller forgot; never raises during garbage collection."""
         try:
             self.shutdown()
         except Exception:

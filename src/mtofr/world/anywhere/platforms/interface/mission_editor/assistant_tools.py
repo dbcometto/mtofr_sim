@@ -9,7 +9,9 @@ from mtofr.world.anywhere.platforms.interface.mission_editor.serialization impor
 )
 
 
-#==========# Argument coercion #==========#
+#========================================#
+# Argument Coercion
+#========================================#
 
 def _as_json(value, expected_type: type, description: str):
     """Small models often send a nested argument as a JSON string; accept either form."""
@@ -65,7 +67,14 @@ def _as_knowledge_type(type_name: str) -> type:
     return KNOWLEDGE_TYPES_BY_NAME[type_name]
 
 
-#==========# Toolbox #==========#
+
+
+
+
+
+#========================================#
+# Toolbox
+#========================================#
 
 class DraftToolbox:
     """The assistant's tools, bound to one draft via `get_draft()`/`apply_draft(new_draft)`. Every tool is a
@@ -73,6 +82,7 @@ class DraftToolbox:
     `run()` returns "ok: ..." or an "Error: ..." string, never raises, so the model can read it and retry."""
 
     def __init__(self, get_draft, apply_draft, get_capabilities=lambda: None):
+        """Binds the tools to the caller's draft accessors and builds the schemas."""
         self.get_draft = get_draft
         self.apply_draft = apply_draft
         self.get_capabilities = get_capabilities   # the target platform's CapabilityRegistry, or None when unknown
@@ -101,19 +111,23 @@ class DraftToolbox:
             message = error.args[0] if isinstance(error, KeyError) and error.args else error
             return f"Error: {message}"
 
-    #=====# Checks the helpers don't make themselves (they'd raise a bare KeyError/IndexError) #=====#
+    #===============# Checks the Helpers Don't Make Themselves #===============#
+    # (they'd raise a bare KeyError/IndexError, which reads poorly to the model)
 
     def _require_node(self, node_id: str) -> None:
+        """Raises ValueError naming the existing nodes if `node_id` isn't one of them."""
         if node_id not in self.get_draft()["nodes"]:
             raise ValueError(f"node '{node_id}' does not exist. Existing nodes: {list(self.get_draft()['nodes'])}")
 
     def _require_primitive(self, node_id: str, primitive_name: str) -> None:
+        """Raises ValueError if the node or its named primitive doesn't exist."""
         self._require_node(node_id)
         primitives = self.get_draft()["nodes"][node_id]["primitives"]
         if primitive_name not in primitives:
             raise ValueError(f"node '{node_id}' has no primitive '{primitive_name}'. Its primitives: {list(primitives)}")
 
     def _require_edge(self, source_id: str, index) -> int:
+        """Returns `index` as an int (models sometimes send a digit string), or raises ValueError if out of range."""
         edge_list = self.get_draft()["edges"].get(source_id, [])
         if isinstance(index, str):
             index = int(index) if index.strip().lstrip("-").isdigit() else index
@@ -122,6 +136,7 @@ class DraftToolbox:
         return index
 
     def _require_key(self, key: str) -> None:
+        """Raises ValueError naming the declared keys if `key` isn't one of them."""
         if key not in self.get_draft()["knowledge"]:
             raise ValueError(f"knowledge key '{key}' is not declared. Declared keys: {list(self.get_draft()['knowledge'])}")
 
@@ -135,28 +150,41 @@ class DraftToolbox:
         if problems:
             raise ValueError("; ".join(problems))
 
-    #=====# Nodes #=====#
+
+
+
+
+    #===============# Nodes #===============#
 
     def add_node(self, node_id: str) -> str:
+        """Tool: add an empty node."""
         self.apply_draft(graph_draft.add_node(self.get_draft(), node_id))
         return f"ok: added node '{node_id}'"
 
     def remove_node(self, node_id: str) -> str:
+        """Tool: remove a node and every edge touching it."""
         self._require_node(node_id)
         self.apply_draft(graph_draft.remove_node(self.get_draft(), node_id))
         return f"ok: removed node '{node_id}' and every edge touching it"
 
     def rename_node(self, old_id: str, new_id: str) -> str:
+        """Tool: rename a node everywhere it's referenced."""
         self.apply_draft(graph_draft.rename_node(self.get_draft(), old_id, new_id))
         return f"ok: renamed node '{old_id}' to '{new_id}'"
 
     def set_start_node(self, node_id: str) -> str:
+        """Tool: choose the start node."""
         self.apply_draft(graph_draft.set_start_node(self.get_draft(), node_id))
         return f"ok: start node is now '{node_id}'"
 
-    #=====# Primitives #=====#
+
+
+
+
+    #===============# Primitives #===============#
 
     def add_primitive(self, node_id: str, primitive_name: str, capability: str, inputs=None, outputs=None) -> str:
+        """Tool: add a primitive to a node, refusing one the target platform couldn't bind."""
         self._require_node(node_id)
         inputs, outputs = _as_bindings(inputs, "inputs"), _as_bindings(outputs, "outputs")
         self._require_bindable(capability, inputs, outputs)
@@ -164,6 +192,7 @@ class DraftToolbox:
         return f"ok: added primitive '{primitive_name}' ({capability}) to node '{node_id}'"
 
     def edit_primitive(self, node_id: str, old_name: str, new_name: str, capability: str, inputs=None, outputs=None) -> str:
+        """Tool: replace (and optionally rename) a primitive, refusing one the target platform couldn't bind."""
         self._require_primitive(node_id, old_name)
         inputs, outputs = _as_bindings(inputs, "inputs"), _as_bindings(outputs, "outputs")
         self._require_bindable(capability, inputs, outputs)
@@ -171,19 +200,26 @@ class DraftToolbox:
         return f"ok: node '{node_id}' primitive '{old_name}' is now '{new_name}' ({capability})"
 
     def remove_primitive(self, node_id: str, primitive_name: str) -> str:
+        """Tool: remove a primitive from a node."""
         self._require_primitive(node_id, primitive_name)
         self.apply_draft(graph_draft.remove_primitive(self.get_draft(), node_id, primitive_name))
         return f"ok: removed primitive '{primitive_name}' from node '{node_id}'"
 
-    #=====# Edges #=====#
+
+
+
+
+    #===============# Edges #===============#
 
     def add_edge(self, source_id: str, target_id: str, condition) -> str:
+        """Tool: add a transition between two existing nodes."""
         self._require_node(source_id)
         self._require_node(target_id)
         self.apply_draft(graph_draft.add_edge(self.get_draft(), source_id, target_id, _as_condition(condition)))
         return f"ok: added edge '{source_id}' -> '{target_id}'"
 
     def edit_edge(self, source_id: str, index, new_source_id: str, new_target_id: str, condition) -> str:
+        """Tool: replace the edge at `index` of `source_id`'s list."""
         index = self._require_edge(source_id, index)
         self._require_node(new_source_id)
         self._require_node(new_target_id)
@@ -192,19 +228,29 @@ class DraftToolbox:
         return f"ok: edge {index} of '{source_id}' is now '{new_source_id}' -> '{new_target_id}'"
 
     def remove_edge(self, source_id: str, index) -> str:
+        """Tool: remove the edge at `index` of `source_id`'s list."""
         index = self._require_edge(source_id, index)
         self.apply_draft(graph_draft.remove_edge(self.get_draft(), source_id, index))
         return f"ok: removed edge {index} of '{source_id}'"
 
-    #=====# Knowledge #=====#
+
+
+
+
+    #===============# Knowledge #===============#
+    # NOTE: the knowledge tools' `type` parameter shadows the built-in on purpose: it is
+    # the model-facing argument name (see the schemas below and the system prompt's
+    # example), and run() passes arguments through by keyword.
 
     def add_knowledge_key(self, key: str, type: str, value) -> str:
+        """Tool: declare a new knowledge key of the named type."""
         entry_type = _as_knowledge_type(type)
         self.apply_draft(graph_draft.add_knowledge_key(
             self.get_draft(), key, entry_type, _as_knowledge_value(entry_type, value)))
         return f"ok: declared knowledge key '{key}' ({type})"
 
     def edit_knowledge_key(self, key: str, type: str, value) -> str:
+        """Tool: change a key's type and value, warning about any bindings that breaks."""
         self._require_key(key)
         entry_type = _as_knowledge_type(type)
         self.apply_draft(graph_draft.edit_knowledge_key(
@@ -214,19 +260,29 @@ class DraftToolbox:
         return f"ok: knowledge key '{key}' is now a {type}.{warning}"
 
     def rename_knowledge_key(self, old_key: str, new_key: str) -> str:
+        """Tool: rename a key everywhere it's used."""
         self.apply_draft(graph_draft.rename_knowledge_key(self.get_draft(), old_key, new_key))
         return f"ok: renamed knowledge key '{old_key}' to '{new_key}' everywhere it is used"
 
     def remove_knowledge_key(self, key: str) -> str:
+        """Tool: remove a key's declaration (references to it are left in place)."""
         self._require_key(key)
         self.apply_draft(graph_draft.remove_knowledge_key(self.get_draft(), key))
         return f"ok: removed knowledge key '{key}' (bindings and conditions that use it are NOT updated)"
 
 
-#==========# Schemas #==========#
+
+
+
+
+
+#========================================#
+# Schemas
+#========================================#
 # The model never sees the Python above, only this text.
 
 def _string(description: str) -> dict:
+    """A string-typed schema property."""
     return {"type": "string", "description": description}
 
 

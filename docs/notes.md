@@ -2,6 +2,16 @@
 
 Paths are as they were when each note was written; notes 33, 36, and 37 record the moves.
 
+## 39 - 2026-11-19: Code migrated to style.md
+- Whole codebase (`src/`, `main.py`, `scripts/`, `tests/`) brought in line with `style.md`; no behavior change.  `style_migration.md` retired.
+- Separators mapped by position: file level → major box (7 blank lines after), inside a class/function → semi-major (5), minor (3), substep (2).
+- Every function has a docstring, `__init__` and every `test_*` method included (now stated in `style.md`).
+- Each module's tunables sit in a top `Config` section; in-function literals became named constants (Tk padding as `PAD_*`, MPC weights and `MPC_MAX_ITERATIONS`, `main.py`'s `MAX_BACKLOG_STEPS`).  Mission coordinates and test literals stay inline as data.
+- Single sources of truth: `DEFAULT_PRIVILEGE_LEVEL`/`DEFAULT_SYNC_INTERVAL` (`backseater.py`, used by `PlatformSpec` and `bicycle_ugv()`); `KEY_FOLLOWER_TOKENS` (`condition.py`, used by `graph_draft`'s key rename); `POINTS_PER_INCH`, `TOOLTIP_RULE`, and display-space hit-testing in `viz/base.py`; `IDLE_CONTROLS` (`bicycle_ugv/hardware.py`); the editor's `GRAPH_PLOT_BACKGROUND` is imported from the dashboard.
+- Renames: `KnowledgeDatabase.declare(key, entry_type, ...)` (was `type`, which shadowed the built-in); `main.py`'s `vizualizer` → `visualizer`.  The assistant's knowledge tools keep a `type` parameter on purpose: it is the model-facing argument name (NOTE in `assistant_tools.py`).
+- `continue`/`break` rewritten where a condition, `next()`, or if/else read as clearly (`Backseater.update()`'s edge pick, `World.step()`, the MPC worker loop, the agent loop, `main.py`'s loop); small duplicate helpers folded (`graph_draft.edit_edge` = remove + add, the editor's table/button/dialog builders, the dashboard's tooltip setup).
+- Known gaps now carry `TODO`s at the code site (MPC worker timeout, `_check_binding_types` duplication, `PlatformDatabase` self-write-only, full-mesh connectivity, region membership).
+
 ## 38 - 2026-11-19: Docs and workflow migration
 - Adopted the docs layout from another project: a short `CLAUDE.md` importing `docs/proc.md` (process), `docs/style.md` (code style), `docs/spec.md` (architecture), and `docs/roadmap.md` (build order, open items, known issues); this file holds the history.
 - The old root `notes.md` (dated "Status" entries) was condensed into notes 1-37 and deleted; the old `CLAUDE.md` architecture moved to `spec.md`, its build order to `roadmap.md`, its process and style rules to `proc.md`/`style.md`.

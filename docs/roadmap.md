@@ -55,7 +55,6 @@
 
 ## Housekeeping
 - Move `pyproject.toml` and `src/` into a `mtofr/` folder so the README's `pip install -e ./mtofr` works.
-- Migrate the code to `style.md` (see `style_migration.md`).
 
 
 

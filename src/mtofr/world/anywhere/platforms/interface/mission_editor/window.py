@@ -1,15 +1,15 @@
 """Defines MissionEditorWindow: the Tk Toplevel a MissionEditorFrontseater opens/
 closes as its show_interface capability starts/stops. Owns one draft mission-graph
-dict at a time (see mtofr.world.anywhere.platforms.interface.mission_editor.graph_draft for the mutation helpers it
-calls), independent of any live platform until explicitly pushed via the
-privilege-gated Backseater.write_mission() path. Form/table-based (Treeviews plus
-small modal dialogs for adding/editing entries, each double-click-to-edit too),
-not a drag-and-drop canvas -- a read-only MissionGraphViewer preview (in its own
-tab, the seed of a future graphical editor) is the only rendering of the draft
-graph itself. The default tab, Live Control, is a separate, simpler surface: it
-edits a live platform's already-declared Knowledge values directly (immediately,
-no draft/push staging), letting an already-running mission be steered via its
-own existing edges without authoring a new graph at all."""
+dict at a time (see graph_draft for the mutation helpers it calls), independent of
+any live platform until explicitly pushed via the privilege-gated
+Backseater.write_mission() path. Form/table-based (Treeviews plus small modal
+dialogs for adding/editing entries, each double-click-to-edit too), not a
+drag-and-drop canvas -- a read-only MissionGraphViewer preview (in its own tab, the
+seed of a future graphical editor) is the only rendering of the draft graph itself.
+The default tab, Live Control, is a separate, simpler surface: it edits a live
+platform's already-declared Knowledge values directly (immediately, no draft/push
+staging), letting an already-running mission be steered via its own existing edges
+without authoring a new graph at all."""
 import ast
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -22,6 +22,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mtofr.capability.capability import find_binding_problems
 from mtofr.condition.condition import parse_condition, ConditionSyntaxError
 from mtofr.database import verify_mission_structure, MissionStructuralError
+from mtofr.viz.dashboard import GRAPH_PLOT_BACKGROUND   # the draft preview matches the dashboard's live graph panel
 from mtofr.viz.mission_graph_view import MissionGraphViewer
 from mtofr.world.anywhere.platforms.interface.mission_editor import graph_draft
 from mtofr.world.anywhere.platforms.interface.mission_editor.serialization import (
@@ -29,16 +30,17 @@ from mtofr.world.anywhere.platforms.interface.mission_editor.serialization impor
     is_compound_knowledge_type, constructor_fields, save_mission_graph, load_mission_graph,
 )
 
-# Matches MissionDashboard's own graph panel background, for visual consistency
-# between the draft preview here and the live mission graph shown there.
-GRAPH_PLOT_BACKGROUND = "#808080"
 
-# How often the Graph tab's Live preview re-renders while that mode is selected,
-# in milliseconds -- a live peek is only useful if it keeps up with the sim.
+#========================================#
+# Config
+#========================================#
+
+# How often the Graph tab's Live preview re-renders while that mode is selected;
+# a live peek is only useful if it keeps up with the sim.
 LIVE_PREVIEW_REFRESH_MS = 500
 
 # How often the Live Control tab's Knowledge table re-renders from the target
-# platform's actual current values, in milliseconds.
+# platform's actual current values.
 LIVE_KNOWLEDGE_REFRESH_MS = 1000
 
 # Caps memory use for the undo history; unlikely to matter for a hand-edited
@@ -46,6 +48,56 @@ LIVE_KNOWLEDGE_REFRESH_MS = 1000
 # run for a long time.
 UNDO_HISTORY_LIMIT = 50
 
+AT_BOTTOM_FRACTION = 0.999   # text scroll position counted as "at the bottom", so output keeps following
+DEFAULT_KNOWLEDGE_TYPE_NAME = "float"
+START_NODE_MARKER = " *"   # appended to the start node's label in the Nodes table
+MISSION_GRAPH_FILE_EXTENSION = ".json"
+MISSION_GRAPH_FILE_TYPES = [("Mission graph JSON", "*" + MISSION_GRAPH_FILE_EXTENSION)]
+
+
+# Layout (px unless noted)
+WINDOW_GEOMETRY = "1500x850"
+WINDOW_MIN_SIZE = (1200, 700)
+PAD_TINY = 2
+PAD_SMALL = 4
+PAD_MEDIUM = 6
+PAD_LARGE = 8
+PAD_SECTION = 10
+PAD_GROUP = 16   # gap between groups of top-bar buttons
+PLATFORM_DROPDOWN_WIDTH = 14   # characters
+LIVE_CONTROL_WRAP_LENGTH = 900
+PREVIEW_FIGURE_SIZE = (6, 6)   # inches
+WIDE_PANE_WEIGHT = 2
+NARROW_PANE_WEIGHT = 1
+
+
+# Tables: (column_id, heading, width) per column; the last column stretches
+LIVE_KNOWLEDGE_COLUMNS = (("key", "Key", 160), ("type", "Type", 70), ("value", "Value", 260))
+PRIMITIVE_COLUMNS = (("capability", "Capability", 90), ("inputs", "Inputs", 150), ("outputs", "Outputs", 150))
+EDGE_COLUMNS = (("from", "From", 70), ("to", "To", 70), ("condition", "Condition", 260))
+KNOWLEDGE_COLUMNS = (("key", "Key", 110), ("type", "Type", 60), ("value", "Value", 160))
+NODE_COLUMN_WIDTH = 110
+NODE_PRIMITIVE_COUNT_COLUMN_WIDTH = 70
+LIVE_KNOWLEDGE_TREE_ROWS = 20
+SHORT_TREE_ROWS = 6
+TALL_TREE_ROWS = 14
+CONSOLE_ROWS = 6
+
+
+# Dialogs (characters)
+TEXT_INPUT_WIDTH = 30
+FIELD_ENTRY_WIDTH = 20
+CONDITION_ENTRY_WIDTH = 50
+
+
+
+
+
+
+
+#========================================#
+# Mission Editor Window
+#========================================#
 
 class MissionEditorWindow(tk.Toplevel):
     """One window: a target-platform picker, load/new/load-file/save-file/
@@ -58,10 +110,11 @@ class MissionEditorWindow(tk.Toplevel):
     a push (or a live Knowledge write) goes through as."""
 
     def __init__(self, root, world, own_platform_id: str):
+        """Opens on a blank draft, targeting the first platform, with the live Knowledge refresh running."""
         super().__init__(root)
         self.title("Mission Editor")
-        self.geometry("1500x850")
-        self.minsize(1200, 700)
+        self.geometry(WINDOW_GEOMETRY)
+        self.minsize(*WINDOW_MIN_SIZE)
 
         self.world = world
         self.own_platform_id = own_platform_id
@@ -95,13 +148,14 @@ class MissionEditorWindow(tk.Toplevel):
 
         self._schedule_live_knowledge_refresh()
 
-    #==========# Layout #==========#
+    #===============# Layout #===============#
 
     def _build_layout(self) -> None:
+        """Builds the top bar, the three tabs, and the Console."""
         self._build_top_bar()
 
         self.notebook = notebook = ttk.Notebook(self)
-        notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=6)
+        notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=PAD_MEDIUM, pady=PAD_MEDIUM)
 
         # Live Control is added (and thus selected) first -- it's the everyday
         # tab for steering an already-running mission via its existing edges,
@@ -119,31 +173,33 @@ class MissionEditorWindow(tk.Toplevel):
         self._build_console_panel()
 
     def _build_top_bar(self) -> None:
+        """Builds the target-platform dropdown and the draft/undo/validate/push/assistant buttons."""
         top = ttk.Frame(self)
-        top.pack(side=tk.TOP, fill=tk.X, padx=6, pady=6)
+        top.pack(side=tk.TOP, fill=tk.X, padx=PAD_MEDIUM, pady=PAD_MEDIUM)
 
-        ttk.Label(top, text="Target platform:").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(top, text="Target platform:").pack(side=tk.LEFT, padx=(0, PAD_SMALL))
         platform_ids = list(self.world.platforms.keys())
         self.platform_dropdown = ttk.Combobox(top, values=platform_ids, textvariable=self.target_platform_id,
-                                               state="readonly", width=14)
+                                               state="readonly", width=PLATFORM_DROPDOWN_WIDTH)
         if platform_ids:
             self.target_platform_id.set(platform_ids[0])
-        self.platform_dropdown.pack(side=tk.LEFT, padx=4)
+        self.platform_dropdown.pack(side=tk.LEFT, padx=PAD_SMALL)
         self.platform_dropdown.bind("<<ComboboxSelected>>", lambda event: self._on_target_platform_changed())
 
-        ttk.Button(top, text="Load Live", command=self._on_load_live).pack(side=tk.LEFT, padx=4)
-        ttk.Button(top, text="New Blank", command=self._on_new_blank).pack(side=tk.LEFT, padx=4)
-        ttk.Button(top, text="Load File...", command=self._on_load_file).pack(side=tk.LEFT, padx=4)
-        ttk.Button(top, text="Save File...", command=self._on_save_file).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top, text="Load Live", command=self._on_load_live).pack(side=tk.LEFT, padx=PAD_SMALL)
+        ttk.Button(top, text="New Blank", command=self._on_new_blank).pack(side=tk.LEFT, padx=PAD_SMALL)
+        ttk.Button(top, text="Load File...", command=self._on_load_file).pack(side=tk.LEFT, padx=PAD_SMALL)
+        ttk.Button(top, text="Save File...", command=self._on_save_file).pack(side=tk.LEFT, padx=PAD_SMALL)
 
         self.undo_button = ttk.Button(top, text="↶ Undo", command=self._on_undo)
-        self.undo_button.pack(side=tk.LEFT, padx=(16, 4))
+        self.undo_button.pack(side=tk.LEFT, padx=(PAD_GROUP, PAD_SMALL))
         self.redo_button = ttk.Button(top, text="↷ Redo", command=self._on_redo)
-        self.redo_button.pack(side=tk.LEFT, padx=4)
+        self.redo_button.pack(side=tk.LEFT, padx=PAD_SMALL)
 
-        ttk.Button(top, text="Validate", command=self._on_validate).pack(side=tk.LEFT, padx=(16, 4))
-        ttk.Button(top, text="Push to Platform", command=self._on_push).pack(side=tk.LEFT, padx=4)
-        ttk.Button(top, text="Assistant...", command=self._on_open_assistant).pack(side=tk.LEFT, padx=(16, 4))
+        ttk.Button(top, text="Validate", command=self._on_validate).pack(side=tk.LEFT, padx=(PAD_GROUP, PAD_SMALL))
+        ttk.Button(top, text="Push to Platform", command=self._on_push).pack(side=tk.LEFT, padx=PAD_SMALL)
+        ttk.Button(top, text="Assistant...", command=self._on_open_assistant).pack(side=tk.LEFT,
+                                                                                   padx=(PAD_GROUP, PAD_SMALL))
 
     def _build_live_control_tab(self, parent) -> None:
         """The default tab: the *target* platform's already-running Knowledge --
@@ -152,48 +208,44 @@ class MissionEditorWindow(tk.Toplevel):
         or a boolean flag), changing one of those values here can steer an
         already-running mission without authoring a new graph at all."""
         frame = ttk.Frame(parent)
-        frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        frame.pack(fill=tk.BOTH, expand=True, padx=PAD_MEDIUM, pady=PAD_MEDIUM)
 
         ttk.Label(
-            frame, anchor="w", justify="left", wraplength=900,
+            frame, anchor="w", justify="left", wraplength=LIVE_CONTROL_WRAP_LENGTH,
             text="Live Knowledge for the target platform above -- double-click (or Edit Value) to change a "
                  "value directly on the running platform, using its mission's existing edges, without "
                  "authoring a new mission graph.",
-        ).pack(side=tk.TOP, anchor="w", pady=(0, 6))
+        ).pack(side=tk.TOP, anchor="w", pady=(0, PAD_MEDIUM))
 
-        self.live_knowledge_tree = ttk.Treeview(frame, columns=("key", "type", "value"), show="headings", height=20)
-        for column_id, heading, width in (("key", "Key", 160), ("type", "Type", 70), ("value", "Value", 260)):
-            self.live_knowledge_tree.heading(column_id, text=heading)
-            self.live_knowledge_tree.column(column_id, width=width, stretch=(column_id == "value"))
-        self.live_knowledge_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.live_knowledge_tree = _build_table(frame, LIVE_KNOWLEDGE_COLUMNS, LIVE_KNOWLEDGE_TREE_ROWS)
         self.live_knowledge_tree.bind("<Double-1>", lambda event: self._on_edit_live_knowledge_value())
         self.live_knowledge_tree.bind("<<TreeviewSelect>>", lambda event: self._on_live_knowledge_selected())
 
         buttons = ttk.Frame(frame)
-        buttons.pack(side=tk.TOP, fill=tk.X, pady=(4, 0))
-        ttk.Button(buttons, text="Edit Value...", command=self._on_edit_live_knowledge_value).pack(side=tk.LEFT, padx=2)
-        ttk.Button(buttons, text="Refresh", command=self._refresh_live_knowledge_tree).pack(side=tk.LEFT, padx=2)
+        buttons.pack(side=tk.TOP, fill=tk.X, pady=(PAD_SMALL, 0))
+        _add_buttons(buttons, (("Edit Value...", self._on_edit_live_knowledge_value),
+                               ("Refresh", self._refresh_live_knowledge_tree)))
 
     def _build_editor_tab(self, parent) -> None:
         """Nodes+Primitives / Edges / Knowledge as three resizable panes (a
         ttk.PanedWindow, dragged via the sash between them) rather than fixed
-        grid columns -- previously nothing in the Editor tab could be resized to
-        see content that didn't fit its default width."""
+        grid columns, so content that doesn't fit its default width can be seen."""
         paned = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
 
         nodes_pane = ttk.Frame(paned)
         edges_pane = ttk.Frame(paned)
         knowledge_pane = ttk.Frame(paned)
-        paned.add(nodes_pane, weight=2)
-        paned.add(edges_pane, weight=2)
-        paned.add(knowledge_pane, weight=1)
+        paned.add(nodes_pane, weight=WIDE_PANE_WEIGHT)
+        paned.add(edges_pane, weight=WIDE_PANE_WEIGHT)
+        paned.add(knowledge_pane, weight=NARROW_PANE_WEIGHT)
 
         self._build_nodes_panel(nodes_pane)
         self._build_edges_panel(edges_pane)
         self._build_knowledge_panel(knowledge_pane)
 
     def _build_nodes_panel(self, parent) -> None:
+        """Builds the Nodes table and the selected node's Primitives table, each with its buttons."""
         # Nodes and Primitives are each other's own resizable pane (vertical
         # sash) rather than both packed into one fixed-height LabelFrame.
         paned = ttk.PanedWindow(parent, orient=tk.VERTICAL)
@@ -201,112 +253,101 @@ class MissionEditorWindow(tk.Toplevel):
 
         nodes_frame = ttk.LabelFrame(paned, text="Nodes")
         primitives_frame = ttk.LabelFrame(paned, text="Primitives on selected node")
-        paned.add(nodes_frame, weight=1)
-        paned.add(primitives_frame, weight=1)
+        paned.add(nodes_frame, weight=NARROW_PANE_WEIGHT)
+        paned.add(primitives_frame, weight=NARROW_PANE_WEIGHT)
 
-        self.nodes_tree = ttk.Treeview(nodes_frame, columns=("primitives",), show="tree headings", height=6)
+
+        # Nodes
+        self.nodes_tree = ttk.Treeview(nodes_frame, columns=("primitives",), show="tree headings",
+                                       height=SHORT_TREE_ROWS)
         self.nodes_tree.heading("#0", text="Node")
         self.nodes_tree.heading("primitives", text="Primitives")
-        self.nodes_tree.column("#0", width=110, stretch=False)
-        self.nodes_tree.column("primitives", width=70, stretch=True)
+        self.nodes_tree.column("#0", width=NODE_COLUMN_WIDTH, stretch=False)
+        self.nodes_tree.column("primitives", width=NODE_PRIMITIVE_COUNT_COLUMN_WIDTH, stretch=True)
         self.nodes_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.nodes_tree.bind("<<TreeviewSelect>>", lambda event: self._on_node_selected())
         self.nodes_tree.bind("<Double-1>", lambda event: self._on_rename_node())
 
         node_buttons = ttk.Frame(nodes_frame)
         node_buttons.pack(side=tk.TOP, fill=tk.X)
-        ttk.Button(node_buttons, text="Add", command=self._on_add_node).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(node_buttons, text="Rename", command=self._on_rename_node).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(node_buttons, text="Remove", command=self._on_remove_node).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(node_buttons, text="Set Start", command=self._on_set_start_node).pack(side=tk.LEFT, padx=2, pady=2)
+        _add_buttons(node_buttons, (("Add", self._on_add_node), ("Rename", self._on_rename_node),
+                                    ("Remove", self._on_remove_node), ("Set Start", self._on_set_start_node)))
 
-        self.primitives_tree = ttk.Treeview(primitives_frame, columns=("capability", "inputs", "outputs"),
-                                             show="headings", height=6)
-        for column_id, heading, width in (("capability", "Capability", 90), ("inputs", "Inputs", 150),
-                                           ("outputs", "Outputs", 150)):
-            self.primitives_tree.heading(column_id, text=heading)
-            self.primitives_tree.column(column_id, width=width, stretch=(column_id == "outputs"))
-        self.primitives_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Primitives
+        self.primitives_tree = _build_table(primitives_frame, PRIMITIVE_COLUMNS, SHORT_TREE_ROWS)
         self.primitives_tree.bind("<<TreeviewSelect>>", lambda event: self._on_primitive_selected())
         self.primitives_tree.bind("<Double-1>", lambda event: self._on_edit_primitive())
 
         primitive_buttons = ttk.Frame(primitives_frame)
         primitive_buttons.pack(side=tk.TOP, fill=tk.X)
-        ttk.Button(primitive_buttons, text="Add", command=self._on_add_primitive).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(primitive_buttons, text="Edit", command=self._on_edit_primitive).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(primitive_buttons, text="Remove", command=self._on_remove_primitive).pack(side=tk.LEFT, padx=2, pady=2)
+        _add_buttons(primitive_buttons, (("Add", self._on_add_primitive), ("Edit", self._on_edit_primitive),
+                                         ("Remove", self._on_remove_primitive)))
 
     def _build_edges_panel(self, parent) -> None:
+        """Builds the Edges table and its buttons."""
         frame = ttk.LabelFrame(parent, text="Edges")
         frame.pack(fill=tk.BOTH, expand=True)
 
-        self.edges_tree = ttk.Treeview(frame, columns=("from", "to", "condition"), show="headings", height=14)
-        for column_id, heading, width in (("from", "From", 70), ("to", "To", 70), ("condition", "Condition", 260)):
-            self.edges_tree.heading(column_id, text=heading)
-            self.edges_tree.column(column_id, width=width, stretch=(column_id == "condition"))
-        self.edges_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.edges_tree = _build_table(frame, EDGE_COLUMNS, TALL_TREE_ROWS)
         self.edges_tree.bind("<Double-1>", lambda event: self._on_edit_edge())
 
         edge_buttons = ttk.Frame(frame)
         edge_buttons.pack(side=tk.TOP, fill=tk.X)
-        ttk.Button(edge_buttons, text="Add", command=self._on_add_edge).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(edge_buttons, text="Edit", command=self._on_edit_edge).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(edge_buttons, text="Remove", command=self._on_remove_edge).pack(side=tk.LEFT, padx=2, pady=2)
+        _add_buttons(edge_buttons, (("Add", self._on_add_edge), ("Edit", self._on_edit_edge),
+                                    ("Remove", self._on_remove_edge)))
 
     def _build_knowledge_panel(self, parent) -> None:
+        """Builds the draft's Knowledge table (Key, Type, Value) and its buttons."""
         frame = ttk.LabelFrame(parent, text="Knowledge")
         frame.pack(fill=tk.BOTH, expand=True)
 
-        # Key first, then Type, then Value -- and Key is now an explicit column
-        # (previously the tree's #0/text column, hidden by show="headings", so
-        # the key name wasn't visible in the table at all).
-        self.knowledge_tree = ttk.Treeview(frame, columns=("key", "type", "value"), show="headings", height=14)
-        for column_id, heading, width in (("key", "Key", 110), ("type", "Type", 60), ("value", "Value", 160)):
-            self.knowledge_tree.heading(column_id, text=heading)
-            self.knowledge_tree.column(column_id, width=width, stretch=(column_id == "value"))
-        self.knowledge_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.knowledge_tree = _build_table(frame, KNOWLEDGE_COLUMNS, TALL_TREE_ROWS)
         self.knowledge_tree.bind("<Double-1>", lambda event: self._on_edit_knowledge_key())
 
         knowledge_buttons = ttk.Frame(frame)
         knowledge_buttons.pack(side=tk.TOP, fill=tk.X)
-        ttk.Button(knowledge_buttons, text="Add", command=self._on_add_knowledge_key).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(knowledge_buttons, text="Edit", command=self._on_edit_knowledge_key).pack(side=tk.LEFT, padx=2, pady=2)
-        ttk.Button(knowledge_buttons, text="Remove", command=self._on_remove_knowledge_key).pack(side=tk.LEFT, padx=2, pady=2)
+        _add_buttons(knowledge_buttons, (("Add", self._on_add_knowledge_key), ("Edit", self._on_edit_knowledge_key),
+                                         ("Remove", self._on_remove_knowledge_key)))
 
     def _build_preview_panel(self, parent) -> None:
+        """Builds the Graph tab: the Draft/Live toggle and the preview canvas."""
         frame = ttk.LabelFrame(parent, text="Preview")
         frame.pack(fill=tk.BOTH, expand=True)
 
         mode_bar = ttk.Frame(frame)
-        mode_bar.pack(side=tk.TOP, fill=tk.X, padx=4, pady=4)
+        mode_bar.pack(side=tk.TOP, fill=tk.X, padx=PAD_SMALL, pady=PAD_SMALL)
         ttk.Radiobutton(mode_bar, text="Draft", variable=self.preview_mode, value="draft",
-                         command=self._on_preview_mode_changed).pack(side=tk.LEFT, padx=4)
+                         command=self._on_preview_mode_changed).pack(side=tk.LEFT, padx=PAD_SMALL)
         ttk.Radiobutton(mode_bar, text="Live (read-only)", variable=self.preview_mode, value="live",
-                         command=self._on_preview_mode_changed).pack(side=tk.LEFT, padx=4)
+                         command=self._on_preview_mode_changed).pack(side=tk.LEFT, padx=PAD_SMALL)
         self.preview_mode_note = ttk.Label(mode_bar, text="", anchor="w")
-        self.preview_mode_note.pack(side=tk.LEFT, padx=10)
+        self.preview_mode_note.pack(side=tk.LEFT, padx=PAD_SECTION)
 
-        self.preview_fig, self.preview_ax = plt.subplots(figsize=(6, 6))
+        self.preview_fig, self.preview_ax = plt.subplots(figsize=PREVIEW_FIGURE_SIZE)
         self.preview_fig.patch.set_facecolor(GRAPH_PLOT_BACKGROUND)
         self.preview_canvas = FigureCanvasTkAgg(self.preview_fig, master=frame)
         self.preview_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def _build_console_panel(self) -> None:
-        """A persistent, scrollable log of every action's outcome -- Validate/
-        Push/Load/Save previously only flashed a single-line status label that
-        was easy to miss (and could be pushed off-screen at a small window size)."""
+        """A persistent, scrollable log of every action's outcome, so Validate/Push/
+        Load/Save results can't be missed or pushed off-screen at a small window size."""
         frame = ttk.LabelFrame(self, text="Console")
-        frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 6))
+        frame.pack(side=tk.BOTTOM, fill=tk.X, padx=PAD_MEDIUM, pady=(0, PAD_MEDIUM))
 
         text_frame = ttk.Frame(frame)
         text_frame.pack(fill=tk.BOTH, expand=True)
-        self.console_text = tk.Text(text_frame, height=6, state="disabled", wrap="word")
+        self.console_text = tk.Text(text_frame, height=CONSOLE_ROWS, state="disabled", wrap="word")
         scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.console_text.yview)
         self.console_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.console_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    #==========# Draft mutation actions #==========#
+
+
+
+
+    #===============# Draft Mutation Actions #===============#
 
     def _set_draft(self, new_draft: dict) -> None:
         """The single choke point every draft mutation (including Load Live/New
@@ -333,6 +374,7 @@ class MissionEditorWindow(tk.Toplevel):
         self._undo_group_recorded = False
 
     def end_undo_group(self) -> None:
+        """Closes the undo group begin_undo_group() opened."""
         self._undo_group_open = False
         self._undo_group_recorded = False
 
@@ -341,14 +383,17 @@ class MissionEditorWindow(tk.Toplevel):
         if self.assistant_window is not None and self.assistant_window.winfo_exists():
             self.assistant_window.lift()
             return
-        from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow   # lazy: keeps the editor free of the assistant's imports until used
+        # NOTE: lazy import keeps the editor free of the assistant's imports until used
+        from mtofr.world.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow
         self.assistant_window = AssistantWindow(self)
 
     def _apply_draft(self, new_draft: dict) -> None:
+        """Swaps in `new_draft` and refreshes every view, without touching the undo history."""
         self.draft = new_draft
         self._refresh_all()
 
     def _on_undo(self) -> None:
+        """Restores the previous draft, if any."""
         if not self.undo_stack:
             self._log("Nothing to undo.")
             return
@@ -358,6 +403,7 @@ class MissionEditorWindow(tk.Toplevel):
         self._log("Undid last change.")
 
     def _on_redo(self) -> None:
+        """Re-applies the last undone draft, if any."""
         if not self.redo_stack:
             self._log("Nothing to redo.")
             return
@@ -367,53 +413,57 @@ class MissionEditorWindow(tk.Toplevel):
         self._log("Redid change.")
 
     def _update_undo_redo_buttons(self) -> None:
+        """Enables Undo/Redo only when there's something to undo/redo."""
         self.undo_button.config(state="normal" if self.undo_stack else "disabled")
         self.redo_button.config(state="normal" if self.redo_stack else "disabled")
 
     def _log(self, message: str) -> None:
-        at_bottom = self.console_text.yview()[1] >= 0.999   # only follow the output if the user hasn't scrolled up
+        """Appends a line to the Console, following the output only if the user hasn't scrolled up."""
+        at_bottom = self.console_text.yview()[1] >= AT_BOTTOM_FRACTION
         self.console_text.configure(state="normal")
         self.console_text.insert(tk.END, message + "\n")
         if at_bottom:
             self.console_text.see(tk.END)
         self.console_text.configure(state="disabled")
 
+    def _start_new_draft(self, new_draft: dict, source_platform_id: str | None) -> None:
+        """Replaces the whole draft (an undoable action), clearing the selection and recording where it came from."""
+        self.selected_node_id = None
+        self.selected_primitive_name = None
+        self.draft_source_platform_id = source_platform_id
+        self._set_draft(new_draft)
+
     def _on_load_live(self) -> None:
+        """Loads a copy of the target platform's running mission graph as the draft."""
         target_id = self.target_platform_id.get()
         backseater = self._backseater_of(target_id)
         if backseater is None:
             self._log("Load Live failed: no target platform selected.")
             return
-        self.selected_node_id = None
-        self.selected_primitive_name = None
-        self.draft_source_platform_id = target_id
-        self._set_draft(graph_draft.load_draft(backseater.mission_graph))
+        self._start_new_draft(graph_draft.load_draft(backseater.mission_graph), source_platform_id=target_id)
         self._log(f"Loaded live mission graph from '{target_id}'.")
 
     def _on_new_blank(self) -> None:
-        self.selected_node_id = None
-        self.selected_primitive_name = None
-        self.draft_source_platform_id = None
-        self._set_draft(graph_draft.blank_graph())
+        """Starts a blank draft."""
+        self._start_new_draft(graph_draft.blank_graph(), source_platform_id=None)
         self._log("Started a new blank draft.")
 
     def _on_load_file(self) -> None:
-        file_path = filedialog.askopenfilename(parent=self, filetypes=[("Mission graph JSON", "*.json")])
+        """Loads a draft from a mission-graph JSON file."""
+        file_path = filedialog.askopenfilename(parent=self, filetypes=MISSION_GRAPH_FILE_TYPES)
         if not file_path:
             return
         try:
-            self.selected_node_id = None
-            self.selected_primitive_name = None
-            self.draft_source_platform_id = None
-            self._set_draft(load_mission_graph(file_path))
+            self._start_new_draft(load_mission_graph(file_path), source_platform_id=None)
             self._log(f"Loaded draft from {file_path}.")
         except Exception as error:
             self._log(f"Load failed: {error}")
             messagebox.showerror("Load failed", str(error), parent=self)
 
     def _on_save_file(self) -> None:
-        file_path = filedialog.asksaveasfilename(parent=self, defaultextension=".json",
-                                                   filetypes=[("Mission graph JSON", "*.json")])
+        """Saves the draft to a mission-graph JSON file."""
+        file_path = filedialog.asksaveasfilename(parent=self, defaultextension=MISSION_GRAPH_FILE_EXTENSION,
+                                                   filetypes=MISSION_GRAPH_FILE_TYPES)
         if not file_path:
             return
         try:
@@ -424,13 +474,13 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Save failed", str(error), parent=self)
 
     def _on_validate(self) -> None:
+        """Checks the draft's structure and that the target platform could bind it (the same checks a push enforces)."""
         try:
             verify_mission_structure(self.draft)
         except MissionStructuralError as error:
             self._log(f"Validation failed: {error}")
             messagebox.showerror("Invalid mission graph", str(error), parent=self)
             return
-        # Also check the draft against what the target platform can actually bind (the same check a push enforces).
         target_id = self.target_platform_id.get()
         backseater = self._backseater_of(target_id)
         problems = find_binding_problems(self.draft, backseater.capabilities() if backseater is not None else None)
@@ -444,6 +494,7 @@ class MissionEditorWindow(tk.Toplevel):
                   else "Draft is structurally valid (no target platform selected to check bindings against).")
 
     def _on_push(self) -> None:
+        """Writes the draft to the target platform through its privilege-gated write_mission()."""
         target_id = self.target_platform_id.get()
         backseater = self._backseater_of(target_id)
         if backseater is None:
@@ -456,16 +507,21 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Push failed", str(error), parent=self)
             return
         if self.draft_source_platform_id is not None and self.draft_source_platform_id != target_id:
-            # Doesn't block the push (reusing a draft across platforms may be
-            # intentional) -- just makes the mismatch visible, since pushing an
+            # NOTE: doesn't block the push (reusing a draft across platforms may be
+            # intentional), just makes the mismatch visible, since pushing an
             # unmodified draft to the wrong target is exactly what silently
             # duplicated a mission across two platforms once before.
             self._log(f"Warning: pushed a draft loaded from '{self.draft_source_platform_id}' to a different platform '{target_id}'.")
         self._log(f"Pushed draft to '{target_id}'.")
 
-    #==========# Node actions #==========#
+
+
+
+
+    #===============# Node Actions #===============#
 
     def _on_add_node(self) -> None:
+        """Prompts for a node id, adds it, and selects it."""
         node_id = _TextInputDialog(self, "Add Node", "Node id:").result
         if not node_id:
             return
@@ -479,6 +535,7 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Add node failed", str(error), parent=self)
 
     def _on_rename_node(self) -> None:
+        """Prompts for a new id for the selected node."""
         if self.selected_node_id is None:
             return
         new_id = _TextInputDialog(self, "Rename Node", "New node id:", initial_value=self.selected_node_id).result
@@ -492,6 +549,7 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Rename node failed", str(error), parent=self)
 
     def _on_remove_node(self) -> None:
+        """Removes the selected node and every edge touching it."""
         if self.selected_node_id is None:
             return
         removed_node_id = self.selected_node_id
@@ -500,6 +558,7 @@ class MissionEditorWindow(tk.Toplevel):
         self._set_draft(graph_draft.remove_node(self.draft, removed_node_id))
 
     def _on_set_start_node(self) -> None:
+        """Makes the selected node the start node."""
         if self.selected_node_id is None:
             return
         try:
@@ -508,18 +567,25 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Set start failed", str(error), parent=self)
 
     def _on_node_selected(self) -> None:
+        """Tracks the selected node and shows its primitives."""
         selection = self.nodes_tree.selection()
         self.selected_node_id = selection[0] if selection else None
         self.selected_primitive_name = None
         self._refresh_primitives_tree()
 
     def _on_primitive_selected(self) -> None:
+        """Tracks the selected primitive."""
         selection = self.primitives_tree.selection()
         self.selected_primitive_name = selection[0] if selection else None
 
-    #==========# Primitive actions #==========#
+
+
+
+
+    #===============# Primitive Actions #===============#
 
     def _on_add_primitive(self) -> None:
+        """Opens the primitive dialog for the selected node and adds the result."""
         if self.selected_node_id is None:
             messagebox.showinfo("Add primitive", "Select a node first.", parent=self)
             return
@@ -539,6 +605,7 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Add primitive failed", str(error), parent=self)
 
     def _on_edit_primitive(self) -> None:
+        """Opens the primitive dialog pre-filled with the selected primitive and applies the result."""
         if self.selected_node_id is None or self.selected_primitive_name is None:
             messagebox.showinfo("Edit primitive", "Select a primitive first.", parent=self)
             return
@@ -563,6 +630,7 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Edit primitive failed", str(error), parent=self)
 
     def _on_remove_primitive(self) -> None:
+        """Removes the selected primitive."""
         if self.selected_node_id is None or self.selected_primitive_name is None:
             return
         self._set_draft(graph_draft.remove_primitive(self.draft, self.selected_node_id, self.selected_primitive_name))
@@ -574,21 +642,27 @@ class MissionEditorWindow(tk.Toplevel):
         return platform.backseater if platform is not None else None
 
     def _target_capability_registry(self):
+        """The target platform's CapabilityRegistry, or None if none is selected."""
         backseater = self._backseater_of(self.target_platform_id.get())
         return backseater.capabilities() if backseater is not None else None
 
     def _on_target_platform_changed(self) -> None:
+        """Refreshes the views that show the target platform."""
         self._refresh_preview()
         self._refresh_live_knowledge_tree()
 
-    #==========# Live Control tab #==========#
+
+
+
+
+    #===============# Live Control Tab #===============#
 
     def _refresh_live_knowledge_tree(self) -> None:
+        """Re-reads the target platform's live Knowledge into the table, keeping the selection."""
         # delete()+insert() (Treeview has no in-place row-value update) clears
-        # the current selection every time -- restore it afterward, same fix
-        # already applied to the Editor tab's tables, but doubly important here
-        # since this refresh fires on its own every second regardless of
-        # anything you're doing, not just after an edit you made yourself.
+        # the current selection every time; restore it afterward, same as the
+        # Editor tab's tables, but doubly important here since this refresh fires
+        # on its own every second, not just after an edit you made yourself.
         self.live_knowledge_tree.delete(*self.live_knowledge_tree.get_children())
         backseater = self._backseater_of(self.target_platform_id.get())
         if backseater is None:
@@ -605,10 +679,12 @@ class MissionEditorWindow(tk.Toplevel):
             self.live_knowledge_tree.selection_set(self.selected_live_knowledge_key)
 
     def _on_live_knowledge_selected(self) -> None:
+        """Tracks the selected live Knowledge key."""
         selection = self.live_knowledge_tree.selection()
         self.selected_live_knowledge_key = selection[0] if selection else None
 
     def _on_edit_live_knowledge_value(self) -> None:
+        """Prompts for a new value for the selected key and sets it directly on the running platform."""
         target_id = self.target_platform_id.get()
         backseater = self._backseater_of(target_id)
         if backseater is None:
@@ -641,9 +717,14 @@ class MissionEditorWindow(tk.Toplevel):
         self._refresh_live_knowledge_tree()
         self._live_knowledge_refresh_job = self.after(LIVE_KNOWLEDGE_REFRESH_MS, self._schedule_live_knowledge_refresh)
 
-    #==========# Edge actions #==========#
+
+
+
+
+    #===============# Edge Actions #===============#
 
     def _on_add_edge(self) -> None:
+        """Opens the edge dialog and adds the result."""
         node_ids = sorted(self.draft["nodes"])
         if not node_ids:
             messagebox.showinfo("Add edge", "Add at least one node first.", parent=self)
@@ -658,6 +739,7 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Add edge failed", str(error), parent=self)
 
     def _on_edit_edge(self) -> None:
+        """Opens the edge dialog pre-filled with the selected edge and applies the result."""
         selection = self.edges_tree.selection()
         if not selection:
             return
@@ -674,15 +756,21 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Edit edge failed", str(error), parent=self)
 
     def _on_remove_edge(self) -> None:
+        """Removes the selected edge."""
         selection = self.edges_tree.selection()
         if not selection:
             return
         source_id, index = self._edge_rows[selection[0]]
         self._set_draft(graph_draft.remove_edge(self.draft, source_id, index))
 
-    #==========# Knowledge actions #==========#
+
+
+
+
+    #===============# Knowledge Actions #===============#
 
     def _on_add_knowledge_key(self) -> None:
+        """Opens the knowledge dialog and declares the result."""
         result = _KnowledgeDialog(self).result
         if result is None:
             return
@@ -693,6 +781,7 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Add knowledge key failed", str(error), parent=self)
 
     def _on_edit_knowledge_key(self) -> None:
+        """Opens the knowledge dialog pre-filled with the selected key, cascading a rename before the type/value edit."""
         selection = self.knowledge_tree.selection()
         if not selection:
             return
@@ -715,14 +804,20 @@ class MissionEditorWindow(tk.Toplevel):
             messagebox.showerror("Edit knowledge key failed", str(error), parent=self)
 
     def _on_remove_knowledge_key(self) -> None:
+        """Removes the selected key's declaration."""
         selection = self.knowledge_tree.selection()
         if not selection:
             return
         self._set_draft(graph_draft.remove_knowledge_key(self.draft, selection[0]))
 
-    #==========# Graph tab preview mode #==========#
+
+
+
+
+    #===============# Graph Tab Preview Mode #===============#
 
     def _on_preview_mode_changed(self) -> None:
+        """Re-renders the preview, and starts the periodic refresh in Live mode."""
         self._refresh_preview()
         if self.preview_mode.get() == "live":
             self._schedule_live_preview_refresh()
@@ -736,9 +831,14 @@ class MissionEditorWindow(tk.Toplevel):
         self._refresh_preview()
         self._live_preview_refresh_job = self.after(LIVE_PREVIEW_REFRESH_MS, self._schedule_live_preview_refresh)
 
-    #==========# Refresh #==========#
+
+
+
+
+    #===============# Refresh #===============#
 
     def _refresh_all(self) -> None:
+        """Re-renders every draft view."""
         self._refresh_nodes_tree()
         self._refresh_primitives_tree()
         self._refresh_edges_tree()
@@ -746,9 +846,10 @@ class MissionEditorWindow(tk.Toplevel):
         self._refresh_preview()
 
     def _refresh_nodes_tree(self) -> None:
+        """Re-renders the Nodes table (start node marked), keeping the selection."""
         self.nodes_tree.delete(*self.nodes_tree.get_children())
         for node_id, node in self.draft["nodes"].items():
-            label = f"{node_id} *" if node_id == self.draft.get("start") else node_id
+            label = f"{node_id}{START_NODE_MARKER}" if node_id == self.draft.get("start") else node_id
             self.nodes_tree.insert("", tk.END, iid=node_id, text=label, values=(len(node["primitives"]),))
         if self.selected_node_id not in self.draft["nodes"]:
             self.selected_node_id = None
@@ -756,6 +857,7 @@ class MissionEditorWindow(tk.Toplevel):
             self.nodes_tree.selection_set(self.selected_node_id)
 
     def _refresh_primitives_tree(self) -> None:
+        """Re-renders the selected node's Primitives table, keeping the selection."""
         self.primitives_tree.delete(*self.primitives_tree.get_children())
         if self.selected_node_id is None or self.selected_node_id not in self.draft["nodes"]:
             self.selected_primitive_name = None
@@ -773,6 +875,7 @@ class MissionEditorWindow(tk.Toplevel):
             self.primitives_tree.selection_set(self.selected_primitive_name)
 
     def _refresh_edges_tree(self) -> None:
+        """Re-renders the Edges table, recording which (source, index) each row is."""
         self.edges_tree.delete(*self.edges_tree.get_children())
         self._edge_rows = {}   # row iid -> (source_id, index within that source's edge list)
         for source_id, edge_list in self.draft["edges"].items():
@@ -784,12 +887,14 @@ class MissionEditorWindow(tk.Toplevel):
                 self._edge_rows[row_id] = (source_id, index)
 
     def _refresh_knowledge_tree(self) -> None:
+        """Re-renders the draft's Knowledge table."""
         self.knowledge_tree.delete(*self.knowledge_tree.get_children())
         for key, declaration in self.draft["knowledge"].items():
             type_name = KNOWLEDGE_TYPE_NAMES.get(declaration["type"], declaration["type"].__name__)
             self.knowledge_tree.insert("", tk.END, iid=key, values=(key, type_name, repr(declaration["value"])))
 
     def _refresh_preview(self) -> None:
+        """Re-renders the Graph tab: the draft, or (Live mode) the target platform's running graph."""
         self.preview_ax.clear()
         self.preview_ax.set_facecolor(GRAPH_PLOT_BACKGROUND)
         if self.preview_mode.get() == "live":
@@ -809,7 +914,11 @@ class MissionEditorWindow(tk.Toplevel):
             self.preview_mode_note.config(text="Editing draft.")
         self.preview_canvas.draw_idle()
 
-    #==========# Lifecycle #==========#
+
+
+
+
+    #===============# Lifecycle #===============#
 
     def close(self) -> None:
         """Called by MissionEditorFrontseater when show_interface stops (or at
@@ -835,15 +944,40 @@ class MissionEditorWindow(tk.Toplevel):
             pass
 
 
-#==========# Small modal dialogs #==========#
+
+
+
+
+
+#========================================#
+# Widget Helpers
+#========================================#
+
+def _build_table(parent, columns: tuple, height: int) -> ttk.Treeview:
+    """Builds and packs a headings-only Treeview from (column_id, heading, width)
+    triples; only the last column stretches with the window."""
+    tree = ttk.Treeview(parent, columns=[column_id for column_id, _, _ in columns], show="headings", height=height)
+    stretch_column_id = columns[-1][0]
+    for column_id, heading, width in columns:
+        tree.heading(column_id, text=heading)
+        tree.column(column_id, width=width, stretch=(column_id == stretch_column_id))
+    tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    return tree
+
+
+def _add_buttons(parent, buttons: tuple) -> None:
+    """Packs one small button per (text, command) pair, left to right."""
+    for text, command in buttons:
+        ttk.Button(parent, text=text, command=command).pack(side=tk.LEFT, padx=PAD_TINY, pady=PAD_TINY)
+
 
 def _center_over_parent(dialog, parent) -> None:
     """Positions `dialog` centered over `parent`'s current window, and raises it
     above every other window (`-topmost`) without seizing keyboard focus or
-    forcing the OS to also raise/focus the rest of this app's windows -- unlike
-    transient(), deliberately not used by any dialog below, since it visibly
-    pulled every one of this app's windows to the front together whenever a
-    dialog appeared."""
+    forcing the OS to also raise/focus the rest of this app's windows."""
+    # NOTE: transient() is deliberately not used by any dialog below, since it
+    # visibly pulled every one of this app's windows to the front together
+    # whenever a dialog appeared.
     dialog.update_idletasks()
     parent_x, parent_y = parent.winfo_rootx(), parent.winfo_rooty()
     parent_width, parent_height = parent.winfo_width(), parent.winfo_height()
@@ -854,6 +988,21 @@ def _center_over_parent(dialog, parent) -> None:
     dialog.attributes("-topmost", True)
 
 
+def _show_modal(dialog, parent) -> None:
+    """Centers `dialog` over `parent`, grabs input, and blocks until it closes."""
+    _center_over_parent(dialog, parent)
+    dialog.grab_set()
+    dialog.wait_window(dialog)
+
+
+def _add_dialog_buttons(dialog, row: int, confirm_text: str, on_confirm) -> None:
+    """Adds the confirm + Cancel button row spanning both grid columns at `row`."""
+    buttons = ttk.Frame(dialog)
+    buttons.grid(row=row, column=0, columnspan=2, pady=PAD_MEDIUM)
+    ttk.Button(buttons, text=confirm_text, command=on_confirm).pack(side=tk.LEFT, padx=PAD_SMALL)
+    ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=PAD_SMALL)
+
+
 def _build_value_fields(parent_frame, entry_type: type, initial_value=None) -> dict:
     """Builds one labeled Entry per constructor field of `entry_type` (or a
     single "Value" field for a plain scalar type) inside `parent_frame`, via
@@ -861,23 +1010,21 @@ def _build_value_fields(parent_frame, entry_type: type, initial_value=None) -> d
     editing a key within a draft) and _LiveValueDialog (editing an already-
     declared key's value on a live platform), so both stay in sync automatically
     if a new KnowledgeEntry subclass is registered. Returns field_name -> StringVar."""
-    field_vars = {}
     if is_compound_knowledge_type(entry_type):
-        for row, (field_name, annotation) in enumerate(constructor_fields(entry_type)):
-            type_label = getattr(annotation, "__name__", "str")
-            ttk.Label(parent_frame, text=f"{field_name} ({type_label}):").grid(
-                row=row, column=0, sticky="w", padx=4, pady=2
-            )
-            initial_text = str(getattr(initial_value, field_name, "")) if initial_value is not None else ""
-            variable = tk.StringVar(value=initial_text)
-            ttk.Entry(parent_frame, textvariable=variable, width=20).grid(row=row, column=1, sticky="ew", padx=4, pady=2)
-            field_vars[field_name] = variable
+        fields = [(field_name, f"{field_name} ({getattr(annotation, '__name__', 'str')}):",
+                   str(getattr(initial_value, field_name, "")) if initial_value is not None else "")
+                  for field_name, annotation in constructor_fields(entry_type)]
     else:
-        ttk.Label(parent_frame, text="Value:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
-        initial_text = str(initial_value) if initial_value is not None else ""
+        fields = [("value", "Value:", str(initial_value) if initial_value is not None else "")]
+
+    field_vars = {}
+    for row, (field_name, label, initial_text) in enumerate(fields):
+        ttk.Label(parent_frame, text=label).grid(row=row, column=0, sticky="w", padx=PAD_SMALL, pady=PAD_TINY)
         variable = tk.StringVar(value=initial_text)
-        ttk.Entry(parent_frame, textvariable=variable, width=20).grid(row=0, column=1, sticky="ew", padx=4, pady=2)
-        field_vars["value"] = variable
+        ttk.Entry(parent_frame, textvariable=variable, width=FIELD_ENTRY_WIDTH).grid(
+            row=row, column=1, sticky="ew", padx=PAD_SMALL, pady=PAD_TINY
+        )
+        field_vars[field_name] = variable
     return field_vars
 
 
@@ -885,41 +1032,50 @@ def _read_value_fields(entry_type: type, field_vars: dict):
     """Inverse of _build_value_fields(): casts each field's text back into a
     value of `entry_type`, raising ValueError on bad input."""
     if is_compound_knowledge_type(entry_type):
-        kwargs = {}
+        field_values = {}
         for field_name, annotation in constructor_fields(entry_type):
             caster = SCALAR_CASTERS.get(annotation, str)
-            kwargs[field_name] = caster(field_vars[field_name].get())
-        return entry_type(**kwargs)
+            field_values[field_name] = caster(field_vars[field_name].get())
+        return entry_type(**field_values)
     caster = SCALAR_CASTERS.get(entry_type, str)
     return caster(field_vars["value"].get())
 
+
+
+
+
+
+
+#========================================#
+# Dialogs
+#========================================#
 
 class _TextInputDialog(tk.Toplevel):
     """A single-line text-entry modal (Add Node / Rename Node), replacing
     tkinter.simpledialog.askstring so every dialog in this window is centered the
     same reliable way."""
     def __init__(self, parent, title: str, prompt: str, initial_value: str = ""):
+        """Shows the dialog and blocks until it closes; the answer is in `result`."""
         super().__init__(parent)
         self.title(title)
         self.result = None
 
-        ttk.Label(self, text=prompt).grid(row=0, column=0, sticky="w", padx=6, pady=(6, 2))
+        ttk.Label(self, text=prompt).grid(row=0, column=0, sticky="w", padx=PAD_MEDIUM, pady=(PAD_MEDIUM, PAD_TINY))
         self.value_var = tk.StringVar(value=initial_value)
-        entry = ttk.Entry(self, textvariable=self.value_var, width=30)
-        entry.grid(row=1, column=0, padx=6, pady=(0, 6))
+        entry = ttk.Entry(self, textvariable=self.value_var, width=TEXT_INPUT_WIDTH)
+        entry.grid(row=1, column=0, padx=PAD_MEDIUM, pady=(0, PAD_MEDIUM))
         entry.focus_set()
         entry.bind("<Return>", lambda event: self._on_confirm())
 
         buttons = ttk.Frame(self)
-        buttons.grid(row=2, column=0, pady=(0, 6))
-        ttk.Button(buttons, text="OK", command=self._on_confirm).pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.LEFT, padx=4)
+        buttons.grid(row=2, column=0, pady=(0, PAD_MEDIUM))
+        ttk.Button(buttons, text="OK", command=self._on_confirm).pack(side=tk.LEFT, padx=PAD_SMALL)
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.LEFT, padx=PAD_SMALL)
 
-        _center_over_parent(self, parent)
-        self.grab_set()
-        self.wait_window(self)
+        _show_modal(self, parent)
 
     def _on_confirm(self) -> None:
+        """Keeps the trimmed text (None if empty) and closes."""
         self.result = self.value_var.get().strip() or None
         self.destroy()
 
@@ -932,6 +1088,7 @@ class _PrimitiveDialog(tk.Toplevel):
     knowledge keys, mirroring the mission graph's own declare-before-use
     discipline. `existing`, when given, pre-fills every field for editing."""
     def __init__(self, parent, capability_registry, known_knowledge_keys: list, existing: tuple = None):
+        """Shows the dialog and blocks until it closes; the answer is in `result`."""
         super().__init__(parent)
         self.title("Edit Primitive" if existing else "Add Primitive")
         self.result = None
@@ -939,34 +1096,30 @@ class _PrimitiveDialog(tk.Toplevel):
         self._known_knowledge_keys = known_knowledge_keys
         self._binding_vars = {}   # (kind, field_name) -> StringVar
 
-        ttk.Label(self, text="Primitive name:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(self, text="Primitive name:").grid(row=0, column=0, sticky="w", padx=PAD_MEDIUM, pady=PAD_SMALL)
         self.name_var = tk.StringVar(value=existing[0] if existing else "")
-        ttk.Entry(self, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", padx=6, pady=4)
+        ttk.Entry(self, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", padx=PAD_MEDIUM, pady=PAD_SMALL)
 
-        ttk.Label(self, text="Capability:").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(self, text="Capability:").grid(row=1, column=0, sticky="w", padx=PAD_MEDIUM, pady=PAD_SMALL)
         self.capability_var = tk.StringVar(value=existing[1] if existing else "")
         capability_dropdown = ttk.Combobox(self, textvariable=self.capability_var, state="readonly",
                                             values=sorted(capability_registry.all()))
-        capability_dropdown.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+        capability_dropdown.grid(row=1, column=1, sticky="ew", padx=PAD_MEDIUM, pady=PAD_SMALL)
         capability_dropdown.bind("<<ComboboxSelected>>", lambda event: self._rebuild_binding_fields())
 
         self.bindings_frame = ttk.Frame(self)
-        self.bindings_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=6, pady=4)
+        self.bindings_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=PAD_MEDIUM, pady=PAD_SMALL)
 
-        buttons = ttk.Frame(self)
-        buttons.grid(row=3, column=0, columnspan=2, pady=6)
-        ttk.Button(buttons, text="Save" if existing else "Add", command=self._on_confirm).pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.LEFT, padx=4)
+        _add_dialog_buttons(self, 3, "Save" if existing else "Add", self._on_confirm)
 
         self.columnconfigure(1, weight=1)
         if self.capability_var.get():
             self._rebuild_binding_fields(existing[2] if existing else None, existing[3] if existing else None)
 
-        _center_over_parent(self, parent)
-        self.grab_set()
-        self.wait_window(self)
+        _show_modal(self, parent)
 
     def _rebuild_binding_fields(self, initial_inputs: dict = None, initial_outputs: dict = None) -> None:
+        """Rebuilds one key-binding combobox per input/output field of the chosen capability."""
         for widget in self.bindings_frame.winfo_children():
             widget.destroy()
         self._binding_vars = {}
@@ -981,15 +1134,16 @@ class _PrimitiveDialog(tk.Toplevel):
         for kind, specs, initial in (("input", capability.inputs, initial_inputs), ("output", capability.outputs, initial_outputs)):
             for spec in specs:
                 ttk.Label(self.bindings_frame, text=f"{kind} '{spec.name}' ({spec.type.__name__}):").grid(
-                    row=row, column=0, sticky="w", padx=4, pady=2
+                    row=row, column=0, sticky="w", padx=PAD_SMALL, pady=PAD_TINY
                 )
                 variable = tk.StringVar(value=initial.get(spec.name, ""))
                 ttk.Combobox(self.bindings_frame, textvariable=variable, values=self._known_knowledge_keys,
-                             width=20).grid(row=row, column=1, sticky="ew", padx=4, pady=2)
+                             width=FIELD_ENTRY_WIDTH).grid(row=row, column=1, sticky="ew", padx=PAD_SMALL, pady=PAD_TINY)
                 self._binding_vars[(kind, spec.name)] = variable
                 row += 1
 
     def _on_confirm(self) -> None:
+        """Keeps (name, capability, inputs, outputs), skipping unbound fields, and closes."""
         name = self.name_var.get().strip()
         capability = self.capability_var.get()
         if not name or not capability:
@@ -1008,45 +1162,42 @@ class _EdgeDialog(tk.Toplevel):
     """Modal dialog for adding or editing an edge: From/To node dropdowns plus a
     raw condition-token text field, evaluated as a Python literal (e.g.
     ["ugv1/arrived", "==", True]) and parsed via parse_condition() before being
-    accepted -- per-project decision to expose the real token format directly
-    rather than build a structural condition builder. `existing`, when given,
-    pre-fills every field for editing."""
+    accepted. `existing`, when given, pre-fills every field for editing."""
+    # NOTE: exposing the real token format directly, rather than building a
+    # structural condition builder, is a deliberate project decision.
     def __init__(self, parent, node_ids: list, existing: tuple = None):
+        """Shows the dialog and blocks until it closes; the answer is in `result`."""
         super().__init__(parent)
         self.title("Edit Edge" if existing else "Add Edge")
         self.result = None
 
-        ttk.Label(self, text="From:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(self, text="From:").grid(row=0, column=0, sticky="w", padx=PAD_MEDIUM, pady=PAD_SMALL)
         self.from_var = tk.StringVar(value=existing[0] if existing else node_ids[0])
         ttk.Combobox(self, textvariable=self.from_var, state="readonly", values=node_ids).grid(
-            row=0, column=1, sticky="ew", padx=6, pady=4
+            row=0, column=1, sticky="ew", padx=PAD_MEDIUM, pady=PAD_SMALL
         )
 
-        ttk.Label(self, text="To:").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(self, text="To:").grid(row=1, column=0, sticky="w", padx=PAD_MEDIUM, pady=PAD_SMALL)
         self.to_var = tk.StringVar(value=existing[1] if existing else node_ids[0])
         ttk.Combobox(self, textvariable=self.to_var, state="readonly", values=node_ids).grid(
-            row=1, column=1, sticky="ew", padx=6, pady=4
+            row=1, column=1, sticky="ew", padx=PAD_MEDIUM, pady=PAD_SMALL
         )
 
         ttk.Label(self, text='Condition tokens (Python literal, e.g. ["ugv1/arrived", "==", True]):').grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 0)
+            row=2, column=0, columnspan=2, sticky="w", padx=PAD_MEDIUM, pady=(PAD_LARGE, 0)
         )
         self.condition_var = tk.StringVar(value=repr(existing[2]) if existing else "[]")
-        ttk.Entry(self, textvariable=self.condition_var, width=50).grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=6, pady=4
+        ttk.Entry(self, textvariable=self.condition_var, width=CONDITION_ENTRY_WIDTH).grid(
+            row=3, column=0, columnspan=2, sticky="ew", padx=PAD_MEDIUM, pady=PAD_SMALL
         )
 
-        buttons = ttk.Frame(self)
-        buttons.grid(row=4, column=0, columnspan=2, pady=6)
-        ttk.Button(buttons, text="Save" if existing else "Add", command=self._on_confirm).pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.LEFT, padx=4)
+        _add_dialog_buttons(self, 4, "Save" if existing else "Add", self._on_confirm)
 
         self.columnconfigure(1, weight=1)
-        _center_over_parent(self, parent)
-        self.grab_set()
-        self.wait_window(self)
+        _show_modal(self, parent)
 
     def _on_confirm(self) -> None:
+        """Keeps (from, to, condition) if the condition parses, else shows the error."""
         try:
             condition = ast.literal_eval(self.condition_var.get())
             if not isinstance(condition, list):
@@ -1060,58 +1211,56 @@ class _EdgeDialog(tk.Toplevel):
 
 
 class _KnowledgeDialog(tk.Toplevel):
-    """Modal dialog for declaring or editing a Knowledge key: name, type (from
-    mtofr.world.anywhere.platforms.interface.mission_editor.serialization's type registry, the same set the editor
-    can round-trip to/from a saved file), and one labeled field per constructor
-    parameter of the chosen type -- generic via constructor_fields() introspection
-    rather than a hardcoded per-type form, so a future KnowledgeEntry subclass
-    needs only a registry entry to become editable here. `existing`, when given,
-    pre-fills every field for editing, including the key itself -- the caller
+    """Modal dialog for declaring or editing a Knowledge key: name, type (from the
+    serialization module's type registry, the same set the editor can round-trip
+    to/from a saved file), and one labeled field per constructor parameter of the
+    chosen type -- generic via constructor_fields() introspection rather than a
+    hardcoded per-type form, so a future KnowledgeEntry subclass needs only a
+    registry entry to become editable here. `existing`, when given, pre-fills every
+    field for editing, including the key itself -- the caller
     (MissionEditorWindow._on_edit_knowledge_key) is responsible for cascading a
     changed key through graph_draft.rename_knowledge_key() before applying the
     type/value change, so every primitive binding/edge condition referencing the
     old key follows the rename instead of being left dangling."""
     def __init__(self, parent, existing: tuple = None):
+        """Shows the dialog and blocks until it closes; the answer is in `result`."""
         super().__init__(parent)
         self.title("Edit Knowledge Key" if existing else "Add Knowledge Key")
         self.result = None
         self._editing = existing is not None
         self._field_vars = {}   # field_name -> StringVar
 
-        ttk.Label(self, text="Key:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(self, text="Key:").grid(row=0, column=0, sticky="w", padx=PAD_MEDIUM, pady=PAD_SMALL)
         self.key_var = tk.StringVar(value=existing[0] if existing else "")
-        ttk.Entry(self, textvariable=self.key_var).grid(row=0, column=1, sticky="ew", padx=6, pady=4)
+        ttk.Entry(self, textvariable=self.key_var).grid(row=0, column=1, sticky="ew", padx=PAD_MEDIUM, pady=PAD_SMALL)
 
-        ttk.Label(self, text="Type:").grid(row=1, column=0, sticky="w", padx=6, pady=4)
-        initial_type_name = KNOWLEDGE_TYPE_NAMES[existing[1]] if existing else "float"
+        ttk.Label(self, text="Type:").grid(row=1, column=0, sticky="w", padx=PAD_MEDIUM, pady=PAD_SMALL)
+        initial_type_name = KNOWLEDGE_TYPE_NAMES[existing[1]] if existing else DEFAULT_KNOWLEDGE_TYPE_NAME
         self.type_var = tk.StringVar(value=initial_type_name)
         type_dropdown = ttk.Combobox(self, textvariable=self.type_var, state="readonly",
                                       values=sorted(KNOWLEDGE_TYPES_BY_NAME))
-        type_dropdown.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+        type_dropdown.grid(row=1, column=1, sticky="ew", padx=PAD_MEDIUM, pady=PAD_SMALL)
         type_dropdown.bind("<<ComboboxSelected>>", lambda event: self._rebuild_value_fields())
 
         self.fields_frame = ttk.Frame(self)
-        self.fields_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=6, pady=4)
+        self.fields_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=PAD_MEDIUM, pady=PAD_SMALL)
 
-        buttons = ttk.Frame(self)
-        buttons.grid(row=3, column=0, columnspan=2, pady=6)
-        ttk.Button(buttons, text="Save" if self._editing else "Add", command=self._on_confirm).pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.LEFT, padx=4)
+        _add_dialog_buttons(self, 3, "Save" if self._editing else "Add", self._on_confirm)
 
         self.columnconfigure(1, weight=1)
         self._rebuild_value_fields(existing[2] if existing else None)
 
-        _center_over_parent(self, parent)
-        self.grab_set()
-        self.wait_window(self)
+        _show_modal(self, parent)
 
     def _rebuild_value_fields(self, initial_value=None) -> None:
+        """Rebuilds the value fields for the chosen type."""
         for widget in self.fields_frame.winfo_children():
             widget.destroy()
         entry_type = KNOWLEDGE_TYPES_BY_NAME[self.type_var.get()]
         self._field_vars = _build_value_fields(self.fields_frame, entry_type, initial_value)
 
     def _on_confirm(self) -> None:
+        """Keeps (key, type, value) if the value parses, else shows the error."""
         key = self.key_var.get().strip()
         entry_type = KNOWLEDGE_TYPES_BY_NAME[self.type_var.get()]
         if not key:
@@ -1135,6 +1284,7 @@ class _LiveValueDialog(tk.Toplevel):
     values, since a Knowledge write is not privilege-gated the way a Mission
     write is)."""
     def __init__(self, parent, key: str, entry_type: type, current_value):
+        """Shows the dialog and blocks until it closes; the answer is in `result`."""
         super().__init__(parent)
         self.title(f"Edit Live Value: {key}")
         self.result = None
@@ -1142,24 +1292,20 @@ class _LiveValueDialog(tk.Toplevel):
 
         type_name = KNOWLEDGE_TYPE_NAMES.get(entry_type, getattr(entry_type, "__name__", "?"))
         ttk.Label(self, text=f"Key: {key}    Type: {type_name}").grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(6, 2)
+            row=0, column=0, columnspan=2, sticky="w", padx=PAD_MEDIUM, pady=(PAD_MEDIUM, PAD_TINY)
         )
 
         self.fields_frame = ttk.Frame(self)
-        self.fields_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=6, pady=4)
+        self.fields_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=PAD_MEDIUM, pady=PAD_SMALL)
         self._field_vars = _build_value_fields(self.fields_frame, entry_type, current_value)
 
-        buttons = ttk.Frame(self)
-        buttons.grid(row=2, column=0, columnspan=2, pady=6)
-        ttk.Button(buttons, text="Save", command=self._on_confirm).pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.LEFT, padx=4)
+        _add_dialog_buttons(self, 2, "Save", self._on_confirm)
 
         self.columnconfigure(1, weight=1)
-        _center_over_parent(self, parent)
-        self.grab_set()
-        self.wait_window(self)
+        _show_modal(self, parent)
 
     def _on_confirm(self) -> None:
+        """Keeps the new value if it parses, else shows the error."""
         try:
             self.result = _read_value_fields(self._entry_type, self._field_vars)
         except ValueError as error:

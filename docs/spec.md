@@ -56,7 +56,7 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
 
 ## Databases
 All three belong to the Backseater, are stamped by its `Clock`, and carry `origin_platform_id` per entry (the platform that held the entry at its latest locally converted timestamp, transitively).  Every check happens write-side only, once, at the originating platform; there is no re-verification on receipt.
-- **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required; `Location(x, y)` is the only built-in, in `knowledge_types.py`).
+- **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, entry_type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required; `Location(x, y)` is the only built-in, in `knowledge_types.py`).
 - **Mission** (`MissionDatabase`): platform_id → `mission_graph` dict.  Writes from another platform go through `Backseater.write_mission(mission_graph, writer_platform_id, timestamp=None)`, which applies:
   - a privilege check (skipped for a self-write);
   - a type check;
@@ -106,7 +106,7 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
     - `avoid` (`point`, `radius` → `registered`);
     - `stopwatch` (→ `elapsed_time` in sim seconds since start; never completes).
   - Its default mission loiters on `stopwatch`.
-  - MPC (`mpc.solve_mpc`, SLSQP, `maxiter` 20, warm-started) runs in one persistent worker process per platform.  The MPC knows nothing about terrain.
+  - MPC (`mpc.solve_mpc`, SLSQP, `MPC_MAX_ITERATIONS` 20, warm-started) runs in one persistent worker process per platform.  The MPC knows nothing about terrain.
 - **Stationary** (`world/anywhere/hardware.py`): `StationaryHardware` (`environment_type = None`) never moves.
 - **Maps** (`maps/ground_map.py`): `GroundMap.load(folder)` reads `<name>.yaml` plus `_cosmetic`/`_traversability`/`_regions` PNGs.
   - World (0, 0) is the image center, +y up, so sampling flips rows.

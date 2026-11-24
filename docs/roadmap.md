@@ -2,7 +2,8 @@
 
 ## Current Status
 - Done: the peer-to-peer platform stack, image-based maps, default missions, the mission editor (interface platform), and the reorganization into layered packages (build order steps 1-7).  The LLM assistant (step 10) has a first cut.  The web UI (step 8) has a first cut, routed through the interface's own Backseater, with live `PlatformRecord` gossip and pose (notes 41-42), a graphical editor and per-window sessions (note 43), and an editor document, incomplete requests, a condition builder, and a Knowledge panel (note 44).
-- Next: the web UI's open items (below).  On the LLM side, the post-turn graph check (Next Up for LLM Agent, below).
+- The web UI is working and is the primary interface (checkpoint: note 46).  What remains for it is its open items below, not new features.
+- Next: the web UI's open items and known issues (below), and build order step 9.  On the LLM side, the post-turn graph check (Next Up for LLM Agent, below).
 
 
 
@@ -14,8 +15,8 @@
 5. [x] Default startup missions (note 25)
 6. [x] Manual mission-authoring "interface" platform (notes 27-33)
 7. [x] Reorganization: layered packages, `mission/`, `scenarios/`, environment-specific state; primitive → capability request (note 40)
-8. [~] Web UI capability so interface is more flexible: first cut done (Tk parity, panel seam, mesh-routed, graphical editor, per-window sessions; notes 41-43); see open items below
-9. [ ] Re-touch user experience implementing platforms and capabilities so it is clean and easy
+8. [~] Web UI capability so interface is more flexible: working (Tk parity, panel seam, mesh-routed, graphical editor, per-window sessions, editor document, condition builder, Knowledge panel; notes 41-44, checkpoint note 46); open items below
+9. [~] Re-touch user experience implementing platforms and capabilities so it is clean and easy: friction written up in `checklists.md` (note 45); capabilities as single classes, the Frontseater base lifecycle, and automatic Knowledge-type/scenario registration done (note 47).  Still open: actuation arbitration and environment leaks (`checklists.md` friction 5 and 7)
 10. [ ] Convoying-related capabilities
 11. [ ] [~] Agentic LLM on the interface platform: first cut done (the mission-editor assistant, notes 34-35); see open items below
 12. [ ] Teleop on the interface platform, for the experimental comparison (inside the existing system if it fits)
@@ -30,6 +31,22 @@
 5. Retire the Tk editor's direct writes (it calls the target's `write_mission()` and reads `World`), or retire the Tk editor itself once the web UI supersedes it.
 6. `CapabilityRegistry` and `KnowledgeEntry` values are gossiped as in-process objects; a real comms boundary needs them serialized (`encode_capabilities()` in `web/encoding.py` is a start).
 7. `WebHost.editor_store` is memory-only: a sim restart forgets pushed missions' layouts (saved files keep theirs).  Two different missions given the same name share one entry.
+8. The condition builder's operator list and token assembly (`draft_tools.js`) restate the grammar in `condition.py`, and `condition_rows()` (Python) is the other direction.  Keep them in step if the grammar changes.
+
+
+
+## Future Work: Values a Mission Can't Carry Yet (note 46)
+A value made in a specialized viewer, like a trajectory drawn in a drawer panel for a `follow_trajectory` capability, has no path into a mission today:
+- **Adoption resets declared keys.** `Backseater._declare_knowledge_keys()` sets every key the new mission declares back to its default, so a value staged live before the push is overwritten.  Reset is still right for run flags like `ugv1/arrived`, so any change must be per key.
+- **Only the editor writes draft values.** No other panel can contribute a value to the window's draft.
+- **Rich values have no encoding.** `KnowledgeEntry` types serialize through flat scalar constructor fields only, so a waypoint list or an image can't be declared, edited, saved, or sent.
+- **Large values cost every sync and poll.** `_snapshot_checksum()` `repr()`s every value, and the web state resends every value each poll.
+
+Directions to weigh (interview first; none chosen):
+- a per-key "keep live value" flag on declarations, so adoption keeps a staged value of the right type;
+- panels registered as typed value editors: editing a Trajectory key opens the drawer, which writes back into the draft (or publishes live);
+- per-type JSON encode/decode hooks on `KnowledgeEntry` (e.g. base64 images), hashed sync checksums, and on-demand fetch of large values in the web UI;
+- for constrained comms, content-addressed blobs: Knowledge holds a reference (hash, media type, size), and the bytes sync separately and lazily.
 
 
 

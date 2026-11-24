@@ -90,7 +90,11 @@ class TestPlatformDatabase(unittest.TestCase):
 
     def test_platform_record_holds_a_status_and_capability_registry(self):
         """A PlatformRecord keeps the privilege level, status, and registry it was built with."""
-        registry = CapabilityRegistry([Capability(ipl_type="move_to", description="moves")])
+        class MoveTo(Capability):
+            """A declaration-only capability."""
+            ipl_type = "move_to"
+            description = "moves"
+        registry = CapabilityRegistry([MoveTo])
         status = PlatformStatus(status="ok", message="")
         record = PlatformRecord(privilege_level=2, status=status, capabilities=registry)
         self.assertEqual(record.privilege_level, 2)

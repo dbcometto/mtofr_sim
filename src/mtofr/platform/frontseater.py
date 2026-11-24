@@ -1,21 +1,36 @@
 """Defines Frontseater, the platform-specific planning/control layer."""
-from abc import ABC, abstractmethod
-
-from mtofr.core.capability import CapabilityRegistry
+from mtofr.core.capability import Capability, CapabilityRegistry
 from mtofr.core.hardware import Hardware
 from mtofr.core.state import State
 from mtofr.mission.graph import MissionGraph, CapabilityRequest
 
 
-class Frontseater(ABC):
+class Frontseater:
     """Platform-specific planning/control brain. Talks to its Hardware only
     through send_controls/read_state, never touching Hardware.state directly.
     Backseater never sends controls, only capability requests. `backseater` is
     set by Backseater's constructor (mirroring the platform_id cascade below) so a
-    running capability can call query()/publish() on its own Backseater at any time."""
+    running capability can query()/publish() on its own Backseater at any time.
+
+    A subclass lists its Capability classes in CAPABILITIES; this base owns everything
+    else about running them (starting, ticking, stopping, status).  It overrides
+    begin_controls()/finish_controls() or compute_controls() only if it moves."""
+    CAPABILITIES: tuple[type[Capability], ...] = ()
     hardware: Hardware
-    backseater: object = None
+    backseater: object = None   # set by Backseater's constructor
     _platform_id: str | None = None
+
+    def __init__(self, hardware: Hardware, debug: bool = False):
+        """Builds the capability registry from CAPABILITIES, with nothing running yet."""
+        self.hardware = hardware
+        self.debug = debug
+        self._capability_registry = CapabilityRegistry(list(self.CAPABILITIES))
+        self._running: dict[str, Capability] = {}   # request name -> its running Capability instance
+        self._pending_controls: dict = {}   # set in begin_controls(), sent in finish_controls()
+
+
+
+
 
     #===============# Identity #===============#
 
@@ -52,36 +67,11 @@ class Frontseater(ABC):
         nothing; a Frontseater that opens its own windows (e.g. MissionEditorFrontseater)
         overrides it, so main.py never needs to special-case a platform type."""
 
-
-
-
-
-    #===============# Controls #===============#
-
-    @abstractmethod
-    def compute_controls(self, state: State) -> dict:
-        """Derive current controls from whatever tasks/avoid-state are active."""
-
-    def begin_update(self) -> None:
-        """Starts this tick's control computation. Default: computes synchronously and
-        stashes the result for finish_update(). A Frontseater whose compute_controls is
-        expensive (e.g. an MPC solve) can override this pair to dispatch the work to a
-        worker process here and collect the result in finish_update() instead, so World
-        can start every platform's work before blocking on any one of them (see
-        BicycleFrontseater)."""
-        self._pending_controls = self.compute_controls(self.hardware.read_state())
-
-    def finish_update(self) -> None:
-        """Completes this tick's control computation started by begin_update() and
-        applies it. Default: the result is already in hand (begin_update computed it
-        synchronously), so this just applies it."""
-        self.hardware.send_controls(self._pending_controls)
-
-    def update(self) -> None:
-        """Convenience for callers that don't need begin_update/finish_update split
-        across other platforms' work (e.g. direct single-platform use in tests)."""
-        self.begin_update()
-        self.finish_update()
+    def shutdown(self) -> None:
+        """Stops every running capability (closing whatever they opened).  Platform.shutdown()
+        calls this at exit; a Frontseater holding its own resources (e.g. a worker process)
+        overrides it and calls super().shutdown() first."""
+        self.set_active_capabilities({})
 
 
 
@@ -89,33 +79,85 @@ class Frontseater(ABC):
 
     #===============# Capabilities #===============#
 
-    @abstractmethod
     def capabilities(self) -> CapabilityRegistry:
         """Returns this platform's advertised capabilities: the query path a Backseater
         (and eventually a planner) uses instead of assuming what the platform can do."""
+        return self._capability_registry
 
-    @abstractmethod
     def set_active_capabilities(self, capability_requests: dict[str, CapabilityRequest]) -> None:
         """Tells this Frontseater which capability requests should currently be running: the
         active mission-graph node's `{name: {"capability", "inputs", "outputs"}}` dict,
-        called only when it differs from the last dict this Frontseater was given (a
-        mission/node change included, since the new node's dict simply differs from the
-        old one). `inputs`/`outputs` are field-name -> Knowledge-key maps, not resolved
-        values. This Frontseater is fully responsible for everything downstream: noticing
-        which request names are new (start them), which are no longer present (stop
-        them), and which are unchanged (leave them running); running each one however it
-        sees fit (this tick's update(), a thread, a state machine, real ROS nodes...); and
-        calling self.backseater.query()/publish() on its own schedule to read/write actual
-        data. There is no separate poll/status contract; introspection instead goes
-        through describe_status() below."""
+        called only when it differs from the last dict this Frontseater was given.  Diffs by
+        name: a request that is gone, or whose request dict changed, is stopped; a new or
+        changed one gets a fresh Capability instance and is started; an equal one keeps
+        running untouched (e.g. a stopwatch spanning two nodes keeps counting)."""
+        for name in list(self._running):
+            if capability_requests.get(name) != self._running[name].request:
+                self._running.pop(name).stop()
+                if self.debug:
+                    print(f"[Frontseater] '{name}' -> stopped")
 
-    @abstractmethod
+        for name, capability_request in capability_requests.items():
+            if name not in self._running:
+                capability_class = self._capability_registry.get(capability_request["capability"])
+                if capability_class is None:
+                    raise ValueError(f"Unknown capability: {capability_request['capability']}")
+                capability = capability_class(self, name, capability_request)
+                capability.start()
+                self._running[name] = capability
+                if self.debug:
+                    print(f"[Frontseater] '{name}' ({capability.ipl_type}) -> started")
+
+    def tick_capabilities(self) -> None:
+        """Runs one tick of every running capability.  Called every sim tick from begin_update()."""
+        for capability in self._running.values():
+            capability.tick()
+
     def describe_status(self) -> dict:
         """Returns {"overall": str, "capabilities": {name: str}}: human-readable status
-        text, entirely in this Frontseater's own words, for a visualization tool to
-        display. Required (not by-convention) so every Frontseater is guaranteed to offer
-        some introspection into what it's currently doing, however minimal (e.g.
-        {"overall": "idle", "capabilities": {}} is a valid response). Purely for display:
-        Backseater never uses this for mission logic, only forwards it. `capabilities`
-        need not cover every name Backseater currently considers active; a missing name
-        just means this Frontseater has nothing to say about it yet."""
+        text for a visualization tool, from each running capability's status().  Purely
+        for display: Backseater never uses this for mission logic, only forwards it."""
+        overall = f"{len(self._running)} capability request(s) active" if self._running else "idle"
+        return {"overall": overall,
+                "capabilities": {name: capability.status() for name, capability in self._running.items()}}
+
+
+
+
+
+    #===============# Controls #===============#
+
+    def compute_controls(self, state: State) -> dict:
+        """Derive current controls from whatever capabilities are running.  Default: idle
+        (the Hardware's idle_controls), for a platform that never moves itself."""
+        return dict(self.hardware.idle_controls)
+
+    def begin_controls(self) -> None:
+        """Starts this tick's control computation. Default: computes synchronously and
+        stashes the result for finish_controls(). A Frontseater whose compute_controls is
+        expensive (e.g. an MPC solve) can override this pair to dispatch the work to a
+        worker process here and collect the result in finish_controls() instead, so World
+        can start every platform's work before blocking on any one of them (see
+        BicycleFrontseater)."""
+        self._pending_controls = self.compute_controls(self.hardware.read_state())
+
+    def finish_controls(self) -> None:
+        """Completes this tick's control computation started by begin_controls() and
+        applies it. Default: the result is already in hand, so this just applies it."""
+        self.hardware.send_controls(self._pending_controls)
+
+    def begin_update(self) -> None:
+        """World's first per-tick call: ticks every running capability, then starts the
+        controls (so controls always see this tick's capability state)."""
+        self.tick_capabilities()
+        self.begin_controls()
+
+    def finish_update(self) -> None:
+        """World's second per-tick call, after every platform's begin_update(): applies the controls."""
+        self.finish_controls()
+
+    def update(self) -> None:
+        """Convenience for callers that don't need begin_update/finish_update split
+        across other platforms' work (e.g. direct single-platform use in tests)."""
+        self.begin_update()
+        self.finish_update()

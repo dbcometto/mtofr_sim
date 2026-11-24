@@ -3,7 +3,7 @@ import time
 
 from mtofr.environments.world import World
 from mtofr.platform.platform import Platform
-from mtofr.scenarios import Scenario, SCENARIOS
+from mtofr.scenarios import SCENARIOS
 from mtofr.viz.dashboard import MissionDashboard
 
 
@@ -14,12 +14,11 @@ from mtofr.viz.dashboard import MissionDashboard
 DT = 0.1   # s per sim step
 ENABLE_HEADLESS = False
 DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
-# SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via mesh sync. VILLAGE: exercises
-# simple_village's road speed boost and blocked-terrain hard stop. VILLAGE_DEFAULT: same
-# map, but every platform (including the mission-editor "interface" platform) boots onto
-# its own default_mission_graph() -- author/push a real mission live via its web UI
-# (the address is printed at startup, and opens in a browser).
-ACTIVE_SCENARIO = Scenario.VILLAGE_DEFAULT
+# A file name under src/mtofr/scenarios/ (each file's docstring says what it exercises):
+# "split", "wait", "village", or "village_default" (every platform, including the
+# mission-editor "interface" platform, boots onto its default mission -- author/push a
+# real mission live via its web UI, whose address is printed at startup).
+ACTIVE_SCENARIO = "village_default"
 MAX_BACKLOG_STEPS = 5   # once the loop falls further behind than this many steps, drop the backlog
 IDLE_SLEEP_SECONDS = 0.001   # yields the CPU when there's no step/redraw to do
 

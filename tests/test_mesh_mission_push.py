@@ -18,13 +18,19 @@ class _FakeHardware:
     platform_id: str | None = None
 
 
+class _Idle(Capability):
+    """A capability that does nothing."""
+    ipl_type = "idle"
+    description = "Does nothing."
+
+
 class _FakeFrontseater(Frontseater):
     """Fake Frontseater advertising one no-input, no-output capability, "idle", and
     reporting each active request as "running"."""
     def __init__(self):
         """Advertise the one "idle" capability, with nothing active yet."""
         self.hardware = _FakeHardware()
-        self._registry = CapabilityRegistry([Capability(ipl_type="idle", description="Does nothing.")])
+        self._registry = CapabilityRegistry([_Idle])
         self._active_names = []
 
     def compute_controls(self, state) -> dict:

@@ -12,16 +12,19 @@ class Hardware(ABC):
     the (passive) Environment for whatever it needs, since how the world affects a
     vehicle is that vehicle's business. Knows nothing about capabilities or missions.
     Every subclass must set `environment_type` (the Environment class it can live in,
-    or None for any), which World checks at construction."""
+    or None for any), which World checks at construction.  `idle_controls` is the
+    "do nothing" controls dict (empty by default), which it starts with and which a
+    Frontseater with nothing to do sends."""
     # NOTE: environment_type deliberately has no default here, so forgetting it is an
     # error rather than a silent "lives anywhere".
     state: State
     environment_type: type | None
+    idle_controls: dict = {}
 
     def __init__(self, sensor: Sensor | None = None):
-        """Sets up the sensor (PerfectSensor by default) and empty pending controls; the subclass sets `state`."""
+        """Sets up the sensor (PerfectSensor by default) and idle pending controls; the subclass sets `state`."""
         self._sensor = sensor or PerfectSensor()
-        self._pending_controls: dict = {}
+        self._pending_controls: dict = dict(self.idle_controls)
         self.platform_id: str | None = None
 
     @abstractmethod

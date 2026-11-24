@@ -2,6 +2,34 @@
 
 Paths are as they were when each note was written; notes 33, 36, 37, and 40 record the moves.
 
+## 47 - 2026-11-24: Streamlined capabilities, platforms, and registration
+- Acted on note 45's friction (user's scope: items 1-4 and 6; actuation arbitration and environment leaks stay open).
+- `Capability` (`core/capability.py`) is now one class (user's naming): class attributes declare it, and `start()`/`tick()`/`stop()`/`status()` run it, one instance per running request.
+  - The I/O is `read(field)`/`write(field, value)` (user's choice over attribute magic); an unbound output is a no-op.
+  - `CapabilityRegistry` holds the classes, so validation, gossip, the web UI and the assistant needed no change.
+- The `Frontseater` base owns the lifecycle: `CAPABILITIES`, the request diff, ticking before controls (`begin_update()` = `tick_capabilities()` + `begin_controls()`), the default `describe_status()`, and `shutdown()` (fixes the known issue).
+  - **Behavior change:** a same-named request with different bindings is now restarted (an equal one still keeps running).
+  - `Hardware.idle_controls` seeds pending controls, and is the base `compute_controls()`.
+- Capabilities moved out of the Frontseaters, so they can be reused: `Stopwatch` (`platform/common_capabilities.py`), `SensePose` (`environments/ground_plane/capabilities.py`), `MoveTo`/`Avoid` (`bicycle_ugv/capabilities.py`), and `ShowInterface`/`ServeWebInterface` (`interface/capabilities.py`).
+  - The web UI's tick is now `ServeWebInterface.tick()`.
+- Registration: `knowledge_types` is a package with one file per type, and each `KnowledgeEntry` subclass self-registers (user request).  Scenarios are discovered by file name, so the `Scenario` enum is gone and `ACTIVE_SCENARIO` is a string.
+
+## 46 - 2026-11-24: Web UI checkpoint; values a mission can't carry yet
+- The web UI (notes 41-44) is working and is the primary interface.  What remains is its open items in `roadmap.md`, not new features.
+- Design gap found, deferred to future work.  Example: a trajectory drawn in a drawer panel, followed by a `follow_trajectory` capability, can't be specified:
+  - Adoption resets every declared key to its default (`_declare_knowledge_keys()`), so a value staged live before a push is overwritten.  The reset itself is right for flags like `arrived`.
+  - Only the editor writes draft values; other panels can't contribute one.
+  - `KnowledgeEntry` encoding covers flat scalar constructor fields only, so a waypoint list or an image has no form.  Sync checksums `repr()` every value, and the web state resends every value each poll, which doesn't scale to large values.
+- Directions to weigh when it's picked up (none chosen yet):
+  - a per-key "keep live value" adoption flag;
+  - panels registered as typed value editors that write into the draft;
+  - per-type JSON encode/decode with hashed checksums and on-demand fetch, or content-addressed blobs for constrained comms.
+
+## 45 - 2026-11-24: Extension checklists
+- Added `docs/checklists.md`: step-by-step checklists for a new capability, platform (Hardware + Frontseater), environment, and Knowledge type, as the code stands today.
+- Each step marks its friction, and a closing summary groups the friction against the target (capabilities about as easy as ROS callbacks, timers, and pub/sub).  It is the input for build order step 9's streamlining, so it proposes no solutions.
+- Found while writing: `shutdown()` is required by `Platform.shutdown()` but missing from the `Frontseater` ABC (now a known issue).
+
 ## 44 - 2026-11-24: Editor document, incomplete requests, condition builder, knowledge panel
 - Reverted note 43's layout-in-graph (user review): mission graphs carry no editor-only data, only a new optional `"name"`.
   - Layout, unset flags and following flags live in `EditorDocument` (`mission_editor/editor_document.py`), undone with the draft, in a saved file's `"editor"` section, and in `WebHost.editor_store` (name → sidecar) so Load Live restores a pushed mission's layout.

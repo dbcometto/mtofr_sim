@@ -1,5 +1,5 @@
-"""Tests for BicycleFrontseater's capability implementations (set_active_capabilities/
-_step_active_capabilities/describe_status) exercised directly, independent of any
+"""Tests for BicycleFrontseater's capabilities (set_active_capabilities/tick_capabilities/
+describe_status) exercised directly, independent of any
 Backseater/mission-graph driving them. A capability calls query()/publish() on its own
 Backseater, so these tests wire in a minimal fake backseater (a plain dict-backed
 query/publish) instead of a full Backseater."""
@@ -87,43 +87,50 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
     def test_move_to_starts_en_route_while_far_from_target(self):
         """A move_to far from its target reports "en route"."""
         self._activate_move_to(Location(100.0, 0.0), 0.5)
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertEqual(self.frontseater.describe_status()["capabilities"]["nav"], "en route")
 
     def test_move_to_reports_arrived_false_while_far_from_target(self):
         """A move_to far from its target publishes arrived = False."""
         self._activate_move_to(Location(100.0, 0.0), 0.5)
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertEqual(self.knowledge["arrived"], False)
 
     def test_move_to_reports_arrived_once_within_tolerance(self):
         """A move_to within tolerance of its target reports "arrived"."""
         self.hardware.state.x, self.hardware.state.y = 0.0, 0.0
         self._activate_move_to(Location(0.1, 0.0), 0.5)
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertEqual(self.frontseater.describe_status()["capabilities"]["nav"], "arrived")
 
     def test_move_to_publishes_arrived_to_its_bound_knowledge_key(self):
         """A move_to within tolerance publishes True to its bound arrived key."""
         self.hardware.state.x, self.hardware.state.y = 0.0, 0.0
         self._activate_move_to(Location(0.1, 0.0), 0.5)
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertTrue(self.knowledge["arrived"])
 
     def test_move_to_reads_a_retargeted_knowledge_key_on_the_next_step(self):
         """A move_to re-queries its target each step, so changing the Knowledge value retargets it."""
         self._activate_move_to(Location(100.0, 0.0), 0.5)
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.knowledge["target"] = Location(0.0, 0.0)
         self.hardware.state.x, self.hardware.state.y = 0.0, 0.0
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertEqual(self.frontseater.describe_status()["capabilities"]["nav"], "arrived")
+
+    def test_a_ticked_move_to_sets_the_navigation_target(self):
+        """Ticking a move_to hands its current target to the MPC via navigation_target."""
+        self._activate_move_to(Location(5.0, 0.0), 0.5)
+        self.frontseater.tick_capabilities()
+        self.assertEqual(self.frontseater.navigation_target.x, 5.0)
 
     def test_deactivating_a_move_to_clears_its_target(self):
         """Removing the move_to from the active capability requests clears the frontseater's target."""
         self._activate_move_to(Location(5.0, 0.0), 0.5)
+        self.frontseater.tick_capabilities()
         self.frontseater.set_active_capabilities({})
-        self.assertIsNone(self.frontseater._active_target)
+        self.assertIsNone(self.frontseater.navigation_target)
 
     def test_compute_controls_is_idle_with_no_active_target(self):
         """With no target, compute_controls() commands zero velocity and steering."""
@@ -139,13 +146,13 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
     def test_avoid_reports_registered(self):
         """An active avoid reports "registered"."""
         self._activate_avoid(Location(0.0, 0.0), 1.0)
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertEqual(self.frontseater.describe_status()["capabilities"]["avoid"], "registered")
 
     def test_avoid_publishes_registered_to_its_bound_knowledge_key(self):
         """An active avoid publishes True to its bound registered key."""
         self._activate_avoid(Location(0.0, 0.0), 1.0)
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertTrue(self.knowledge["registered"])
 
 
@@ -157,32 +164,32 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
     def test_stopwatch_reports_zero_elapsed_time_right_after_starting(self):
         """A freshly started stopwatch publishes zero elapsed time."""
         self._activate_stopwatch()
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertAlmostEqual(self.knowledge["elapsed_time"], 0.0)
 
     def test_stopwatch_elapsed_time_advances_with_simulation_time(self):
         """Elapsed time tracks the hardware's simulation clock, not wall time."""
         self._activate_stopwatch()
         self.hardware.state.t += 5.0
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertAlmostEqual(self.knowledge["elapsed_time"], 5.0)
 
     def test_stopwatch_publishes_elapsed_time_to_its_bound_knowledge_key(self):
         """The stopwatch publishes its elapsed time to its bound elapsed_time key."""
         self._activate_stopwatch()
         self.hardware.state.t += 3.0
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertAlmostEqual(self.knowledge["elapsed_time"], 3.0)
 
     def test_restarting_the_stopwatch_resets_elapsed_time_to_zero(self):
         """Stopping and restarting a stopwatch of the same name starts it again from zero."""
         self._activate_stopwatch(name="watch")
         self.hardware.state.t += 10.0
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
 
         self.frontseater.set_active_capabilities({})   # stop it
         self._activate_stopwatch(name="watch")        # start a fresh instance
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertAlmostEqual(self.knowledge["elapsed_time"], 0.0)
 
 
@@ -204,13 +211,13 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
             "pose": {"capability": "sense_pose", "inputs": {}, "outputs": {"pose": "ugv1/pose"}}
         })
         self.hardware.state.x, self.hardware.state.y, self.hardware.state.theta = 1.0, 2.0, 0.5
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         first_pose = self.knowledge["ugv1/pose"]
         self.assertIsInstance(first_pose, Pose)
         self.assertEqual((first_pose.x, first_pose.y, first_pose.theta), (1.0, 2.0, 0.5))
 
         self.hardware.state.x = 4.0
-        self.frontseater._step_active_capabilities()
+        self.frontseater.tick_capabilities()
         self.assertEqual(self.knowledge["ugv1/pose"].x, 4.0)
 
     def test_sense_pose_reports_sensing(self):

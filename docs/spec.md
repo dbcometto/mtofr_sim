@@ -9,20 +9,20 @@ Design history is in `notes.md`; build order, open items, and known issues are i
 
 
 ## Layout
-- `main.py`: entry point (`.venv\Scripts\python.exe main.py`).  Config constants at the top (`DT`, `ENABLE_HEADLESS`, `DEBUG`, `ACTIVE_SCENARIO`).  It is environment-agnostic: the scenario builds the environment and its viewer.  All setup is under `if __name__ == "__main__":` because Windows "spawn" re-imports the script in every MPC worker process.
+- `main.py`: entry point (`.venv\Scripts\python.exe main.py`).  Config constants at the top (`DT`, `ENABLE_HEADLESS`, `DEBUG`, `ACTIVE_SCENARIO`, a scenario file name).  It is environment-agnostic: the scenario builds the environment and its viewer.  All setup is under `if __name__ == "__main__":` because Windows "spawn" re-imports the script in every MPC worker process.
 - `src/mtofr/`: the package, an editable install.  Its packages are layered; each imports only from the layers above it in this list, and each `__init__` docstring states its rule.
   1. `core/`: platform-, environment-, and mission-agnostic.  `state.py` (`State`), `sensor.py` (`Sensor`, `PerfectSensor`), `hardware.py` (`Hardware`), `environment.py` (`Environment`), `clock.py` (`Clock`), `capability.py` (`ParamSpec`, `Capability`, `CapabilityRegistry`).
-  2. `database/`: `knowledge.py`, `knowledge_types.py`, `platform_keyed.py`, all re-exported from `mtofr.database`.
+  2. `database/`: `knowledge.py`, the `knowledge_types/` package (one file per type), `platform_keyed.py`, all re-exported from `mtofr.database`.
   3. `mission/`: what a mission is.  `graph.py` (the shape, as TypedDicts), `condition.py`, `validation.py`, `serialization.py`.
-  4. `platform/`: the mission-aware brain layers and their assembly.  `frontseater.py`, `backseater.py`, `platform.py` (`Platform`, `PlatformSpec`).
+  4. `platform/`: the mission-aware brain layers and their assembly.  `frontseater.py`, `backseater.py`, `platform.py` (`Platform`, `PlatformSpec`), `common_capabilities.py` (`Stopwatch`).
   5. `viz/`: environment-agnostic dashboard and viewers.  `MissionDashboard` takes `World` duck-typed, so viz never imports environments.
   6. `environments/`: `world.py` (`World`), one folder per environment, and `anywhere/` for platforms that need none.
-  7. `scenarios/`: one file per scenario, plus the `Scenario` enum and `SCENARIOS` registry.
+  7. `scenarios/`: one file per scenario, discovered into `SCENARIOS` by file name.
 - `tests/`: stdlib `unittest`, flat (`.venv\Scripts\python.exe -m unittest discover -s tests`).
 - `scripts/mpc_profile.py`: tick-time and MPC-iteration profiler (not part of the suite).
 - `mission_library/`: saved mission-graph JSON files (mission editor Save/Load).
 - `llm/ollama/`: start/stop scripts for the local LLM service (see `llm_setup.md`).
-- `docs/`: these documents.
+- `docs/`: these documents.  `checklists.md` covers adding a capability, platform, environment, Knowledge type, or scenario.
 
 
 
@@ -34,13 +34,15 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
   - `query(database_name, key)` / `publish(database_name, key, value, timestamp=None)` across `"knowledge"`/`"mission"`/`"platform"`, plus `declare_knowledge_key()`.  A `"mission"` publish always goes through `write_mission()`.
   - Bind check, each tick before handing off: `mission.validation.find_capability_problems()` against the live `KnowledgeDatabase.types()`, the same check the editor runs against a graph's declarations.  Any problem halts the mission (blocked) without crashing.
   - `update()` = `_advance_mission()` then `_refresh_own_record()`, which re-publishes its own `PlatformRecord` status (from `status()`) only when it changed.
-- **Frontseater** (`platform/frontseater.py` ABC): the only bespoke part of each platform (planning/control, capability implementations).  Talks to Hardware only via `send_controls`/`read_state`, and reaches its Backseater via `frontseater.backseater`.
-  - `capabilities()`: builds its own `CapabilityRegistry`.
-  - `set_active_capabilities(capability_requests)`: called only when the active node's `{name: {"capability", "inputs", "outputs"}}` dict changes (by identity).  The Frontseater diffs it (start new, stop gone, leave unchanged) and decides how "running" works.
-  - `describe_status() -> {"overall", "capabilities"}` (abstract, display-only), `compute_controls()`, `begin_update()`/`finish_update()` (lets MPC solves overlap across platforms), `shutdown()` (required).
-  - `default_mission_graph()`: concrete base gives an inert `"startup"` node.  `Backseater` uses it when given `mission_graph=None`.
-  - `attach(world, window_root=None)`: concrete no-op, for setup that needs `World` or the Tk root.
-- **Hardware** (`core/hardware.py` ABC): MCU equivalent; owns a `State` and its own dynamics.  One abstract method, `step_dynamics(dt, environment)`, which queries the passive environment.  `read_state()` goes through a `Sensor` (default `PerfectSensor`, the identity).  Every subclass declares `environment_type` (an `Environment` class, or `None` = any), with no base default.
+- **Frontseater** (`platform/frontseater.py`, a concrete base): the only bespoke part of each platform (planning/control, its list of capabilities).  Talks to Hardware only via `send_controls`/`read_state`, and reaches its Backseater via `frontseater.backseater`.  A subclass lists `CAPABILITIES` (Capability classes) and overrides only what it needs; `__init__(hardware, debug=False)`.
+  - `capabilities()`: the `CapabilityRegistry` built from `CAPABILITIES`.
+  - `set_active_capabilities(capability_requests)`: called only when the active node's `{name: {"capability", "inputs", "outputs"}}` dict changes (by identity).  The base diffs by name: a gone or changed (`!=`) request is stopped, a new or changed one gets a fresh `Capability` instance and is started, and an equal one keeps running.
+  - `begin_update()` = `tick_capabilities()` then `begin_controls()`; `finish_update()` = `finish_controls()`.  The default pair sends `compute_controls()` (default: the Hardware's `idle_controls`) synchronously; the bicycle overrides the pair so MPC solves overlap across platforms.
+  - `describe_status() -> {"overall", "capabilities"}` (display-only): `"idle"` or `"N capability request(s) active"`, plus each instance's `status()`.
+  - `shutdown()`: stops every running capability; an override calls `super().shutdown()` first.
+  - `default_mission_graph()`: the base gives an inert `"startup"` node.  `Backseater` uses it when given `mission_graph=None`.
+  - `attach(world, window_root=None)`: no-op, for setup that needs `World` or the Tk root.
+- **Hardware** (`core/hardware.py` ABC): MCU equivalent; owns a `State` and its own dynamics.  One abstract method, `step_dynamics(dt, environment)`, which queries the passive environment.  `read_state()` goes through a `Sensor` (default `PerfectSensor`, the identity).  Every subclass declares `environment_type` (an `Environment` class, or `None` = any), with no base default.  `idle_controls` (default `{}`) seeds the pending controls.
 - **State** (`core/state.py`): a dataclass holding only `t` (s, sim time).  Each environment subclasses it with what it tracks.
 - **Platform** (`platform/platform.py`): composition root, not a runtime layer.  `PlatformSpec(platform_id, build_frontseater, mission_graph=None, privilege_level=1, clock=None, sync_interval=1.0)` → `Platform` builds the stack and its `KnowledgeDatabase`, exposes `.hardware`/`.frontseater`/`.backseater`/`.knowledge_database`, and owns `attach()`/`shutdown()`.  It holds no reference to `World`.
 
@@ -56,7 +58,9 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
 
 ## Databases
 All three belong to the Backseater, are stamped by its `Clock`, and carry `origin_platform_id` per entry (the platform that held the entry at its latest locally converted timestamp, transitively).  Every check happens write-side only, once, at the originating platform; there is no re-verification on receipt.
-- **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, entry_type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required; built-ins `Location(x, y)` and `Pose(x, y, theta)` in `knowledge_types.py`).
+- **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, entry_type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required).
+  - Types live one per file in `database/knowledge_types/` (built-ins `location.py` `Location(x, y)` and `pose.py` `Pose(x, y, theta)`; the base and registry are in `base.py`).  The package imports every module in it.
+  - Each concrete subclass registers itself by class name in `KNOWLEDGE_TYPES_BY_NAME` (seeded with the scalars) and its reverse `KNOWLEDGE_TYPE_NAMES`; a taken name raises.
 - **Mission** (`MissionDatabase`): platform_id → `mission_graph` dict.  Each Backseater self-writes its boot mission at construction, so peers can read it.  Every write goes through `Backseater.write_mission(mission_graph, writer_platform_id, timestamp=None, target_platform_id=None)` (None = this platform), which applies:
   - a privilege check (skipped when the writer is the target);
   - a type check;
@@ -77,7 +81,7 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
   3. swaps the graph and the parsed conditions, and clears blocked;
   4. activates the new start node in the same tick.
 
-  This works for mesh-synced missions too.
+  This works for mesh-synced missions too.  Because of step 2, a value staged live before a push is overwritten; see the roadmap's "Values a Mission Can't Carry Yet".
 - **Mesh sync** (`Backseater.sync_with(peer)`): reconciles Knowledge, Mission, and Platform in both directions, last-write-wins by locally converted timestamp.  Pulled timestamps are converted (`Clock.to_local()`), never re-stamped.  Received entries bypass the write gates.
   - Symmetric and idempotent, so either side may initiate.
   - `sync_with_stale_peers(peers)` only syncs peers older than `sync_interval`.
@@ -91,15 +95,19 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 - `"inputs"`/`"outputs"` map a capability's field names to Knowledge keys, never literals.  They are the initial binding; a running capability may `query()`/`publish()` anything.
 - **Conditions** (`condition.py`): pre-tokenized boolean expressions over Knowledge keys (e.g. `["(", "ugv1/arrived", "==", True, "and", "ugv1/battery", ">", 0.9, ")", "or", "ugv1/target_found", "is", "not", None]`).  `parse_condition()` (recursive descent, no `eval`) builds a tree of `Comparison`/`IsNone`/`And`/`Or`/`Not`, each with `evaluate(knowledge)` and `keys()`.  Precedence is `not` > `and` > `or`.  Capability status never drives transitions; capabilities write Knowledge.
 - **Validation** (`validation.py`): `verify_mission_structure()` (every referenced key declared), `find_capability_problems(request, known_types, registry)` / `find_binding_problems(graph, registry)`, and `find_condition_problems(condition, known_types)` (a parse error, undeclared keys, or a literal whose type doesn't match the key's, e.g. the string `"true"` against a bool key).  `known_types` is key → type: `declared_types(graph)` for the editor, assistant, and push; `KnowledgeDatabase.types()` for the Backseater's bind check.  Edge reachability is not checked.
-- **Serialization** (`serialization.py`): JSON save/load with a type-name registry (`KNOWLEDGE_TYPES_BY_NAME`); a new `KnowledgeEntry` type needs one registry line.
-- **Capabilities** (`core/capability.py`): `ParamSpec(name, type, description)` describes fields and drives the binding checks; it never resolves values.  Its `describe()` includes a `KnowledgeEntry` type's own `describe()`, so a human or LLM can read what a field means.  `Capability(ipl_type, description, inputs, outputs)` and `CapabilityRegistry` (`.get`, `.all`, `.describe`).  A capability request's `"capability"` equals an `ipl_type`.
+- **Serialization** (`serialization.py`): JSON save/load through the self-populating type-name registry (`KNOWLEDGE_TYPES_BY_NAME`, re-exported from `mtofr.database`).
+- **Capabilities** (`core/capability.py`):
+  - `ParamSpec(name, type, description)` describes fields and drives the binding checks.  Its `describe()` includes a `KnowledgeEntry` type's own `describe()`, so a human or LLM can read what a field means.
+  - `Capability` is one class per capability.  Class attributes `ipl_type`, `description`, `inputs`, `outputs` declare it (`describe()` is a classmethod).  One instance per running request, `(frontseater, name, request)`, runs it through `start()`/`tick()`/`stop()`/`status()` (all optional), with `read(field)` (live query of the bound key) and `write(field, value)` (publish if bound, else no-op); both raise `KeyError` for an undeclared field.
+  - `CapabilityRegistry` holds the classes (`.get`, `.all`, `.describe`).  A capability request's `"capability"` equals an `ipl_type`.
+  - Shared capabilities: `Stopwatch` (`platform/common_capabilities.py`), `SensePose` (`environments/ground_plane/capabilities.py`).
 
 
 
 ## Scenarios (`scenarios/`)
 - One file per scenario (`split.py`, `wait.py`, `village.py`, `village_default.py`), each holding its graphs (named `mission_<scenario>_<platform_id>`) and `SCENARIO = ScenarioConfig(...)`.
 - `ScenarioConfig(build_environment, build_viewer, platforms: list[PlatformSpec])` (`base.py`): builders, not instances, so importing scenarios loads no map; duplicate ids raise.  A spec without a graph boots its Frontseater's default.
-- `Scenario` (`SPLIT`, `WAIT`, `VILLAGE`, `VILLAGE_DEFAULT`) maps through `SCENARIOS` to its config.
+- `SCENARIOS` maps each file name (every module but `base`) to its `SCENARIO`; `main.py`'s `ACTIVE_SCENARIO` is that name (e.g. `"village_default"`).
 
 
 
@@ -113,9 +121,9 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
   - `sensors/`: home for ground-plane sensors; empty until one is needed.
 - **Bicycle UGV** (`environments/ground_plane/platforms/bicycle_ugv/`): `bicycle_ugv(platform_id, start_x, start_y, mission_graph=None, privilege_level=1)`.
   - `BicycleHardware` is a kinematic bicycle (`dynamics.bicycle_step()`, shared with the MPC).
-  - `BicycleFrontseater` is the reference Frontseater, a plain if/elif over its capabilities:
-    - `move_to` (`target`, `tolerance` → `arrived`; re-queries each tick);
-    - `avoid` (`point`, `radius` → `registered`);
+  - `BicycleFrontseater` is the reference Frontseater, `CAPABILITIES = (MoveTo, Avoid, Stopwatch, SensePose)`:
+    - `move_to` (`bicycle_ugv/capabilities.py`; `target`, `tolerance` → `arrived`; re-reads each tick and sets `navigation_target`, which the MPC chases);
+    - `avoid` (`bicycle_ugv/capabilities.py`; `point`, `radius` → `registered`; `add_avoid_region()` at start);
     - `stopwatch` (→ `elapsed_time` in sim seconds since start; never completes);
     - `sense_pose` (→ `pose`, the sensed `Pose` from `read_state()`, every tick; never completes).
   - Its default mission loiters on `stopwatch` and runs `sense_pose` bound to `<platform_id>/pose`, so pose gossips by default.  A pushed mission without `sense_pose` stops that.
@@ -152,12 +160,12 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 
 ## Interface Platform and Mission Editors
 - `interface(platform_id, initial_state, ..., build_panels=default_panels)` (`environments/anywhere/platforms/interface/`, privilege 0): `MissionEditorFrontseater` + `ConsoleHardware` (a `StationaryHardware`, placed at `initial_state`, e.g. a `GroundPlaneState`).
-  - Two capabilities, matched by capability type: `show_interface` opens or closes the Tk editor window, and `serve_web_interface` starts or stops the web UI.  The default graph runs only `serve_web_interface`.
+  - Two capabilities (`interface/capabilities.py`): `ShowInterface` opens or closes the Tk editor window, and `ServeWebInterface` starts or stops the web UI (a start failure shows in its status) and, each tick, runs the `WebHost`'s tick.  The default graph runs only `serve_web_interface`.
   - Editing itself is not a capability.
   - `attach()` installs the Tk window factory (`_NullWindow` when headless).  The web UI needs neither `World` nor Tk.
 - **Web UI** (`interface/web/`), the hardware-portable one: it reads and writes only through the interface's own Backseater.
   - `WebInterfaceServer` (stdlib `ThreadingHTTPServer`, `WEB_HOST`/`WEB_PORT` in `web/config.py`, default `127.0.0.1:8765`) serves a vanilla-JS page and a JSON API in front of one `WebHost`.  A start failure (port taken) shows in `describe_status()`.
-  - Threading: `WebHost.on_tick(backseater)` runs on the sim thread from the frontseater's `begin_update()`.  It runs every queued write (outcomes go to the console of the window that queued it), then captures an `InterfaceView` (frozen copies of all three databases).  Server threads only read the latest view and queue writes, so while the sim is paused, reads hold still and writes wait.
+  - Threading: `WebHost.on_tick(backseater)` runs on the sim thread from `ServeWebInterface.tick()`.  It runs every queued write (outcomes go to the console of the window that queued it), then captures an `InterfaceView` (frozen copies of all three databases).  Server threads only read the latest view and queue writes, so while the sim is paused, reads hold still and writes wait.
   - Per-window sessions: the page keeps an id in `sessionStorage` and sends it as `X-Session-Id` (400 if missing or malformed).  `WebHost(own_platform_id, build_panels)` builds fresh panels for each session, so each window has its own Target, draft, undo history, and console over the one shared view.  A session survives a reload, expires after `SESSION_IDLE_TIMEOUT`, and is capped at `MAX_SESSIONS`.
   - Panels (`web/panel.py`): a `WebPanel` has `name`, `title`, `script_path` (its JS half, which calls `mtofr.registerPanel(name, mount)`), `state(context)`, and `commands()`.  `PanelContext(view, target_platform_id, submit, log, editor_store)`.  `api.command()` resolves after the resulting state is applied.
     - A static registry: `default_panels()` gives Graph, then Live Control.  The table Editor tab is off for now (a NOTE in `panels/__init__.py`), but its `EditorPanel` still holds the window's draft.

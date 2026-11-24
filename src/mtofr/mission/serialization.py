@@ -3,23 +3,21 @@ interface), plus the shared knowledge-type introspection this and the mission ed
 use. A graph's "knowledge"
 section stores real `type` objects, which JSON can't hold directly --
 KNOWLEDGE_TYPES_BY_NAME (and its reverse, KNOWLEDGE_TYPE_NAMES) is the name<->type
-registry used to round-trip them. A compound type (any KnowledgeEntry subclass,
-e.g. Location) is encoded/decoded generically via constructor_fields()'s
-introspection of its __init__ signature rather than a hardcoded per-type case --
-adding a new KnowledgeEntry subclass to KNOWLEDGE_TYPES_BY_NAME is the only step
-needed for it to be declarable, edited, and saved/loaded by the editor."""
+registry used to round-trip them, re-exported here from mtofr.database, where every
+KnowledgeEntry subclass registers itself. A compound type (e.g. Location) is
+encoded/decoded generically via constructor_fields()'s introspection of its __init__
+signature rather than a hardcoded per-type case, so defining the subclass is the only
+step needed for it to be declarable, edited, and saved/loaded by the editor."""
 import inspect
 import json
 
-from mtofr.database import KnowledgeEntry, Location, Pose
+from mtofr.database import KNOWLEDGE_TYPE_NAMES, KNOWLEDGE_TYPES_BY_NAME, KnowledgeEntry
 
 
 #========================================#
 # Config
 #========================================#
 
-KNOWLEDGE_TYPES_BY_NAME = {"bool": bool, "float": float, "int": int, "str": str, "Location": Location, "Pose": Pose} #TODO: make this automatic
-KNOWLEDGE_TYPE_NAMES = {value: name for name, value in KNOWLEDGE_TYPES_BY_NAME.items()}
 TRUE_TEXTS = ("true", "1", "yes")   # lowercase text a bool field reads as True
 JSON_INDENT = 2
 

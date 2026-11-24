@@ -15,6 +15,14 @@ from mtofr.mission.validation import (
 )
 
 
+class _MoveTo(Capability):
+    """A declaration-only move_to: target and tolerance in, arrived out."""
+    ipl_type = "move_to"
+    description = "d"
+    inputs = (ParamSpec("target", Location, "t"), ParamSpec("tolerance", float, "m"))
+    outputs = (ParamSpec("arrived", bool, "a"),)
+
+
 class TestConditionProblems(unittest.TestCase):
     KNOWN = {"flag": bool, "speed": float, "count": int, "label": str}
 
@@ -93,10 +101,7 @@ class TestBindingProblems(unittest.TestCase):
     declarations or a live KnowledgeDatabase's types."""
     def setUp(self):
         """Build a move_to registry (target, tolerance -> arrived) and matching declared knowledge."""
-        self.registry = CapabilityRegistry([Capability(
-            "move_to", "d",
-            inputs=(ParamSpec("target", Location, "t"), ParamSpec("tolerance", float, "m")),
-            outputs=(ParamSpec("arrived", bool, "a"),))])
+        self.registry = CapabilityRegistry([_MoveTo])
         self.knowledge = {"goal": {"type": Location, "value": Location(1.0, 2.0)},
                           "tolerance": {"type": float, "value": 1.0}, "arrived": {"type": bool, "value": False}}
         self.known_types = {key: declaration["type"] for key, declaration in self.knowledge.items()}

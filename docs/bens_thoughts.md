@@ -7,6 +7,7 @@ For human editing only
 ## Tasks
 1. Sim window needs numbers on icons
 2. Logging prints need to be prefixed by type and name (e.g. "[Frontseater] 'interface' web interface at http://127.0.0.1:8765" should start with [Frontseater-interface-0] or something like that)
+3. Need live mode for mission push knowledge keys, and needs a way to import from rich editors
 
 
 ## Organization
@@ -19,9 +20,8 @@ For human editing only
 
 
 ## UI
-1. Webserver
-2. Shorthand for UI: interrupts, always-on capabilities, submissions
-3. Light mode dark mode?
+1. Shorthand for UI: interrupts, always-on capabilities, submissions
+2. Light mode dark mode?
 
 
 

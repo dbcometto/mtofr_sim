@@ -156,20 +156,21 @@ class TestBackseaterKnowledgeBasedTransition(unittest.TestCase):
         self.assertTrue(knowledge.get("ugv1/arrived"))
 
 
+class _Scan(Capability):
+    """A declaration-only capability with two outputs."""
+    ipl_type = "scan"
+    description = "Fake scan capability with two outputs."
+    outputs = (ParamSpec("found", bool, "whether a target was found"),
+               ParamSpec("count", int, "number of targets found"))
+
+
 class _TwoOutputFrontseater(Frontseater):
     """Minimal fake Frontseater advertising one capability with two named outputs, for
     testing that a capability publishes each bound output to its own Knowledge key by name."""
     def __init__(self):
         """Advertise the one two-output "scan" capability."""
         self.backseater = None
-        self._registry = CapabilityRegistry([
-            Capability(
-                ipl_type="scan",
-                description="Fake scan capability with two outputs.",
-                outputs=(ParamSpec("found", bool, "whether a target was found"),
-                         ParamSpec("count", int, "number of targets found")),
-            ),
-        ])
+        self._registry = CapabilityRegistry([_Scan])
 
     def compute_controls(self, state) -> dict:
         """Command nothing."""

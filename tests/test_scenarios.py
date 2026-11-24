@@ -1,4 +1,4 @@
-"""Tests for mtofr.scenarios: the Scenario enum, each ScenarioConfig, and each mission graph's basic shape."""
+"""Tests for mtofr.scenarios: scenario discovery, each ScenarioConfig, and each mission graph's basic shape."""
 import unittest
 
 from mtofr.core.environment import Environment
@@ -6,7 +6,7 @@ from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_u
 from mtofr.environments.ground_plane.viz import PlanePlotter
 from mtofr.platform.frontseater import Frontseater
 from mtofr.platform.platform import PlatformSpec
-from mtofr.scenarios import Scenario, ScenarioConfig, SCENARIOS
+from mtofr.scenarios import ScenarioConfig, SCENARIOS
 from mtofr.scenarios.split import mission_split_ugv1, mission_split_ugv2
 from mtofr.scenarios.village import mission_village_ugv1, mission_village_ugv2
 from mtofr.scenarios.wait import mission_wait_ugv1, mission_wait_ugv2
@@ -19,15 +19,13 @@ ALL_MISSION_GRAPHS = (
 
 
 class TestScenarios(unittest.TestCase):
-    def test_scenario_has_split_wait_village_and_village_default(self):
-        """Scenario has exactly the SPLIT, WAIT, VILLAGE, and VILLAGE_DEFAULT members."""
-        self.assertEqual({member.name for member in Scenario}, {"SPLIT", "WAIT", "VILLAGE", "VILLAGE_DEFAULT"})
+    def test_discovery_finds_every_scenario_file_by_name(self):
+        """SCENARIOS holds exactly the scenario files, keyed by file name (base.py excluded)."""
+        self.assertEqual(set(SCENARIOS), {"split", "wait", "village", "village_default"})
 
     def test_every_scenario_has_a_config_with_at_least_one_platform(self):
-        """Every Scenario maps to a ScenarioConfig with a non-empty list of PlatformSpecs."""
-        for scenario in Scenario:
-            self.assertIn(scenario, SCENARIOS)
-            config = SCENARIOS[scenario]
+        """Every scenario is a ScenarioConfig with a non-empty list of PlatformSpecs."""
+        for config in SCENARIOS.values():
             self.assertIsInstance(config, ScenarioConfig)
             self.assertTrue(config.platforms)
             for spec in config.platforms:
@@ -35,15 +33,14 @@ class TestScenarios(unittest.TestCase):
 
     def test_every_scenario_builds_its_environment_and_viewer(self):
         """Every scenario's builders produce an Environment and an EnvironmentViewer over it."""
-        for scenario in Scenario:
-            config = SCENARIOS[scenario]
+        for config in SCENARIOS.values():
             environment = config.build_environment()
             self.assertIsInstance(environment, Environment)
             self.assertIsInstance(config.build_viewer(environment), EnvironmentViewer)
 
     def test_ground_plane_viewer_draws_the_environments_own_map(self):
         """PlanePlotter.for_environment() reuses the environment's GroundMap rather than loading another."""
-        environment = SCENARIOS[Scenario.VILLAGE].build_environment()
+        environment = SCENARIOS["village"].build_environment()
         viewer = PlanePlotter.for_environment(environment)
         self.assertIsNotNone(environment.ground_map)
         self.assertIs(viewer.ground_map, environment.ground_map)
@@ -57,19 +54,19 @@ class TestScenarios(unittest.TestCase):
     def test_village_default_has_no_explicit_mission_graphs(self):
         """VILLAGE_DEFAULT has ugv1, ugv2, and interface, none with an explicit mission graph."""
         # A spec with no mission_graph boots onto its own Frontseater.default_mission_graph().
-        config = SCENARIOS[Scenario.VILLAGE_DEFAULT]
+        config = SCENARIOS["village_default"]
         self.assertEqual({spec.platform_id for spec in config.platforms}, {"ugv1", "ugv2", "interface"})
         self.assertTrue(all(spec.mission_graph is None for spec in config.platforms))
 
     def test_village_default_gives_the_interface_platform_higher_privilege(self):
         """In VILLAGE_DEFAULT, the interface's privilege level is lower (more privileged) than a UGV's."""
-        specs = {spec.platform_id: spec for spec in SCENARIOS[Scenario.VILLAGE_DEFAULT].platforms}
+        specs = {spec.platform_id: spec for spec in SCENARIOS["village_default"].platforms}
         self.assertLess(specs["interface"].privilege_level, specs["ugv1"].privilege_level)
 
     def test_every_spec_builds_a_frontseater(self):
         """Every spec in every scenario builds a Frontseater."""
-        for scenario in Scenario:
-            for spec in SCENARIOS[scenario].platforms:
+        for config in SCENARIOS.values():
+            for spec in config.platforms:
                 frontseater = spec.build_frontseater(False)
                 self.addCleanup(frontseater.shutdown)
                 self.assertIsInstance(frontseater, Frontseater)

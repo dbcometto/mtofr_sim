@@ -1,6 +1,6 @@
 """Defines KnowledgeDatabase: the arbitrary-key typed store one Backseater owns (as opposed
 to MissionDatabase/PlatformDatabase in platform_keyed.py, which are keyed by platform_id).
-Concrete entry types (e.g. Location) live in knowledge_types.py."""
+Concrete entry types (e.g. Location) live in the knowledge_types package, one file each."""
 import time
 
 

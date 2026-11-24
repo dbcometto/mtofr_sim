@@ -13,6 +13,29 @@ from mtofr.environments.ground_plane.maps.ground_map import RegionType, Traversa
 from mtofr.environments.ground_plane.state import GroundPlaneState
 
 
+class _MoveTo(Capability):
+    """A declaration-only move_to: target and tolerance in, arrived out."""
+    ipl_type = "move_to"
+    description = "d"
+    inputs = (ParamSpec("target", Location, "t"), ParamSpec("tolerance", float, "m"))
+    outputs = (ParamSpec("arrived", bool, "a"),)
+
+
+class _TargetOnlyMoveTo(Capability):
+    """A declaration-only move_to with just a target input."""
+    ipl_type = "move_to"
+    description = "drive to a target"
+    inputs = (ParamSpec("target", Location, "where"),)
+    outputs = (ParamSpec("arrived", bool, "done"),)
+
+
+class _ToleranceOnlyMoveTo(Capability):
+    """A declaration-only move_to with just a tolerance input."""
+    ipl_type = "move_to"
+    description = "d"
+    inputs = (ParamSpec("tolerance", float, "reached distance in meters"),)
+
+
 class _Holder:
     """A draft the toolbox reads and writes, standing in for the editor window."""
     def __init__(self, draft):
@@ -125,10 +148,7 @@ class TestToolboxBindingChecks(unittest.TestCase):
     """With a target platform's capabilities known, a capability request that platform couldn't bind is refused at the tool call."""
     def setUp(self):
         """Build a toolbox that knows a move_to capability, with "goal" and "arrived" declared."""
-        registry = CapabilityRegistry([Capability(
-            "move_to", "d",
-            inputs=(ParamSpec("target", Location, "t"), ParamSpec("tolerance", float, "m")),
-            outputs=(ParamSpec("arrived", bool, "a"),))])
+        registry = CapabilityRegistry([_MoveTo])
         self.holder = _Holder(graph_draft.blank_graph("a"))
         self.toolbox = DraftToolbox(lambda: self.holder.draft, self.holder.apply, get_capabilities=lambda: registry)
         self.toolbox.run("add_knowledge_key", {"key": "goal", "type": "Location", "value": {"x": 1, "y": 2}})
@@ -180,9 +200,7 @@ class TestToolboxBindingChecks(unittest.TestCase):
 class TestPromptAndSession(unittest.TestCase):
     def setUp(self):
         """Build a move_to registry and a one-node draft with a Location key, a capability request, and a self-edge."""
-        self.registry = CapabilityRegistry([Capability(
-            "move_to", "drive to a target",
-            inputs=(ParamSpec("target", Location, "where"),), outputs=(ParamSpec("arrived", bool, "done"),))])
+        self.registry = CapabilityRegistry([_TargetOnlyMoveTo])
         draft = graph_draft.blank_graph("a")
         draft = graph_draft.add_knowledge_key(draft, "goal", Location, Location(1.0, 2.0))
         draft = graph_draft.add_capability(draft, "a", "go", "move_to", {"target": "goal"}, {})
@@ -337,7 +355,7 @@ class TestLiveState(unittest.TestCase):
 
     def test_capability_field_meanings_reach_the_model(self):
         """render_state() includes each capability field's description."""
-        registry = CapabilityRegistry([Capability("move_to", "d", inputs=(ParamSpec("tolerance", float, "reached distance in meters"),))])
+        registry = CapabilityRegistry([_ToleranceOnlyMoveTo])
         self.assertIn("tolerance (float: reached distance in meters)", render_state(graph_draft.blank_graph(), registry, "u"))
 
 

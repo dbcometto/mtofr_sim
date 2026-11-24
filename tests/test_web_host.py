@@ -30,16 +30,25 @@ class _FakeHardware:
     platform_id: str | None = None
 
 
+class _Idle(Capability):
+    """A capability that does nothing."""
+    ipl_type = "idle"
+    description = "Does nothing."
+
+
+class _Goto(Capability):
+    """A declaration-only capability with one Location input."""
+    ipl_type = "goto"
+    description = "Goes somewhere."
+    inputs = (ParamSpec("target", Location, "Where to go"),)
+
+
 class _FakeFrontseater(Frontseater):
     """Advertises "idle" (no fields) and "goto" (a required Location input); runs nothing."""
     def __init__(self):
         """Advertise the two capabilities."""
         self.hardware = _FakeHardware()
-        self._registry = CapabilityRegistry([
-            Capability(ipl_type="idle", description="Does nothing."),
-            Capability(ipl_type="goto", description="Goes somewhere.",
-                       inputs=(ParamSpec("target", Location, "Where to go"),)),
-        ])
+        self._registry = CapabilityRegistry([_Idle, _Goto])
 
     def compute_controls(self, state) -> dict:
         """Command nothing."""

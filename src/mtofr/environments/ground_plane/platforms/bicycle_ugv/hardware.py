@@ -33,6 +33,8 @@ class BicycleHardware(GroundPlaneHardware):
     - "vel": desired forward speed in m/s
     - "steer": desired steering angle in rad around +z
     """
+    idle_controls = IDLE_CONTROLS
+
     def __init__(self, wheelbase=DEFAULT_WHEELBASE, min_speed=DEFAULT_MIN_SPEED, max_speed=DEFAULT_MAX_SPEED,
                  min_steer=DEFAULT_MIN_STEER, max_steer=DEFAULT_MAX_STEER, initial_state: GroundPlaneState = None):
         """A stopped vehicle at `initial_state` (the origin by default) with the given limits."""
@@ -43,7 +45,6 @@ class BicycleHardware(GroundPlaneHardware):
         self.min_steer = min_steer   # rad
         self.max_steer = max_steer   # rad
         self.state = initial_state or GroundPlaneState()
-        self._pending_controls = dict(IDLE_CONTROLS)
 
     def calculate_dynamics(self, state: GroundPlaneState, controls: dict, dt: float,
                             max_speed_multiplier: float = 1.0) -> GroundPlaneState:

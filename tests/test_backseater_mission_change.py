@@ -19,6 +19,12 @@ class _FakeHardware:
     platform_id: str | None = None
 
 
+class _Idle(Capability):
+    """A capability that does nothing."""
+    ipl_type = "idle"
+    description = "Does nothing."
+
+
 class _RecordingFrontseater(Frontseater):
     """Fake Frontseater advertising one no-input, no-output capability ("idle"),
     recording every set_active_capabilities() call so tests can assert on
@@ -26,9 +32,7 @@ class _RecordingFrontseater(Frontseater):
     def __init__(self):
         """Start with no active capability requests and nothing stopped."""
         self.hardware = _FakeHardware()
-        self._registry = CapabilityRegistry([
-            Capability(ipl_type="idle", description="Does nothing."),
-        ])
+        self._registry = CapabilityRegistry([_Idle])
         self.active_request_names = set()   # what the last set_active_capabilities() call contained
         self.stopped_names = []                # every name that has ever dropped out of that dict
 

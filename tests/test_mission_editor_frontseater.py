@@ -1,7 +1,6 @@
 """Tests for MissionEditorFrontseater: opens/closes a window and starts/stops a web
 server (each via an injected factory) as its two capabilities, show_interface and
-serve_web_interface, start/stop -- rather than running anything per-tick like a normal
-capability -- and hands the web UI its tick. No real Tk window or server is involved;
+serve_web_interface, start/stop, and serve_web_interface's tick hands the web UI its tick. No real Tk window or server is involved;
 fakes stand in for MissionEditorWindow and WebInterfaceServer."""
 import unittest
 
@@ -109,7 +108,7 @@ class TestMissionEditorFrontseater(unittest.TestCase):
         })
         self.assertEqual((len(self.windows_built), len(self.web_servers_built)), (1, 1))
         status = self.frontseater.describe_status()
-        self.assertEqual(status["overall"], f"showing interface; serving web interface at {_FAKE_URL}")
+        self.assertEqual(status["overall"], "2 capability request(s) active")
         self.assertEqual(status["capabilities"], {"interface": "open", "web_interface": f"serving at {_FAKE_URL}"})
 
     def test_a_server_start_failure_is_reported_not_raised(self):
@@ -119,9 +118,9 @@ class TestMissionEditorFrontseater(unittest.TestCase):
             raise OSError("address already in use")
         self.frontseater.set_web_server_factory(failing_factory)
         self.frontseater.set_active_capabilities(_WEB_REQUESTS)   # must not raise
-        status = self.frontseater.describe_status()
-        self.assertEqual(status["overall"], "web interface failed to start")
-        self.assertIn("address already in use", status["capabilities"]["web_interface"])
+        request_status = self.frontseater.describe_status()["capabilities"]["web_interface"]
+        self.assertTrue(request_status.startswith("failed"))
+        self.assertIn("address already in use", request_status)
 
     def test_begin_update_hands_the_web_host_its_tick(self):
         """While serving, begin_update() runs the WebHost's tick: its queued writes run against this platform's Backseater."""
@@ -163,10 +162,10 @@ class TestMissionEditorFrontseater(unittest.TestCase):
         self.assertTrue(window.closed)
 
     def test_describe_status_reflects_window_state(self):
-        """Overall status reads "idle" with no window and "showing interface" with one open."""
+        """Overall status reads "idle" with no window, and the request reads "open" with one open."""
         self.assertEqual(self.frontseater.describe_status()["overall"], "idle")
         self.frontseater.set_active_capabilities({"interface": {"capability": "show_interface", "inputs": {}, "outputs": {}}})
-        self.assertEqual(self.frontseater.describe_status()["overall"], "showing interface")
+        self.assertEqual(self.frontseater.describe_status()["capabilities"], {"interface": "open"})
 
     def test_starting_without_a_window_factory_raises(self):
         """Activating show_interface before any window factory is installed raises RuntimeError."""
@@ -190,7 +189,7 @@ class TestMissionEditorFrontseater(unittest.TestCase):
         frontseater = MissionEditorFrontseater(hardware=ConsoleHardware())
         frontseater.attach(world=object(), window_root=None)
         frontseater.set_active_capabilities({"interface": {"capability": "show_interface", "inputs": {}, "outputs": {}}})
-        self.assertEqual(frontseater.describe_status()["overall"], "showing interface")
+        self.assertEqual(frontseater.describe_status()["capabilities"], {"interface": "open"})
         frontseater.set_active_capabilities({})   # the null window's close() must not raise
         self.assertEqual(frontseater.describe_status()["overall"], "idle")
 

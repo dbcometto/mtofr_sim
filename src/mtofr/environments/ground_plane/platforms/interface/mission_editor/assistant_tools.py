@@ -6,7 +6,7 @@ from mtofr.mission.serialization import (
     KNOWLEDGE_TYPES_BY_NAME, SCALAR_CASTERS, constructor_fields, is_compound_knowledge_type,
 )
 from mtofr.mission.validation import declared_types, find_binding_problems, find_capability_problems
-from mtofr.environments.anywhere.platforms.interface.mission_editor import graph_draft
+from mtofr.environments.ground_plane.platforms.interface.mission_editor import graph_draft
 
 
 #========================================#

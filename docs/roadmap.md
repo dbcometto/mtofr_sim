@@ -3,6 +3,7 @@
 ## Current Status
 - Done: the peer-to-peer platform stack, image-based maps, default missions, the mission editor (interface platform), and the reorganization into layered packages (build order steps 1-7).  The LLM assistant (step 10) has a first cut.  The web UI (step 8) has a first cut, routed through the interface's own Backseater, with live `PlatformRecord` gossip and pose (notes 41-42), a graphical editor and per-window sessions (note 43), and an editor document, incomplete requests, a condition builder, and a Knowledge panel (note 44).
 - The web UI is working and is the primary interface (checkpoint: note 46).  What remains for it is its open items below, not new features.
+- The interface is now a ground_plane platform with a map sensor, feeding a World Viewer panel with a trajectory drawer.  `Trajectory` and `follow_trajectory` exist, and `environments/anywhere/` is gone (note 48).
 - Next: the web UI's open items and known issues (below), and build order step 9.  On the LLM side, the post-turn graph check (Next Up for LLM Agent, below).
 
 
@@ -15,7 +16,7 @@
 5. [x] Default startup missions (note 25)
 6. [x] Manual mission-authoring "interface" platform (notes 27-33)
 7. [x] Reorganization: layered packages, `mission/`, `scenarios/`, environment-specific state; primitive → capability request (note 40)
-8. [~] Web UI capability so interface is more flexible: working (Tk parity, panel seam, mesh-routed, graphical editor, per-window sessions, editor document, condition builder, Knowledge panel; notes 41-44, checkpoint note 46); open items below
+8. [~] Web UI capability so interface is more flexible: working (Tk parity, panel seam, mesh-routed, graphical editor, per-window sessions, editor document, condition builder, Knowledge panel; notes 41-44, checkpoint note 46; World Viewer and trajectory drawer, note 48); open items below
 9. [~] Re-touch user experience implementing platforms and capabilities so it is clean and easy: friction written up in `checklists.md` (note 45); capabilities as single classes, the Frontseater base lifecycle, and automatic Knowledge-type/scenario registration done (note 47).  Still open: actuation arbitration and environment leaks (`checklists.md` friction 5 and 7)
 10. [ ] Convoying-related capabilities
 11. [ ] [~] Agentic LLM on the interface platform: first cut done (the mission-editor assistant, notes 34-35); see open items below
@@ -26,7 +27,7 @@
 ## Web UI Open Items
 1. Usability: graphical editing, edge reordering, the condition builder, live validation (⚠), inline capability requests, and the Knowledge panel are done (notes 43-44).  Still open: the condition builder can't nest and/or groups (nested conditions use raw tokens), and the table Editor tab is off and may be retired.
 2. The LLM assistant as a web panel.  `DraftToolbox` is already the Editor's command layer, so it can edit the same draft.
-3. A map panel (overhead view with `<id>/pose` markers), then panels like obstacle painting, which would submit painted obstacles as Knowledge.  The map asset would be the panel's own config, never `World`.
+3. Done: the World Viewer (overhead view of the sensed map with `<id>/pose` markers, plus a trajectory drawer; note 48).  Still open: tools like obstacle painting, which would submit painted obstacles as Knowledge.  The drawer's output is copy/paste text; a direct write-back is the Future Work section below.
 4. A per-platform port: two interface platforms would collide on `WEB_PORT`.
 5. Retire the Tk editor's direct writes (it calls the target's `write_mission()` and reads `World`), or retire the Tk editor itself once the web UI supersedes it.
 6. `CapabilityRegistry` and `KnowledgeEntry` values are gossiped as in-process objects; a real comms boundary needs them serialized (`encode_capabilities()` in `web/encoding.py` is a start).
@@ -36,7 +37,7 @@
 
 
 ## Future Work: Values a Mission Can't Carry Yet (note 46)
-A value made in a specialized viewer, like a trajectory drawn in a drawer panel for a `follow_trajectory` capability, has no path into a mission today:
+A value made in a specialized viewer has no direct path into a mission today.  The trajectory drawer works around this with plain text (`Trajectory` is one JSON-text field, copied and pasted by the operator; note 48); a richer value can't:
 - **Adoption resets declared keys.** `Backseater._declare_knowledge_keys()` sets every key the new mission declares back to its default, so a value staged live before the push is overwritten.  Reset is still right for run flags like `ugv1/arrived`, so any change must be per key.
 - **Only the editor writes draft values.** No other panel can contribute a value to the window's draft.
 - **Rich values have no encoding.** `KnowledgeEntry` types serialize through flat scalar constructor fields only, so a waypoint list or an image can't be declared, edited, saved, or sent.
@@ -62,7 +63,7 @@ Directions to weigh (interview first; none chosen):
 4. If stalls continue, an explicit `finish(summary)` tool is sturdier than the announce-pattern heuristic, which can misfire.
 5. A larger model needs a GPU (2-3x slower per token on this CPU); no alternative model has been tried.
 6. Stretch goals: a `get_draft` self-refresh tool; an ASCII traversability grid for routing around blocked terrain.
-7. `describe_world()` (`assistant_prompt.py`) reads `environment.ground_map` and `state.x/.y`, which is ground-plane knowledge inside an `anywhere` platform.  A per-environment `describe()` (e.g. on `Environment`) would remove the leak.
+7. Resolved (note 48): `describe_world()` (`assistant_prompt.py`) reads `environment.ground_map` and `state.x/.y`, which is no longer a leak now that the interface is a ground_plane platform.  It still reads `World` directly (the Tk path); a web-panel assistant would read the sensed map instead.
 
 
 
@@ -102,3 +103,5 @@ Directions to weigh (interview first; none chosen):
 
 ## Known Issues
 - Both UGVs' default missions declare the same un-prefixed `startup/elapsed_time` key, so they overwrite each other through mesh sync (last write wins).  It should be `<platform_id>/elapsed_time`, like `<platform_id>/pose`.
+- `as_knowledge_value()` reads a bare JSON-list string as positional fields.  So a Trajectory value sent as `"[[0, 0], [5, 5]]"` (rather than `{"waypoints": "..."}`) is misread and refused.  The web forms send the field dict, and `Trajectory.describe()` tells the LLM the right form, but a single-field type could be special-cased.
+- Mesh sync runs on wall time (`sync_interval`), so a headless loop stepping faster than real time delays mission adoption by many sim seconds.  `main.py` paces at real time, so only scripts are affected.

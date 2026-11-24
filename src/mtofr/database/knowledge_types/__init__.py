@@ -7,6 +7,7 @@ import pkgutil
 from mtofr.database.knowledge_types.base import KNOWLEDGE_TYPE_NAMES, KNOWLEDGE_TYPES_BY_NAME, KnowledgeEntry
 from mtofr.database.knowledge_types.location import Location
 from mtofr.database.knowledge_types.pose import Pose
+from mtofr.database.knowledge_types.trajectory import Trajectory
 
 
 for _module in pkgutil.iter_modules(__path__):

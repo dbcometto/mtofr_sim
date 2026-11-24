@@ -4,7 +4,7 @@ so it is testable without a browser and reusable by another editor."""
 from collections import Counter
 from dataclasses import dataclass, field, replace
 
-from mtofr.environments.anywhere.platforms.interface.mission_editor import graph_draft
+from mtofr.environments.ground_plane.platforms.interface.mission_editor import graph_draft
 
 
 #========================================#

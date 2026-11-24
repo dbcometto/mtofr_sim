@@ -4,9 +4,22 @@ Frontseater that is nothing but a CAPABILITIES tuple."""
 import unittest
 
 from mtofr.core.capability import Capability, ParamSpec
+from mtofr.core.hardware import Hardware
 from mtofr.core.state import State
-from mtofr.environments.anywhere.hardware import StationaryHardware
 from mtofr.platform.frontseater import Frontseater
+
+
+class _StillHardware(Hardware):
+    """Hardware that never moves, in no particular environment."""
+    environment_type = None
+
+    def __init__(self):
+        """Holds a bare State."""
+        super().__init__()
+        self.state = State()
+
+    def step_dynamics(self, dt, environment):
+        """Never moves."""
 
 
 class _Counter(Capability):
@@ -41,7 +54,7 @@ class _CountingFrontseater(Frontseater):
 
     def __init__(self):
         """A stationary platform with an empty event log."""
-        super().__init__(StationaryHardware(State()))
+        super().__init__(_StillHardware())
         self.events = []
 
     def compute_controls(self, state) -> dict:
@@ -128,7 +141,7 @@ class TestFrontseaterLifecycle(unittest.TestCase):
 
     def test_default_controls_are_the_hardwares_idle_controls(self):
         """The base compute_controls() returns the Hardware's idle_controls."""
-        self.assertEqual(Frontseater(StationaryHardware(State())).compute_controls(State()), {})
+        self.assertEqual(Frontseater(_StillHardware()).compute_controls(State()), {})
 
 
 if __name__ == "__main__":

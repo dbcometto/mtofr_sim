@@ -2,7 +2,7 @@
 condition builder shows it (all/any rows), or None when it needs the raw-token editor."""
 import unittest
 
-from mtofr.environments.anywhere.platforms.interface.web.encoding import condition_rows
+from mtofr.environments.ground_plane.platforms.interface.web.encoding import condition_rows
 
 
 class TestConditionRows(unittest.TestCase):

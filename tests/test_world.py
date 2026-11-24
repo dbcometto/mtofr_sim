@@ -7,8 +7,8 @@ import io
 import unittest
 
 from mtofr.core.environment import Environment
+from mtofr.core.hardware import Hardware
 from mtofr.core.state import State
-from mtofr.environments.anywhere.hardware import StationaryHardware
 from mtofr.environments.ground_plane.env import GroundPlaneEnv
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
 from mtofr.environments.ground_plane.state import GroundPlaneState
@@ -58,6 +58,19 @@ class FakeHardware:
     def step_dynamics(self, dt, environment):
         """Record the dt and environment this hardware was stepped with."""
         self.step_dynamics_called_with = (dt, environment)
+
+
+class AnyEnvironmentHardware(Hardware):
+    """Real Hardware that declares no environment (environment_type None), holding the State it's given."""
+    environment_type = None
+
+    def __init__(self, initial_state: State | None = None):
+        """Placed at `initial_state` (a bare State by default)."""
+        super().__init__()
+        self.state = initial_state or State()
+
+    def step_dynamics(self, dt, environment):
+        """Never moves."""
 
 
 class FakeEnvironment:
@@ -199,18 +212,18 @@ class TestWorldHostingCheck(unittest.TestCase):
         for expected in ("ugv1", "BicycleHardware", "GroundPlaneEnv", "OtherEnvironment"):
             self.assertIn(expected, message)
 
-    def test_stationary_hardware_is_hosted_by_any_environment(self):
-        """StationaryHardware (environment_type None) is accepted in any environment, placed in its state type."""
+    def test_hardware_without_an_environment_is_hosted_by_any_environment(self):
+        """Hardware with environment_type None is accepted in any environment, placed in its state type."""
         for environment in (GroundPlaneEnv(), OtherEnvironment()):
-            hardware = StationaryHardware(initial_state=environment.state_type())
+            hardware = AnyEnvironmentHardware(initial_state=environment.state_type())
             World(environment, platforms={"console": _HardwarePlatform(hardware)})   # must not raise
 
     def test_state_of_the_wrong_type_is_refused(self):
         """A platform whose state isn't the environment's state_type is rejected, naming both types."""
         with self.assertRaises(TypeError) as raised:
-            World(GroundPlaneEnv(), platforms={"console": _HardwarePlatform(StationaryHardware(State()))})
+            World(GroundPlaneEnv(), platforms={"console": _HardwarePlatform(AnyEnvironmentHardware(State()))})
         message = str(raised.exception)
-        for expected in ("console", "StationaryHardware", "State", "GroundPlaneState"):
+        for expected in ("console", "AnyEnvironmentHardware", "State", "GroundPlaneState"):
             self.assertIn(expected, message)
 
     def test_environment_without_state_type_is_refused(self):
@@ -219,7 +232,7 @@ class TestWorldHostingCheck(unittest.TestCase):
             """Forgets state_type."""
 
         with self.assertRaises(TypeError) as raised:
-            World(UndeclaredEnvironment(), platforms={"console": _HardwarePlatform(StationaryHardware())})
+            World(UndeclaredEnvironment(), platforms={"console": _HardwarePlatform(AnyEnvironmentHardware())})
         self.assertIn("state_type", str(raised.exception))
 
     def test_ground_plane_states_are_reported_as_given(self):

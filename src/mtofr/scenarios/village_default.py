@@ -2,10 +2,10 @@
 onto its own Frontseater.default_mission_graph() -- ugv1/ugv2 idle-loiter (gossiping
 their poses), and the interface platform serves its web UI -- until a mission is
 authored and pushed live via that UI."""
-from mtofr.environments.anywhere.platforms.interface.spec import interface
 from mtofr.environments.ground_plane.env import GroundPlaneEnv
 from mtofr.environments.ground_plane.maps import load_map
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
+from mtofr.environments.ground_plane.platforms.interface.spec import interface
 from mtofr.environments.ground_plane.state import GroundPlaneState
 from mtofr.environments.ground_plane.viz import PlanePlotter
 from mtofr.scenarios.base import ScenarioConfig

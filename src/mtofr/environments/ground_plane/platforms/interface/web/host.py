@@ -7,11 +7,12 @@ import time
 from collections import deque
 from typing import Callable
 
-from mtofr.environments.anywhere.platforms.interface.web.config import (
+from mtofr.environments.ground_plane.maps import GroundMap
+from mtofr.environments.ground_plane.platforms.interface.web.config import (
     CONSOLE_LINE_LIMIT, MAX_SESSIONS, SESSION_IDLE_TIMEOUT,
 )
-from mtofr.environments.anywhere.platforms.interface.web.panel import PanelContext, UnknownCommandError, WebPanel
-from mtofr.environments.anywhere.platforms.interface.web.view import InterfaceView
+from mtofr.environments.ground_plane.platforms.interface.web.panel import PanelContext, UnknownCommandError, WebPanel
+from mtofr.environments.ground_plane.platforms.interface.web.view import InterfaceView
 
 
 class _Session:
@@ -69,9 +70,9 @@ class WebHost:
 
     #===============# Sim Thread #===============#
 
-    def on_tick(self, backseater) -> None:
+    def on_tick(self, backseater, ground_map: GroundMap | None = None) -> None:
         """Runs every queued write through `backseater`, logging each outcome to the window that
-        queued it, then captures a fresh view."""
+        queued it, then captures a fresh view (with `ground_map`, the hardware's sensed map)."""
         # NOTE: get_nowait() after empty() is safe here: this is the queue's only consumer.
         while not self._pending_writes.empty():
             description, write, log = self._pending_writes.get_nowait()
@@ -80,7 +81,7 @@ class WebHost:
                 log(f"{description}: {write(backseater)}")
             except Exception as error:
                 log(f"{description} failed: {error}")
-        self.view = InterfaceView.capture(backseater)
+        self.view = InterfaceView.capture(backseater, ground_map)
 
 
 

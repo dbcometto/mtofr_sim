@@ -1,11 +1,11 @@
 """Defines the mission-editor "interface" platform's Frontseater."""
 from typing import Callable, Optional
 
-from mtofr.environments.anywhere.platforms.interface.capabilities import ServeWebInterface, ShowInterface
-from mtofr.environments.anywhere.platforms.interface.hardware import ConsoleHardware
-from mtofr.environments.anywhere.platforms.interface.web.host import WebHost
-from mtofr.environments.anywhere.platforms.interface.web.panels import default_panels
-from mtofr.environments.anywhere.platforms.interface.web.server import start_web_interface_server
+from mtofr.environments.ground_plane.platforms.interface.capabilities import ServeWebInterface, ShowInterface
+from mtofr.environments.ground_plane.platforms.interface.hardware import ConsoleHardware
+from mtofr.environments.ground_plane.platforms.interface.web.host import WebHost
+from mtofr.environments.ground_plane.platforms.interface.web.panels import default_panels
+from mtofr.environments.ground_plane.platforms.interface.web.server import start_web_interface_server
 from mtofr.platform.frontseater import Frontseater
 
 
@@ -59,7 +59,7 @@ class MissionEditorFrontseater(Frontseater):
             return
         # NOTE: imported here rather than at module top: window.py pulls in Tk/matplotlib
         # (and forces the TkAgg backend), which a headless run never needs.
-        from mtofr.environments.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
+        from mtofr.environments.ground_plane.platforms.interface.mission_editor.window import MissionEditorWindow
         self.set_window_factory(lambda: MissionEditorWindow(window_root, world, self.platform_id))
 
     def default_mission_graph(self) -> dict:

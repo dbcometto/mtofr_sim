@@ -1,6 +1,16 @@
 # Notes
 
-Paths are as they were when each note was written; notes 33, 36, 37, and 40 record the moves.
+Paths are as they were when each note was written; notes 33, 36, 37, 40, and 48 record the moves.
+
+## 48 - 2026-11-24: World Viewer, Trajectory, follow_trajectory; interface moves to ground_plane
+- User's decisions: the map reaches the UI through a hardware sensor, not `World` or panel config, so the interface became a ground_plane platform.  `environments/anywhere/` was removed once that worked ("anywhere" abstracted visualization with no use case).
+- The drawer's output is copyable text.  `Trajectory` is a JSON list of `[x, y]`, and `follow_trajectory` takes a `loop` input flag.
+- Moves: `environments/anywhere/platforms/interface/` → `environments/ground_plane/platforms/interface/`.  `StationaryHardware` and its test are gone; tests use local fakes for `environment_type = None`, which `World` still supports.
+- `GroundMapSensor` (`ground_plane/sensors/`) reads the environment's map.  `ConsoleHardware` (now plain `Hardware` on `GroundPlaneEnv`) samples it in `step_dynamics()` and exposes `read_map()`.  `ServeWebInterface.tick()` passes it to `WebHost.on_tick()`, so it lands in `InterfaceView.ground_map`.
+- Panel seam: `WebPanel.asset()` plus `GET /panels/<name>/assets/<file>`, session-free (served by the catalog panel) because an `<img>` can't send the session header.
+- `WorldViewerPanel`: the map layers as PNG assets (encoded once per map), every Knowledge `Pose` as a marker, and a browser-only trajectory drawer (no commands).
+- `Trajectory(waypoints: str)` keeps one `str` field, so the editors, save/load, sync, and LLM needed no change.  This sidesteps note 46's rich-value gap for routes only.
+- `FollowTrajectory` drives `navigation_target` waypoint by waypoint, like `move_to` (a shared `_distance_to()` helper).
 
 ## 47 - 2026-11-24: Streamlined capabilities, platforms, and registration
 - Acted on note 45's friction (user's scope: items 1-4 and 6; actuation arbitration and environment leaks stay open).

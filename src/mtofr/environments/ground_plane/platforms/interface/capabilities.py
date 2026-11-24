@@ -1,6 +1,6 @@
 """The interface platform's capabilities: each hosts one mission-editor UI while it runs."""
 from mtofr.core.capability import Capability
-from mtofr.environments.anywhere.platforms.interface.web.host import WebHost
+from mtofr.environments.ground_plane.platforms.interface.web.host import WebHost
 
 
 class ShowInterface(Capability):
@@ -45,9 +45,9 @@ class ServeWebInterface(Capability):
 
     def tick(self) -> None:
         """Hands the web UI its tick: the one place its queued writes run and its view of
-        this platform's databases is refreshed, on the sim thread."""
+        this platform's databases (and its hardware's sensed map) is refreshed, on the sim thread."""
         if self.web_server is not None:
-            self.web_host.on_tick(self.frontseater.backseater)
+            self.web_host.on_tick(self.frontseater.backseater, self.hardware.read_map())
 
     def stop(self) -> None:
         """Stops the server, if it started."""

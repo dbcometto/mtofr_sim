@@ -3,12 +3,12 @@ import unittest
 
 from mtofr.core.capability import Capability, CapabilityRegistry, ParamSpec
 from mtofr.database import Location
-from mtofr.environments.anywhere.platforms.interface.mission_editor import graph_draft
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_prompt import (
+from mtofr.environments.ground_plane.platforms.interface.mission_editor import graph_draft
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_prompt import (
     SYSTEM_PROMPT, render_state, compose_user_message, describe_world, describe_live,
 )
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_session import AssistantSession
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_session import AssistantSession
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_tools import DraftToolbox
 from mtofr.environments.ground_plane.maps.ground_map import RegionType, TraversabilityType
 from mtofr.environments.ground_plane.state import GroundPlaneState
 

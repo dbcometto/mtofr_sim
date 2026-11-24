@@ -3,13 +3,13 @@ graph plus editor-only data) with undo/redo, edits it locally, and pushes the gr
 a mesh write through the interface's own Backseater."""
 import json
 
-from mtofr.environments.anywhere.platforms.interface.mission_editor import editor_document, graph_draft
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox, as_knowledge_value
-from mtofr.environments.anywhere.platforms.interface.mission_editor.draft_history import DraftHistory
-from mtofr.environments.anywhere.platforms.interface.mission_editor.editor_document import EditorDocument
-from mtofr.environments.anywhere.platforms.interface.web.config import BUILT_IN_PANEL_SCRIPT_DIRECTORY
-from mtofr.environments.anywhere.platforms.interface.web.encoding import condition_rows, encode_capabilities, knowledge_type_fields
-from mtofr.environments.anywhere.platforms.interface.web.panel import PanelContext, WebPanel, reply
+from mtofr.environments.ground_plane.platforms.interface.mission_editor import editor_document, graph_draft
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_tools import DraftToolbox, as_knowledge_value
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.draft_history import DraftHistory
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.editor_document import EditorDocument
+from mtofr.environments.ground_plane.platforms.interface.web.config import BUILT_IN_PANEL_SCRIPT_DIRECTORY
+from mtofr.environments.ground_plane.platforms.interface.web.encoding import condition_rows, encode_capabilities, knowledge_type_fields
+from mtofr.environments.ground_plane.platforms.interface.web.panel import PanelContext, WebPanel, reply
 from mtofr.mission.serialization import (
     JSON_INDENT, KNOWLEDGE_TYPES_BY_NAME, decode_mission_graph, default_knowledge_value, encode_mission_graph,
 )

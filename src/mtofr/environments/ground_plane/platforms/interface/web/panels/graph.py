@@ -1,9 +1,9 @@
 """Defines GraphPanel: the graphical mission editor. It edits the same draft as the window's
 EditorPanel, and also shows the Target's live mission read-only."""
-from mtofr.environments.anywhere.platforms.interface.mission_editor import editor_document
-from mtofr.environments.anywhere.platforms.interface.web.config import BUILT_IN_PANEL_SCRIPT_DIRECTORY
-from mtofr.environments.anywhere.platforms.interface.web.panel import PanelContext, WebPanel
-from mtofr.environments.anywhere.platforms.interface.web.panels.editor import EditorPanel
+from mtofr.environments.ground_plane.platforms.interface.mission_editor import editor_document
+from mtofr.environments.ground_plane.platforms.interface.web.config import BUILT_IN_PANEL_SCRIPT_DIRECTORY
+from mtofr.environments.ground_plane.platforms.interface.web.panel import PanelContext, WebPanel
+from mtofr.environments.ground_plane.platforms.interface.web.panels.editor import EditorPanel
 from mtofr.mission.serialization import encode_mission_graph, encode_value
 from mtofr.viz.mission_graph_view import compute_graph_layout
 

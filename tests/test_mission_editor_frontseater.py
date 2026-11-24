@@ -6,8 +6,8 @@ import unittest
 
 from mtofr.core.clock import Clock
 from mtofr.database import KnowledgeDatabase, MissionDatabase, PlatformDatabase
-from mtofr.environments.anywhere.platforms.interface.hardware import ConsoleHardware
-from mtofr.environments.anywhere.platforms.interface.frontseater import MissionEditorFrontseater
+from mtofr.environments.ground_plane.platforms.interface.hardware import ConsoleHardware
+from mtofr.environments.ground_plane.platforms.interface.frontseater import MissionEditorFrontseater
 
 _WEB_REQUESTS = {"web_interface": {"capability": "serve_web_interface", "inputs": {}, "outputs": {}}}
 _FAKE_URL = "http://fake:1"
@@ -195,7 +195,7 @@ class TestMissionEditorFrontseater(unittest.TestCase):
 
     def test_attach_with_a_window_root_builds_a_mission_editor_window_from_it(self):
         """attach() with a window root builds MissionEditorWindow from that root, the world, and the platform id."""
-        import mtofr.environments.anywhere.platforms.interface.mission_editor.window as window_module
+        import mtofr.environments.ground_plane.platforms.interface.mission_editor.window as window_module
         built_with = []
 
         def fake_mission_editor_window(root, world, platform_id):

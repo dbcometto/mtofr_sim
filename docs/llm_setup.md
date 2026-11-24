@@ -2,7 +2,7 @@
 
 The mission-commander LLM runs locally via [Ollama](https://ollama.com), CPU-only, on the model `qwen3.5:4b`. No cloud API is used: the Claude API has no sustained free tier for this use case, and Ollama Cloud is a separate paid product, not what's used here.
 
-The start/stop scripts live under `llm/ollama/`.  The model settings (model name, context size, temperature, reply cap, keep-alive, ...) live in `src/mtofr/environments/anywhere/platforms/interface/agent/config.py`, and are passed on each call rather than baked into a model with `ollama create`, so changing them needs no rebuild.
+The start/stop scripts live under `llm/ollama/`.  The model settings (model name, context size, temperature, reply cap, keep-alive, ...) live in `src/mtofr/environments/ground_plane/platforms/interface/agent/config.py`, and are passed on each call rather than baked into a model with `ollama create`, so changing them needs no rebuild.
 
 ## Setup
 

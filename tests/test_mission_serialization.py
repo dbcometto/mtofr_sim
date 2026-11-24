@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mtofr.database import Location, Pose
+from mtofr.database import Location, Pose, Trajectory
 from mtofr.mission.serialization import (
     decode_mission_graph,
     encode_mission_graph,
@@ -71,6 +71,19 @@ class TestMissionGraphDictEncoding(unittest.TestCase):
         pose = decoded["knowledge"]["ugv1/pose"]["value"]
         self.assertEqual(decoded["knowledge"]["ugv1/pose"]["type"], Pose)
         self.assertEqual((pose.x, pose.y, pose.theta), (1.0, 2.0, 0.5))
+
+    def test_a_trajectory_round_trips_as_its_text(self):
+        """A Trajectory encodes as its one text field and decodes back to the same waypoints."""
+        graph = {
+            "knowledge": {"ugv1/route": {"type": Trajectory, "value": Trajectory("[[0, 0], [5, 5]]")}},
+            "nodes": {"n1": {"capabilities": {}}},
+            "edges": {},
+            "start": "n1",
+        }
+        encoded = encode_mission_graph(graph)
+        self.assertEqual(encoded["knowledge"]["ugv1/route"], {"type": "Trajectory", "value": {"waypoints": "[[0, 0], [5, 5]]"}})
+        decoded = decode_mission_graph(json.loads(json.dumps(encoded)))
+        self.assertEqual(decoded["knowledge"]["ugv1/route"]["value"].points, ((0.0, 0.0), (5.0, 5.0)))
 
     def test_a_name_round_trips_and_a_missing_one_stays_missing(self):
         """The optional mission name survives encode/decode; a graph without one gets none."""

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from mtofr.environments.anywhere.platforms.interface.web.view import InterfaceView
+from mtofr.environments.ground_plane.platforms.interface.web.view import InterfaceView
 
 
 class UnknownCommandError(LookupError):
@@ -47,6 +47,12 @@ class WebPanel(ABC):
     @abstractmethod
     def commands(self) -> dict:
         """command name -> method(context, **arguments) -> {"ok": bool, "message": str, ...}."""
+
+    def asset(self, asset_name: str, view: InterfaceView) -> tuple[bytes, str] | None:
+        """(body, content type) for a file this panel serves at /panels/<name>/assets/<asset_name>,
+        or None (the default) if it has none by that name. Session-free, since an <img> can't send
+        the session header: called on the WebHost's catalog panel, never a window's own panels."""
+        return None
 
     def handle(self, command: str, arguments: dict, context: PanelContext) -> dict:
         """Runs one command; raises UnknownCommandError, or TypeError on bad arguments."""

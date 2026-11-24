@@ -26,8 +26,8 @@ from mtofr.mission.serialization import (
 )
 from mtofr.mission.validation import find_binding_problems, verify_mission_structure, MissionStructuralError
 from mtofr.viz.mission_graph_view import GRAPH_PLOT_BACKGROUND, MissionGraphViewer
-from mtofr.environments.anywhere.platforms.interface.mission_editor import graph_draft
-from mtofr.environments.anywhere.platforms.interface.mission_editor.draft_history import DraftHistory
+from mtofr.environments.ground_plane.platforms.interface.mission_editor import graph_draft
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.draft_history import DraftHistory
 
 
 #========================================#
@@ -370,7 +370,7 @@ class MissionEditorWindow(tk.Toplevel):
             self.assistant_window.lift()
             return
         # NOTE: lazy import keeps the editor free of the assistant's imports until used
-        from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow
+        from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_window import AssistantWindow
         self.assistant_window = AssistantWindow(self)
 
     def _on_undo(self) -> None:

@@ -2,7 +2,7 @@
 
 What a developer does to extend the sim: a new capability, platform, environment, Knowledge type, or scenario.  The target is the ROS-node feel, where the user writes their own functions as callbacks and the framework hides the plumbing.  Remaining **Friction:** notes mark what still falls short; the [summary](#friction-summary) tracks every friction item, resolved or not.
 
-Paths are under `src/mtofr/` unless they start with `tests/` or `docs/`.  The reference implementations are `BicycleFrontseater` (`environments/ground_plane/platforms/bicycle_ugv/`), which runs per-tick capabilities, and `MissionEditorFrontseater` (`environments/anywhere/platforms/interface/`), which runs on/off capabilities.
+Paths are under `src/mtofr/` unless they start with `tests/` or `docs/`.  The reference implementations are `BicycleFrontseater` (`environments/ground_plane/platforms/bicycle_ugv/`), which runs per-tick capabilities, and `MissionEditorFrontseater` (`environments/ground_plane/platforms/interface/`), which runs on/off capabilities.
 
 
 
@@ -61,7 +61,7 @@ class MoveTo(Capability):
 
 ## 2. New Platform (Hardware + Frontseater) in an Existing Environment
 
-The new platform goes in a folder, `environments/<environment>/platforms/<type>/` (or `environments/anywhere/platforms/<type>/` if it needs no environment), holding:
+The new platform goes in a folder, `environments/<environment>/platforms/<type>/`, holding:
 - `__init__.py`
 - `hardware.py`
 - `frontseater.py`
@@ -72,8 +72,7 @@ The new platform goes in a folder, `environments/<environment>/platforms/<type>/
 ### Hardware (`hardware.py`)
 - [ ] **Pick a base.**
   - The environment's Hardware base, e.g. `GroundPlaneHardware`.  Implement the pure `calculate_dynamics(state, controls, dt, max_speed_multiplier)`.  The inherited `step_dynamics()` applies the terrain; override it only for a different terrain response.
-  - Or `Hardware` directly.  Declare `environment_type` (an `Environment` class, or `None` for any) and implement `step_dynamics(dt, environment)`.
-  - Or `StationaryHardware`, for a platform that never moves.
+  - Or `Hardware` directly.  Declare `environment_type` (an `Environment` class, or `None` for any) and implement `step_dynamics(dt, environment)`, the one place Hardware sees the Environment (cf. `ConsoleHardware`, which never moves and samples a `GroundMapSensor` there).
 - [ ] **Set `idle_controls`** (the "do nothing" controls dict) as a class attribute.  The base starts with it, and an idle Frontseater sends it.
 - [ ] **Write `__init__`.**  Call `super().__init__(sensor)` (`PerfectSensor` by default) and set `self.state = initial_state or <EnvironmentState>()`.  Physical limits go in the Config section as constants.
 - [ ] **Document the controls dict** (its keys and units) in the class docstring.
@@ -125,14 +124,13 @@ The new environment goes in `environments/<environment>/`, holding:
 - [ ] **Environment** (`env.py`): an `Environment` subclass that declares `state_type = <EnvironmentState>` and exposes only passive query methods the vehicles need (cf. `GroundPlaneEnv.is_blocked()`, `speed_multiplier_at()`).  It never steps anything.
 - [ ] **Hardware base** (`hardware.py`): a `Hardware` subclass with `environment_type = <Environment>`.  It has a default `step_dynamics()` that queries the environment around a pure abstract hook for the vehicle's own dynamics (cf. `GroundPlaneHardware`).
 - [ ] **Shared capabilities** (`capabilities.py`, optional): anything every platform here can run from this State alone (cf. `SensePose`).
-- [ ] **Sensors** (`sensors/`, optional): `Sensor` subclasses implementing `read(state) -> State`.
+- [ ] **Sensors** (`sensors/`, optional): `Sensor` subclasses implementing `read(state) -> State`, plus anything that reads the Environment itself (cf. `GroundMapSensor.read(environment)`), sampled in a Hardware's `step_dynamics()`.
 - [ ] **Viewer** (`viz/`): an `EnvironmentViewer` subclass.  Implement `configure_ax(ax)` and `render(ax, states, selected_id, show_traversability, show_regions)`, and set `background_color`.  Add a `for_environment(environment)` classmethod for the scenario's `build_viewer`.
   - **Friction (remaining, 7):** the viewer interface and the dashboard's checkboxes have ground-plane map overlays baked in, and only 2D matplotlib Axes are supported.
-- [ ] **Platforms:** at least one platform type per [§2](#2-new-platform-hardware--frontseater-in-an-existing-environment).  Anywhere platforms (e.g. `interface`) join if their `initial_state` is this environment's State.
+- [ ] **Platforms:** at least one platform type per [§2](#2-new-platform-hardware--frontseater-in-an-existing-environment).  The `interface` platform is a ground_plane platform (it senses the ground map), so a new environment needs its own operator-console platform to have a mission editor.
 - [ ] **Scenario** per [§5](#5-new-scenario).
 - [ ] **Check the known leaks** (friction 7, remaining):
-  - The assistant's `describe_world()` (`assistant_prompt.py`) reads `environment.ground_map` and `state.x/.y`.
-  - `Location` and `Pose` are 2D world-frame types.  An environment with different geometry needs its own types ([§4](#4-new-knowledge-type)).
+  - `Location`, `Pose`, and `Trajectory` are 2D world-frame types.  An environment with different geometry needs its own types ([§4](#4-new-knowledge-type)).
 - [ ] **Test** the State, Environment queries, Hardware base, and viewer (`TK_AVAILABLE` guard where Tk is needed).  Add the environment's own bullet in `docs/spec.md`.
 
 
@@ -165,4 +163,4 @@ The ROS-node target: the user writes their own functions and hooks them to callb
 4. **Resolved: `shutdown()` is on the base**, defaulting to stopping every running capability.
 5. **Remaining: actuation is ad hoc.**  Capabilities that move the platform set plain Frontseater attributes, with no arbitration between concurrent requests, and the controls dict is untyped.  Idle controls are now declared once, on the Hardware.
 6. **Resolved: registration is automatic** for Knowledge types (one file each) and scenarios (one file each).  The `spec.py` closure per platform remains (minor).
-7. **Remaining: environment assumptions leak upward:** the ground-plane overlay flags in `EnvironmentViewer` and the dashboard, the ground-plane geometry in `describe_world()`, and 2D world-frame `Location`/`Pose`.
+7. **Remaining: environment assumptions leak upward:** the ground-plane overlay flags in `EnvironmentViewer` and the dashboard, and 2D world-frame `Location`/`Pose`/`Trajectory`.  (`describe_world()` is no longer a leak: the interface is now a ground_plane platform.)

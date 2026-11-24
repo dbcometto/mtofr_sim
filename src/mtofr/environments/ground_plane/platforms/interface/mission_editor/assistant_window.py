@@ -6,11 +6,11 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from mtofr.environments.anywhere.platforms.interface.agent import config
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_prompt import describe_live, describe_world
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_session import AssistantSession
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_tools import DraftToolbox
-from mtofr.environments.anywhere.platforms.interface.mission_editor.window import AT_BOTTOM_FRACTION
+from mtofr.environments.ground_plane.platforms.interface.agent import config
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_prompt import describe_live, describe_world
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_session import AssistantSession
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_tools import DraftToolbox
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.window import AT_BOTTOM_FRACTION
 
 
 #========================================#
@@ -291,7 +291,7 @@ class AssistantWindow(tk.Toplevel):
         def warm_up_worker():
             """Runs the warm-up call, reporting a failure as an event."""
             try:
-                from mtofr.environments.anywhere.platforms.interface.agent.agent import warm_up
+                from mtofr.environments.ground_plane.platforms.interface.agent.agent import warm_up
                 warm_up(self.session.messages, tools=self.toolbox.schemas, options=self.session.options)
             except Exception as exception:
                 self._events.put(("emit", "warm_up_failed", f"{type(exception).__name__}: {exception}"))

@@ -1,9 +1,9 @@
 """Defines LiveControlPanel: the interface platform's view of the whole mesh's Knowledge,
 with live edits published through its own Backseater (they reach peers by mesh sync)."""
-from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_tools import as_knowledge_value
-from mtofr.environments.anywhere.platforms.interface.web.config import BUILT_IN_PANEL_SCRIPT_DIRECTORY
-from mtofr.environments.anywhere.platforms.interface.web.encoding import knowledge_type_fields, type_name
-from mtofr.environments.anywhere.platforms.interface.web.panel import PanelContext, WebPanel, reply
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_tools import as_knowledge_value
+from mtofr.environments.ground_plane.platforms.interface.web.config import BUILT_IN_PANEL_SCRIPT_DIRECTORY
+from mtofr.environments.ground_plane.platforms.interface.web.encoding import knowledge_type_fields, type_name
+from mtofr.environments.ground_plane.platforms.interface.web.panel import PanelContext, WebPanel, reply
 from mtofr.mission.serialization import encode_value
 
 

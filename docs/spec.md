@@ -16,7 +16,7 @@ Design history is in `notes.md`; build order, open items, and known issues are i
   3. `mission/`: what a mission is.  `graph.py` (the shape, as TypedDicts), `condition.py`, `validation.py`, `serialization.py`.
   4. `platform/`: the mission-aware brain layers and their assembly.  `frontseater.py`, `backseater.py`, `platform.py` (`Platform`, `PlatformSpec`), `common_capabilities.py` (`Stopwatch`).
   5. `viz/`: environment-agnostic dashboard and viewers.  `MissionDashboard` takes `World` duck-typed, so viz never imports environments.
-  6. `environments/`: `world.py` (`World`), one folder per environment, and `anywhere/` for platforms that need none.
+  6. `environments/`: `world.py` (`World`) and one folder per environment.
   7. `scenarios/`: one file per scenario, discovered into `SCENARIOS` by file name.
 - `tests/`: stdlib `unittest`, flat (`.venv\Scripts\python.exe -m unittest discover -s tests`).
 - `scripts/mpc_profile.py`: tick-time and MPC-iteration profiler (not part of the suite).
@@ -59,7 +59,8 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
 ## Databases
 All three belong to the Backseater, are stamped by its `Clock`, and carry `origin_platform_id` per entry (the platform that held the entry at its latest locally converted timestamp, transitively).  Every check happens write-side only, once, at the originating platform; there is no re-verification on receipt.
 - **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, entry_type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required).
-  - Types live one per file in `database/knowledge_types/` (built-ins `location.py` `Location(x, y)` and `pose.py` `Pose(x, y, theta)`; the base and registry are in `base.py`).  The package imports every module in it.
+  - Types live one per file in `database/knowledge_types/` (built-ins `location.py` `Location(x, y)`, `pose.py` `Pose(x, y, theta)`, and `trajectory.py` `Trajectory(waypoints)`; the base and registry are in `base.py`).  The package imports every module in it.
+  - `Trajectory`'s one `str` field is a JSON list of `[x, y]` pairs (m, world frame; `""` is none), parsed into `.points` (a bad one raises `ValueError`).  Plain text, so it needs nothing new in the editors, save/load, sync, or the LLM.
   - Each concrete subclass registers itself by class name in `KNOWLEDGE_TYPES_BY_NAME` (seeded with the scalars) and its reverse `KNOWLEDGE_TYPE_NAMES`; a taken name raises.
 - **Mission** (`MissionDatabase`): platform_id → `mission_graph` dict.  Each Backseater self-writes its boot mission at construction, so peers can read it.  Every write goes through `Backseater.write_mission(mission_graph, writer_platform_id, timestamp=None, target_platform_id=None)` (None = this platform), which applies:
   - a privilege check (skipped when the writer is the target);
@@ -112,23 +113,22 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 
 
 ## Environments, Maps, Platform Types
-- Each environment lives in `environments/<environment_name>/`: `env.py` (its `Environment`, which declares `state_type`), `state.py` (that `State` subclass), the Hardware base its vehicles subclass (`hardware.py`), `sensors/`, `maps/` if it has any, and its viewer (`viz/`).  Each platform type lives in `environments/<environment_name>/platforms/<type>/`, or in `environments/anywhere/platforms/<type>/` if it needs no environment (built on `StationaryHardware`).  Each exports a `PlatformSpec` factory.
-- **Anywhere platforms are placed in the host environment's terms**: `StationaryHardware` holds whatever `State` it's given and only advances `t`; the scenario picks the state type, and `World` checks it.  Future comms range would be an environment query, so core never knows geometry.
+- Each environment lives in `environments/<environment_name>/`: `env.py` (its `Environment`, which declares `state_type`), `state.py` (that `State` subclass), the Hardware base its vehicles subclass (`hardware.py`), `sensors/`, `maps/` if it has any, and its viewer (`viz/`).  Each platform type lives in `environments/<environment_name>/platforms/<type>/` and exports a `PlatformSpec` factory.  `Hardware.environment_type = None` (any environment) is still supported by `World`, but no platform uses it.
 - **Ground plane** (`environments/ground_plane/`):
   - `GroundPlaneState(State)`: x, y, theta, vx, vy, vtheta (m, rad, world frame), plus `pose2d()`/`vel2d()`.
   - `GroundPlaneEnv(ground_map=None)` (`state_type = GroundPlaneState`) is passive and answers only `speed_multiplier_at(x, y)` and `is_blocked(x, y)`.  With no map it is unbounded and has no effect.
   - `GroundPlaneHardware` (`environment_type = GroundPlaneEnv`, abstract pure `calculate_dynamics(state, controls, dt, max_speed_multiplier=1.0)`): its default `step_dynamics` scales max speed by the multiplier at the true position, and rejects a step into a blocked cell (velocity zeroed).
-  - `sensors/`: home for ground-plane sensors; empty until one is needed.
+  - `sensors/`: `GroundMapSensor.read(environment) -> GroundMap | None`, the perfect map sensor (it reports `environment.ground_map`).  It isn't a `core.Sensor`, which maps State to State.
 - **Bicycle UGV** (`environments/ground_plane/platforms/bicycle_ugv/`): `bicycle_ugv(platform_id, start_x, start_y, mission_graph=None, privilege_level=1)`.
   - `BicycleHardware` is a kinematic bicycle (`dynamics.bicycle_step()`, shared with the MPC).
-  - `BicycleFrontseater` is the reference Frontseater, `CAPABILITIES = (MoveTo, Avoid, Stopwatch, SensePose)`:
+  - `BicycleFrontseater` is the reference Frontseater, `CAPABILITIES = (MoveTo, FollowTrajectory, Avoid, Stopwatch, SensePose)`:
     - `move_to` (`bicycle_ugv/capabilities.py`; `target`, `tolerance` → `arrived`; re-reads each tick and sets `navigation_target`, which the MPC chases);
+    - `follow_trajectory` (`bicycle_ugv/capabilities.py`; `trajectory`, `tolerance`, `loop` → `arrived`): sets `navigation_target` to each waypoint in turn, advancing within `tolerance`.  After the last one it holds there with `arrived` true, or with `loop` starts over (never arrived).  A changed trajectory restarts at its first waypoint;
     - `avoid` (`bicycle_ugv/capabilities.py`; `point`, `radius` → `registered`; `add_avoid_region()` at start);
     - `stopwatch` (→ `elapsed_time` in sim seconds since start; never completes);
     - `sense_pose` (→ `pose`, the sensed `Pose` from `read_state()`, every tick; never completes).
   - Its default mission loiters on `stopwatch` and runs `sense_pose` bound to `<platform_id>/pose`, so pose gossips by default.  A pushed mission without `sense_pose` stops that.
   - MPC (`mpc.solve_mpc`, SLSQP, `MPC_MAX_ITERATIONS` 20, warm-started) runs in one persistent worker process per platform.  The MPC knows nothing about terrain.
-- **Stationary** (`environments/anywhere/hardware.py`): `StationaryHardware` (`environment_type = None`) never moves.
 - **Maps** (`environments/ground_plane/maps/`): `load_map(name)` (None → no map) and `GroundMap.load(folder)`, which reads `<name>.yaml` plus `_cosmetic`/`_traversability`/`_regions` PNGs.
   - World (0, 0) is the image center, +y up, so sampling flips rows.
   - Traversability maps a hex color to `TraversabilityType(name, blocking, speed_multiplier)`.  A pixel snaps to the nearest declared color; an unmatched in-bounds pixel is passable, and off-map is blocked.
@@ -159,16 +159,18 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 
 
 ## Interface Platform and Mission Editors
-- `interface(platform_id, initial_state, ..., build_panels=default_panels)` (`environments/anywhere/platforms/interface/`, privilege 0): `MissionEditorFrontseater` + `ConsoleHardware` (a `StationaryHardware`, placed at `initial_state`, e.g. a `GroundPlaneState`).
+- `interface(platform_id, initial_state, ..., build_panels=default_panels)` (`environments/ground_plane/platforms/interface/`, privilege 0): `MissionEditorFrontseater` + `ConsoleHardware`.
+  - `ConsoleHardware` (`environment_type = GroundPlaneEnv`) is a fixed ground station at `initial_state` (a `GroundPlaneState`) that ignores controls.  Its `step_dynamics` advances `t` and refreshes its `GroundMapSensor` reading, which `read_map()` returns (None before the first step).
   - Two capabilities (`interface/capabilities.py`): `ShowInterface` opens or closes the Tk editor window, and `ServeWebInterface` starts or stops the web UI (a start failure shows in its status) and, each tick, runs the `WebHost`'s tick.  The default graph runs only `serve_web_interface`.
   - Editing itself is not a capability.
   - `attach()` installs the Tk window factory (`_NullWindow` when headless).  The web UI needs neither `World` nor Tk.
 - **Web UI** (`interface/web/`), the hardware-portable one: it reads and writes only through the interface's own Backseater.
   - `WebInterfaceServer` (stdlib `ThreadingHTTPServer`, `WEB_HOST`/`WEB_PORT` in `web/config.py`, default `127.0.0.1:8765`) serves a vanilla-JS page and a JSON API in front of one `WebHost`.  A start failure (port taken) shows in `describe_status()`.
-  - Threading: `WebHost.on_tick(backseater)` runs on the sim thread from `ServeWebInterface.tick()`.  It runs every queued write (outcomes go to the console of the window that queued it), then captures an `InterfaceView` (frozen copies of all three databases).  Server threads only read the latest view and queue writes, so while the sim is paused, reads hold still and writes wait.
+  - Threading: `WebHost.on_tick(backseater, ground_map)` runs on the sim thread from `ServeWebInterface.tick()`, which passes `hardware.read_map()`.  It runs every queued write (outcomes go to the console of the window that queued it), then captures an `InterfaceView` (frozen copies of all three databases, plus the sensed `ground_map`).  Server threads only read the latest view and queue writes, so while the sim is paused, reads hold still and writes wait.
   - Per-window sessions: the page keeps an id in `sessionStorage` and sends it as `X-Session-Id` (400 if missing or malformed).  `WebHost(own_platform_id, build_panels)` builds fresh panels for each session, so each window has its own Target, draft, undo history, and console over the one shared view.  A session survives a reload, expires after `SESSION_IDLE_TIMEOUT`, and is capped at `MAX_SESSIONS`.
   - Panels (`web/panel.py`): a `WebPanel` has `name`, `title`, `script_path` (its JS half, which calls `mtofr.registerPanel(name, mount)`), `state(context)`, and `commands()`.  `PanelContext(view, target_platform_id, submit, log, editor_store)`.  `api.command()` resolves after the resulting state is applied.
-    - A static registry: `default_panels()` gives Graph, then Live Control.  The table Editor tab is off for now (a NOTE in `panels/__init__.py`), but its `EditorPanel` still holds the window's draft.
+    - Optional `asset(asset_name, view) -> (bytes, content type) | None`, served at `GET /panels/<name>/assets/<file>`.  It is session-free (an `<img>` can't send the header), so the server calls it on the `WebHost`'s catalog panel.
+    - A static registry: `default_panels()` gives Graph, Live Control, then World Viewer.  The table Editor tab is off for now (a NOTE in `panels/__init__.py`), but its `EditorPanel` still holds the window's draft.
     - A custom panel is a `WebPanel` subclass plus its script.
   - **Enter** (page-wide, `app.js`): in a field it blurs the field, which commits it.  With nothing focused, it presses the `[data-primary]` button of the open dialog, or of the last-used `[data-enter-scope]` container.  The header shows the time since the last sync with the Target.
   - **Live Control**: every Knowledge key the interface holds (the whole mesh), with origin, write age, and the time since the interface last synced with the origin.  Edits are published through the interface's Backseater, cast by `assistant_tools.as_knowledge_value()`.  Pending rows are italic:
@@ -205,6 +207,9 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
       - A selected edge marks its origin and recipient nodes in different colors, and a drawn edge's drop-target node lights up.
     - **Gestures:** drag a node's port to draw an edge (onto blank space adds a node); drag a selected edge's end handle to re-route it; double-click blank space to add a node; box-select and group-move; right-click menu; Delete, Ctrl+A, F, Escape, Ctrl+Z/Y.
     - **Live mode** shows the Target's gossiped mission (laid out from the store when its name is known), `PlatformStatus` and last-sync age, read-only.
+  - **World Viewer** (`WorldViewerPanel`, `static/panels/world_viewer.js`): the view's `ground_map` drawn in world coordinates (SVG, +y up), with a marker and heading for every `Pose` in Knowledge (each platform's `sense_pose` output).
+    - **Map:** the layers (`MAP_LAYER_ASSETS`: cosmetic, plus toggleable traversability and regions overlays) are PNG assets, encoded once per map.  The state carries the map's extent and a version, so the browser refetches only when the map changes.  It has wheel zoom, drag pan, and Fit.
+    - **Trajectory drawer:** with Draw on, a click adds a waypoint, a drag moves one, and a right-click deletes one, with Undo point and Clear.  It produces `Trajectory` text (Copy) and redraws from pasted text (Load).  Browser-only: the panel has no commands, and the operator pastes the text into a value in Live Control or the Graph editor.
 - **Tk editor**: `MissionEditorWindow` (`mission_editor/window.py`), a Toplevel on the dashboard's root.  A sim-only direct path: it reads `World` and writes peers' Backseaters itself.
   - It edits one draft at a time, loaded from a live platform (deep-copied), from a file (`mission/serialization.py`), or blank.
   - Every mutation goes through `_set_draft()`, using pure `graph_draft.py` helpers that return new dicts, recorded in a `DraftHistory` (`mission_editor/draft_history.py`, shared with the web Editor) for undo/redo (`UNDO_HISTORY_LIMIT`, Ctrl+Z/Y bound on the window).
@@ -221,7 +226,7 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 
 
 ## LLM Assistant
-- Ollama runs `qwen3.5:4b` locally on the CPU (setup: `llm_setup.md`).  Settings are in `environments/anywhere/platforms/interface/agent/config.py`: model, `NUM_CTX`, `THINK`, `TEMPERATURE`, `MAX_REPLY_TOKENS`, `MAX_NUDGES`, `MAX_ITERATIONS`, `KEEP_ALIVE`.
+- Ollama runs `qwen3.5:4b` locally on the CPU (setup: `llm_setup.md`).  Settings are in `environments/ground_plane/platforms/interface/agent/config.py`: model, `NUM_CTX`, `THINK`, `TEMPERATURE`, `MAX_REPLY_TOKENS`, `MAX_NUDGES`, `MAX_ITERATIONS`, `KEEP_ALIVE`.
 - `agent/agent.py`: the streaming tool-call loop.  The caller injects tools and `run_tool`; `should_stop` serves the Stop button; it chains tool calls and logs per-call timings.
 - `mission_editor/assistant_window.py`: opened by the editor's "Assistant...".
   - A chat with its own target dropdown, shared with the editor.

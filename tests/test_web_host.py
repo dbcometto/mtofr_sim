@@ -10,14 +10,16 @@ import unittest
 
 from mtofr.core.capability import Capability, CapabilityRegistry, ParamSpec
 from mtofr.database import KnowledgeDatabase, Location
-from mtofr.environments.anywhere.platforms.interface.web.config import MAX_SESSIONS, SESSION_IDLE_TIMEOUT
-from mtofr.environments.anywhere.platforms.interface.web.host import WebHost
-from mtofr.environments.anywhere.platforms.interface.web.panel import UnknownCommandError
-from mtofr.environments.anywhere.platforms.interface.web.panels import default_panels
-from mtofr.environments.anywhere.platforms.interface.web.panels.editor import EditorPanel
+from mtofr.environments.ground_plane.platforms.interface.web.config import MAX_SESSIONS, SESSION_IDLE_TIMEOUT
+from mtofr.environments.ground_plane.platforms.interface.web.host import WebHost
+from mtofr.environments.ground_plane.platforms.interface.web.panel import UnknownCommandError
+from mtofr.environments.ground_plane.platforms.interface.web.panels import default_panels
+from mtofr.environments.ground_plane.platforms.interface.web.panels.editor import EditorPanel
+from mtofr.environments.ground_plane.maps.ground_map import TraversabilityType
 from mtofr.mission.serialization import encode_mission_graph
 from mtofr.platform.backseater import Backseater
 from mtofr.platform.frontseater import Frontseater
+from tests.test_ground_plane_env import uniform_ground_map
 
 SESSION = "window-1"
 OTHER_SESSION = "window-2"
@@ -166,6 +168,14 @@ class TestWebHost(unittest.TestCase):
         """Two panels with one name raise ValueError at construction."""
         with self.assertRaises(ValueError):
             WebHost("interface", lambda: [EditorPanel(), EditorPanel()])
+
+    def test_a_tick_carries_the_sensed_map_into_the_view(self):
+        """on_tick()'s ground_map lands in the view (no map by default), and the World Viewer shows it."""
+        self.assertIsNone(self.host.view.ground_map)
+        ground_map = uniform_ground_map(TraversabilityType(name="clear", blocking=False, speed_multiplier=1.0))
+        self.host.on_tick(self.interface, ground_map)
+        self.assertIs(self.host.view.ground_map, ground_map)
+        self.assertEqual(self.host.state(SESSION)["panels"]["world_viewer"]["map"]["name"], "uniform")
 
     def test_a_failed_write_is_logged_not_raised(self):
         """A queued write that raises is reported in its log, and the tick carries on."""

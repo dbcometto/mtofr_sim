@@ -14,6 +14,9 @@
   --recipient: #ff7ad1;   /* a selected edge's recipient node (and a drawn edge's drop target) */
   --warning-mark: #ffb020;
   --graph-background: #808080;   /* GRAPH_PLOT_BACKGROUND in viz/mission_graph_view.py */
+  --off-map: #c8c8c8;            /* OFF_MAP_COLOR in ground_plane/viz/plane_plotter.py */
+  --pose: #1f5fbf;
+  --trajectory: #d9822b;
   --gap: 8px;
   --radius: 4px;
   font-family: system-ui, sans-serif;
@@ -142,6 +145,21 @@ button.link { border: none; background: none; text-decoration: underline; color:
 .node-edit { cursor: pointer; }
 .node-edit rect { fill: var(--highlight); stroke: #1b3a59; }
 .node-edit text { fill: #1b1b1b; font-size: 12px; }
+
+/* World viewer */
+.world-canvas { background: var(--off-map); }
+.world-svg { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; cursor: crosshair; }
+.map-image { image-rendering: pixelated; }
+.pose-marker circle { fill: var(--pose); stroke: #fff; stroke-width: 1.5; }
+.pose-marker line { stroke: #111; stroke-width: 2.5; }
+.pose-marker text { fill: #111; font-size: 12px; font-weight: 600; paint-order: stroke; stroke: #fff; stroke-width: 3; }
+.trajectory-line { fill: none; stroke: var(--trajectory); stroke-width: 2.5; stroke-dasharray: 6 4; pointer-events: none; }
+.waypoint { cursor: grab; }
+.waypoint circle { fill: var(--trajectory); stroke: #fff; stroke-width: 1.5; }
+.waypoint text { fill: #fff; font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.trajectory-tools { margin-top: var(--gap); }
+.trajectory-text { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; margin-bottom: var(--gap); }
+button.selected { background: var(--selected); border-color: var(--accent); }
 
 .graph-edge { cursor: pointer; }
 .edge-halo { fill: none; stroke: var(--graph-background); stroke-width: 9; pointer-events: none; }

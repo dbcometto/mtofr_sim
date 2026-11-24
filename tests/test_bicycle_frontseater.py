@@ -5,7 +5,7 @@ Backseater, so these tests wire in a minimal fake backseater (a plain dict-backe
 query/publish) instead of a full Backseater."""
 import unittest
 
-from mtofr.database import Location, Pose
+from mtofr.database import Location, Pose, Trajectory
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
@@ -136,6 +136,81 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
         """With no target, compute_controls() commands zero velocity and steering."""
         controls = self.frontseater.compute_controls(self.hardware.read_state())
         self.assertEqual(controls, {"vel": 0.0, "steer": 0.0})
+
+
+
+
+
+    #===============# follow_trajectory #===============#
+
+    def _activate_follow_trajectory(self, waypoints: str, tolerance=0.5, loop=False, name="route"):
+        """Seed trajectory/tolerance/loop in Knowledge and make a single follow_trajectory request active."""
+        self.knowledge.update({"trajectory": Trajectory(waypoints), "tolerance": tolerance, "loop": loop})
+        self.frontseater.set_active_capabilities({name: {
+            "capability": "follow_trajectory",
+            "inputs": {"trajectory": "trajectory", "tolerance": "tolerance", "loop": "loop"},
+            "outputs": {"arrived": "arrived"},
+        }})
+
+    def _place(self, x: float, y: float) -> None:
+        """Puts the vehicle at (x, y) (m) and ticks the capabilities once."""
+        self.hardware.state.x, self.hardware.state.y = x, y
+        self.frontseater.tick_capabilities()
+
+    def _route_status(self) -> str:
+        """The follow_trajectory request's status text."""
+        return self.frontseater.describe_status()["capabilities"]["route"]
+
+    def test_follow_trajectory_steers_to_the_first_waypoint(self):
+        """Far from every waypoint, it targets the first one and isn't arrived."""
+        self._activate_follow_trajectory("[[10, 0], [20, 0]]")
+        self._place(0.0, 0.0)
+        self.assertEqual((self.frontseater.navigation_target.x, self.frontseater.navigation_target.y), (10.0, 0.0))
+        self.assertEqual(self._route_status(), "waypoint 1/2")
+        self.assertFalse(self.knowledge["arrived"])
+
+    def test_follow_trajectory_advances_then_arrives_at_the_last_waypoint(self):
+        """Reaching each waypoint moves on to the next; reaching the last publishes arrived and holds there."""
+        self._activate_follow_trajectory("[[10, 0], [20, 0]]")
+        self._place(10.0, 0.0)
+        self.assertEqual(self.frontseater.navigation_target.x, 20.0)
+        self._place(20.0, 0.0)
+        self.assertTrue(self.knowledge["arrived"])
+        self.assertEqual(self._route_status(), "arrived")
+        self.assertEqual(self.frontseater.navigation_target.x, 20.0)
+
+    def test_follow_trajectory_with_loop_starts_over_instead_of_arriving(self):
+        """With loop true, reaching the last waypoint goes back to the first, never arrived."""
+        self._activate_follow_trajectory("[[10, 0], [20, 0]]", loop=True)
+        self._place(10.0, 0.0)
+        self._place(20.0, 0.0)
+        self.assertFalse(self.knowledge["arrived"])
+        self.assertEqual(self.frontseater.navigation_target.x, 10.0)
+
+    def test_a_changed_trajectory_restarts_from_its_first_waypoint(self):
+        """New waypoint text clears arrived and targets the new first waypoint."""
+        self._activate_follow_trajectory("[[0, 0]]")
+        self._place(0.0, 0.0)
+        self.assertTrue(self.knowledge["arrived"])
+        self.knowledge["trajectory"] = Trajectory("[[30, 0], [40, 0]]")
+        self.frontseater.tick_capabilities()
+        self.assertFalse(self.knowledge["arrived"])
+        self.assertEqual(self.frontseater.navigation_target.x, 30.0)
+
+    def test_an_empty_trajectory_idles(self):
+        """No waypoints means no MPC target, not arrived, and "no waypoints"."""
+        self._activate_follow_trajectory("")
+        self._place(0.0, 0.0)
+        self.assertIsNone(self.frontseater.navigation_target)
+        self.assertFalse(self.knowledge["arrived"])
+        self.assertEqual(self._route_status(), "no waypoints")
+
+    def test_stopping_follow_trajectory_clears_its_target(self):
+        """Deactivating the request releases the MPC target."""
+        self._activate_follow_trajectory("[[10, 0]]")
+        self._place(0.0, 0.0)
+        self.frontseater.set_active_capabilities({})
+        self.assertIsNone(self.frontseater.navigation_target)
 
 
 

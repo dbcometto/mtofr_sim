@@ -18,8 +18,8 @@ from mtofr.environments.world import World
 from mtofr.platform.platform import Platform
 
 if TK_AVAILABLE:
-    from mtofr.environments.anywhere.platforms.interface.mission_editor.window import MissionEditorWindow
-    from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow
+    from mtofr.environments.ground_plane.platforms.interface.mission_editor.window import MissionEditorWindow
+    from mtofr.environments.ground_plane.platforms.interface.mission_editor.assistant_window import AssistantWindow
 
 
 def _fake_agent_turn(messages, think, emit, tools, run_tool, options, should_stop, detect_stall=None):

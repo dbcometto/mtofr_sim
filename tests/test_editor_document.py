@@ -3,8 +3,8 @@ own data about a draft (node layout, unset and following-Target key flags) kept 
 mission graph, never in it."""
 import unittest
 
-from mtofr.environments.anywhere.platforms.interface.mission_editor import editor_document, graph_draft
-from mtofr.environments.anywhere.platforms.interface.mission_editor.editor_document import EditorDocument
+from mtofr.environments.ground_plane.platforms.interface.mission_editor import editor_document, graph_draft
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.editor_document import EditorDocument
 
 
 def _document() -> EditorDocument:

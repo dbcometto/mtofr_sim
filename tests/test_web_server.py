@@ -6,9 +6,12 @@ import json
 import unittest
 from urllib.parse import urlsplit
 
-from mtofr.environments.anywhere.platforms.interface.web.host import WebHost
-from mtofr.environments.anywhere.platforms.interface.web.panels import default_panels
-from mtofr.environments.anywhere.platforms.interface.web.server import SESSION_HEADER, WebInterfaceServer
+from mtofr.environments.ground_plane.maps.ground_map import TraversabilityType
+from mtofr.environments.ground_plane.platforms.interface.web.host import WebHost
+from mtofr.environments.ground_plane.platforms.interface.web.panels import default_panels
+from mtofr.environments.ground_plane.platforms.interface.web.server import SESSION_HEADER, WebInterfaceServer
+from mtofr.environments.ground_plane.platforms.interface.web.view import InterfaceView
+from tests.test_ground_plane_env import uniform_ground_map
 
 HOST = "127.0.0.1"
 FREE_PORT = 0   # lets the OS pick
@@ -51,8 +54,8 @@ class TestWebInterfaceServer(unittest.TestCase):
         self.assertIn(b"<title>", body)
 
     def test_static_files_and_panel_scripts_are_served(self):
-        """The page's own script and a panel's script are served as JavaScript."""
-        for path in ("/static/app.js", "/panels/graph.js"):
+        """The page's own script and each panel's script are served as JavaScript."""
+        for path in ("/static/app.js", "/panels/graph.js", "/panels/world_viewer.js"):
             status, content_type, _ = self._request("GET", path)
             self.assertEqual(status, 200, path)
             self.assertTrue(content_type.startswith("text/javascript"), path)
@@ -64,9 +67,25 @@ class TestWebInterfaceServer(unittest.TestCase):
             self.assertEqual(status, 404, path)
 
     def test_api_lists_the_panels_in_tab_order(self):
-        """GET /api/panels names every default panel, in order: the graph editor first, then Live Control."""
+        """GET /api/panels names every default panel, in order: the graph editor, Live Control, then the World Viewer."""
         _, _, body = self._request("GET", "/api/panels")
-        self.assertEqual([panel["name"] for panel in json.loads(body)], ["graph", "live_control"])
+        self.assertEqual([panel["name"] for panel in json.loads(body)], ["graph", "live_control", "world_viewer"])
+
+    def test_a_panel_asset_is_served_with_its_content_type(self):
+        """With a sensed map in the view, GET /panels/world_viewer/assets/cosmetic.png is a PNG, with no session needed."""
+        self.web_host.view = InterfaceView("interface", ground_map=uniform_ground_map(
+            TraversabilityType(name="clear", blocking=False, speed_multiplier=1.0)))
+        status, content_type, body = self._request("GET", "/panels/world_viewer/assets/cosmetic.png", session_id=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "image/png")
+        self.assertTrue(body.startswith(b"\x89PNG"))
+
+    def test_missing_panel_assets_are_not_found(self):
+        """No map yet, an unknown asset, a panel without assets, and an unknown panel are all 404s."""
+        for path in ("/panels/world_viewer/assets/cosmetic.png", "/panels/world_viewer/assets/nope.png",
+                     "/panels/graph/assets/cosmetic.png", "/panels/nope/assets/cosmetic.png"):
+            status, _, _ = self._request("GET", path)
+            self.assertEqual(status, 404, path)
 
     def test_api_state_is_json(self):
         """GET /api/state returns WebHost.state() as JSON."""

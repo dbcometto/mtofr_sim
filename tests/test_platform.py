@@ -3,9 +3,9 @@ import unittest
 
 from mtofr.core.capability import CapabilityRegistry
 from mtofr.core.clock import Clock
-from mtofr.environments.anywhere.platforms.interface.spec import interface
-from mtofr.environments.anywhere.platforms.interface.hardware import ConsoleHardware
-from mtofr.environments.anywhere.platforms.interface.frontseater import MissionEditorFrontseater
+from mtofr.environments.ground_plane.platforms.interface.spec import interface
+from mtofr.environments.ground_plane.platforms.interface.hardware import ConsoleHardware
+from mtofr.environments.ground_plane.platforms.interface.frontseater import MissionEditorFrontseater
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.spec import bicycle_ugv
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater

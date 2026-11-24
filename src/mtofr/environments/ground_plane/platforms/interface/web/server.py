@@ -4,6 +4,7 @@ Routes:
 - GET  /                               the page (static/index.html)
 - GET  /static/<file>                  the page's own files (an allowlist, no path traversal)
 - GET  /panels/<name>.js               a panel's JavaScript half (its script_path)
+- GET  /panels/<name>/assets/<file>    a file the panel serves itself (WebPanel.asset()), e.g. a map image
 - GET  /api/panels                     [{"name", "title"}, ...]
 - GET  /api/state                      WebHost.state()
 - POST /api/target                     {"platform_id"}
@@ -19,11 +20,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from mtofr.environments.anywhere.platforms.interface.web.config import (
+from mtofr.environments.ground_plane.platforms.interface.web.config import (
     OPEN_BROWSER_ON_START, STATIC_DIRECTORY, WEB_HOST, WEB_PORT,
 )
-from mtofr.environments.anywhere.platforms.interface.web.host import WebHost
-from mtofr.environments.anywhere.platforms.interface.web.panel import UnknownCommandError
+from mtofr.environments.ground_plane.platforms.interface.web.host import WebHost
+from mtofr.environments.ground_plane.platforms.interface.web.panel import UnknownCommandError
 
 
 #========================================#
@@ -33,6 +34,7 @@ from mtofr.environments.anywhere.platforms.interface.web.panel import UnknownCom
 INDEX_FILE = "index.html"
 PANEL_SCRIPT_PREFIX = "/panels/"
 PANEL_SCRIPT_SUFFIX = ".js"
+PANEL_ASSET_SEGMENT = "assets"   # /panels/<name>/assets/<file>
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
@@ -123,9 +125,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
     #===============# GET #===============#
 
     def do_GET(self) -> None:
-        """Serves the page, its static files, panel scripts, and the read-only API."""
+        """Serves the page, its static files, panel scripts and assets, and the read-only API."""
         path = urlsplit(self.path).path
         web_host = self.server.web_host
+        segments = path.strip("/").split("/")
         if path == "/":
             self._send_file(STATIC_FILES[INDEX_FILE])
         elif path.startswith("/static/") and path.removeprefix("/static/") in STATIC_FILES:
@@ -136,6 +139,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "message": f"no panel script at {path}"}, HTTP_NOT_FOUND)
             else:
                 self._send_file(panel.script_path)
+        elif len(segments) == 4 and segments[0] == "panels" and segments[2] == PANEL_ASSET_SEGMENT:
+            self._send_panel_asset(segments[1], segments[3])
         elif path == "/api/panels":
             self._send_json(web_host.describe_panels())
         elif path == "/api/state":
@@ -186,6 +191,17 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
 
     #===============# Helpers #===============#
+
+    def _send_panel_asset(self, panel_name: str, asset_name: str) -> None:
+        """Serves one panel's own asset against the latest view, or 404s."""
+        web_host = self.server.web_host
+        panel = web_host.panels.get(panel_name)
+        asset = None if panel is None else panel.asset(asset_name, web_host.view)
+        if asset is None:
+            self._send_json({"ok": False, "message": f"no asset '{asset_name}' for panel '{panel_name}'"}, HTTP_NOT_FOUND)
+            return
+        body, content_type = asset
+        self._send_bytes(body, content_type)
 
     def _session_id(self) -> str | None:
         """The request's window session id; None (after answering 400) if it's missing or malformed."""

@@ -2,7 +2,7 @@
 mission editor and the web editor panel."""
 import unittest
 
-from mtofr.environments.anywhere.platforms.interface.mission_editor.draft_history import DraftHistory
+from mtofr.environments.ground_plane.platforms.interface.mission_editor.draft_history import DraftHistory
 
 
 class TestDraftHistory(unittest.TestCase):

@@ -3,7 +3,7 @@ import multiprocessing
 
 from mtofr.database import Location, Pose
 from mtofr.environments.ground_plane.capabilities import SensePose, sense_pose
-from mtofr.environments.ground_plane.platforms.bicycle_ugv.capabilities import Avoid, MoveTo
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.capabilities import Avoid, FollowTrajectory, MoveTo
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.mpc import run_mpc_worker
 from mtofr.platform.common_capabilities import Stopwatch
@@ -34,7 +34,7 @@ class BicycleFrontseater(Frontseater):
     multiple platforms' solves can overlap instead of serializing on one core -- this
     Frontseater never touches Hardware.state directly, only send_controls/read_state.
     Its capabilities steer the MPC through `navigation_target` and add_avoid_region()."""
-    CAPABILITIES = (MoveTo, Avoid, Stopwatch, SensePose)
+    CAPABILITIES = (MoveTo, FollowTrajectory, Avoid, Stopwatch, SensePose)
 
     #===============# Construction #===============#
 
@@ -44,7 +44,7 @@ class BicycleFrontseater(Frontseater):
         super().__init__(hardware, debug)
         self.nav_horizon = nav_horizon
         self.nav_dt = nav_dt   # s
-        self.navigation_target: Location | None = None   # m, world frame; set by a running MoveTo
+        self.navigation_target: Location | None = None   # m, world frame; set by a running MoveTo or FollowTrajectory
         self._awaiting_response = False   # set in begin_controls(), consumed in finish_controls()
 
 

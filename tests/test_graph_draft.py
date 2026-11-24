@@ -82,6 +82,20 @@ class TestNodeMutations(unittest.TestCase):
             graph_draft.set_start_node(self.draft, "nope")
 
 
+class TestMissionName(unittest.TestCase):
+    def test_set_mission_name_sets_a_stripped_name(self):
+        """set_mission_name() stores the name (trimmed) and leaves the input unchanged."""
+        draft = graph_draft.blank_graph()
+        named = graph_draft.set_mission_name(draft, "  patrol east ")
+        self.assertEqual(named["name"], "patrol east")
+        self.assertNotIn("name", draft)
+
+    def test_an_empty_name_removes_it(self):
+        """set_mission_name() with an empty or blank name drops the "name" entry."""
+        named = graph_draft.set_mission_name(graph_draft.blank_graph(), "patrol")
+        self.assertNotIn("name", graph_draft.set_mission_name(named, "   "))
+
+
 class TestCapabilityRequestMutations(unittest.TestCase):
     def setUp(self):
         """Start each test from a blank graph."""
@@ -180,6 +194,26 @@ class TestEdgeMutations(unittest.TestCase):
         draft = graph_draft.edit_edge(draft, "start", 0, "start", "n2", ["c", "==", True])
         self.assertEqual(len(draft["edges"]["start"]), 2)
         self.assertIn({"condition": ["c", "==", True], "to": "n2"}, draft["edges"]["start"])
+
+    def test_edit_edge_with_the_same_source_keeps_its_priority(self):
+        """Editing the first of two edges leaves it first (it isn't moved to the end of the list)."""
+        draft = graph_draft.add_edge(self.draft, "start", "n2", ["a", "==", True])
+        draft = graph_draft.add_edge(draft, "start", "start", ["b", "==", True])
+        draft = graph_draft.edit_edge(draft, "start", 0, "start", "n2", ["c", "==", True])
+        self.assertEqual(draft["edges"]["start"][0], {"condition": ["c", "==", True], "to": "n2"})
+
+    def test_move_edge_reorders_a_sources_edges(self):
+        """move_edge() moves an edge to a new index, shifting the rest."""
+        draft = graph_draft.add_edge(self.draft, "start", "n2", ["a", "==", True])
+        draft = graph_draft.add_edge(draft, "start", "start", ["b", "==", True])
+        draft = graph_draft.move_edge(draft, "start", 1, 0)
+        self.assertEqual([edge["to"] for edge in draft["edges"]["start"]], ["start", "n2"])
+
+    def test_move_edge_out_of_range_raises(self):
+        """move_edge() raises IndexError for an index that doesn't exist."""
+        draft = graph_draft.add_edge(self.draft, "start", "n2", ["a", "==", True])
+        with self.assertRaises(IndexError):
+            graph_draft.move_edge(draft, "start", 0, 1)
 
 
 class TestKnowledgeMutations(unittest.TestCase):

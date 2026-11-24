@@ -2,6 +2,59 @@
 
 Paths are as they were when each note was written; notes 33, 36, 37, and 40 record the moves.
 
+## 44 - 2026-11-24: Editor document, incomplete requests, condition builder, knowledge panel
+- Reverted note 43's layout-in-graph (user review): mission graphs carry no editor-only data, only a new optional `"name"`.
+  - Layout, unset flags and following flags live in `EditorDocument` (`mission_editor/editor_document.py`), undone with the draft, in a saved file's `"editor"` section, and in `WebHost.editor_store` (name → sidecar) so Load Live restores a pushed mission's layout.
+  - `compute_graph_layout()` takes `pinned_positions` as an argument.
+  - Accepted trade-off: the Tk dashboard and preview are auto-laid-out again.
+- Incomplete capability requests are allowed while drafting (`DraftToolbox(require_bindable=False)` in the web editor; the assistant stays strict).  They show ⚠ on the node and the request, and Validate and Push still refuse them.
+- Safety (user review):
+  - "+ New key…" declares an unset placeholder that blocks Validate and Push until the operator sets a value, so a default Location(0, 0) can't send a vehicle to the origin.
+  - Retargeting default-namespace keys is an explicit button, never a side effect of switching the Target (which is also used just to look).
+  - Priority badges stay where there's a choice (two or more outgoing edges), since check order is behavior.
+- `find_condition_problems()` flags literal/key type mismatches, which catches the JSON-editor trap of `"true"` being a string.  The graph editor's condition builder (key, operator by type, typed value; all/any rows; raw-token fallback) avoids the trap entirely.
+- UI:
+  - an always-visible Knowledge panel with inline editing and a Namespace field (default: the Target);
+  - arrow handles collapse both side panels;
+  - Enter blurs a field, or presses the primary button when nothing is focused;
+  - crossing gaps come from halos;
+  - origin and recipient highlights, and a drop-target highlight while drawing;
+  - Live Control shows pending rows in italics and sync ages; the header shows the Target's sync age.
+- The Graph tab is first and opens in Live mode, followed by Live Control.  The table Editor tab is turned off for now (user's call).
+- Mission-declared Knowledge keys now record their declaring platform as origin (it was `None`).
+
+## 43 - 2026-11-24: Graphical editor, per-window sessions
+- The Graph tab became a full graphical editor of the window's draft (the same draft as the table Editor), drawn client-side in vanilla SVG.  The server-side matplotlib SVG (`web/render.py`) is gone.  Live mode shows the Target's mission read-only.
+- Node positions live in the mission graph: an optional top-level `"layout": {node_id: [x, y]}` that the Backseater and validation ignore.  This gives undoable moves, layouts in saved and pushed missions, and the dashboard and Tk preview show the author's layout.  `compute_graph_layout()` pins stored nodes and places only the rest; its cache is now bounded (`LAYOUT_CACHE_LIMIT`).
+- Gestures:
+  - drag from a node's port to draw an edge (onto blank space: a new node plus the edge);
+  - drag a selected edge's end handle to re-route it;
+  - double-click blank space to add a node;
+  - box-select and group-move;
+  - right-click menu; Delete, Ctrl+A, F, Escape.
+- Editing UI: a hideable docked inspector plus a popover (double-click, or the selected node's pencil), sharing one item editor.  An open editor is never rebuilt while it has the keyboard.
+- `EditorPanel.edit_batch` runs steps on a scratch draft and commits them as one undo step, only if every step succeeds.  It also accepts the editor-only layout steps `move_nodes`/`move_edge`, which aren't assistant tools.  `GraphPanel` delegates every command to its `EditorPanel`.
+- `graph_draft.edit_edge` now keeps an edge's priority when its source is unchanged (before, it re-appended the edge).  `move_edge` reorders; the table Editor gained Up/Down.
+- Per-window sessions: the page keeps an id in `sessionStorage` and sends it as `X-Session-Id`.  `WebHost` builds fresh panels per session, so each window has its own Target, draft, undo, and console, over one shared view.  Sessions expire after `SESSION_IDLE_TIMEOUT` and are capped at `MAX_SESSIONS`.
+- `static/draft_tools.js` holds the toolbar and sub-forms both editors share.  `api.command()` now resolves after the resulting state is applied, and an older poll reply can't overwrite it.
+
+## 42 - 2026-11-24: Web UI capability (first cut)
+- Goal: an operator UI that routes only through the interface platform's own Backseater (reads from its databases, pushes as mesh writes), so it carries over to hardware unchanged.  The Tk editor stays as-is, now documented as a sim-only direct path (it reads `World` and calls the target's `write_mission()`).
+- `serve_web_interface` capability beside `show_interface`; the interface's default mission runs only the web UI.  The frontseater matches requests by capability type, not request name.  A server start failure (port taken) is reported in `describe_status()`, not raised.
+- Stack: stdlib `ThreadingHTTPServer` and vanilla JS, with no new dependencies.  Host is configurable (`WEB_HOST`, default localhost).  Files go through browser upload/download.
+- Threading: no World lock.  `WebHost.on_tick()` runs from the interface Frontseater's `begin_update()` (sim thread): it runs queued writes, then captures an `InterfaceView`.  Server threads only read the view and queue writes, so a paused sim freezes reads and holds writes, with no deadlock.
+- Panels are whole UI modules (Python `WebPanel` with `state()`/`commands()`, plus a JS half calling `registerPanel`), from a static registry (`interface(..., build_panels=default_panels)`).  The built-in Live Control, Editor, and Graph tabs are themselves panels.  Panels see only the view and the write queue, never World.
+- The Editor runs every edit through `DraftToolbox`, the assistant's command layer, so unbindable requests are refused at edit time and conditions are JSON tokens.  Undo/redo moved to a shared `DraftHistory` used by both editors.
+- Graph renders server-side SVG (`MissionGraphViewer` on a standalone `Figure`); `GRAPH_PLOT_BACKGROUND` moved to `mission_graph_view.py` so the web side never imports the TkAgg dashboard.
+- `serialization.py` gained dict-level `encode_mission_graph`/`decode_mission_graph`, and `assistant_tools.as_knowledge_value` became public (Live Control casts form text through it).
+
+## 41 - 2026-11-24: Live PlatformRecord, mesh push, Pose
+- `PlatformRecord` now does its intended job (the merged Capabilities and Status databases, note 21): `capabilities` is seeded at construction, and `PlatformStatus` grew `active_node_id`, `blocked`, and `capability_statuses` (`Backseater.status()`'s fields).  `update()` = `_advance_mission()` + `_refresh_own_record()`, which re-publishes only on change.
+- Self-write-only is enforced: `publish("platform", ...)` refuses another platform's record and changes to its own privilege level.  Sync still bypasses (write-side-only rule).
+- Boot missions are self-written into `mission_database`, so a peer can read what a platform runs before anyone pushes to it.
+- Mesh push: `write_mission(..., target_platform_id=None)`, reached by `publish("mission", target, graph)`.  Privilege is compared from the writer's own `PlatformDatabase`, and bindings are checked against the target's gossiped capabilities (refused if unknown).  The graph lands in the writer's Mission database; sync delivers it and the target's mission-change detection adopts it.
+- Pose: `Pose(x, y, theta)` Knowledge type, plus a `sense_pose` capability on the bicycle UGV publishing the sensed pose (`read_state()`) every tick.  The default mission binds it to `<platform_id>/pose`, which needed the Backseater to cascade `platform_id` before building the default graph.  A pushed mission without `sense_pose` stops that platform's pose gossip.
+
 ## 40 - 2026-11-19: Layered packages; primitive → capability request
 - Layers, each importing only from those above it: `core/` (`State`, `Sensor`/`PerfectSensor`, `Hardware`, `Environment`, `Clock`, capabilities; platform-, environment-, and mission-agnostic) → `database/` → `mission/` → `platform/` (`Frontseater`, `Backseater`, `Platform`) → `viz/` → `environments/` (was `world/`; `World` plus one folder per environment) → `scenarios/`.
 - Why `platform/` sits above `mission/`: with the Backseater in `core`, `core` needed `mission` and `mission` needed `core.capability`, a cycle.  The Frontseater moved with it since its contract is mission primitives.  `viz/` sits below `environments/` because every real import points environments → viz; `MissionDashboard` takes `World` duck-typed.

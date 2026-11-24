@@ -20,7 +20,8 @@ from mtofr.environments.world import World
 from mtofr.platform.platform import Platform
 
 if TK_AVAILABLE:
-    from mtofr.viz.dashboard import MissionDashboard, GRAPH_PLOT_BACKGROUND, MISSION_OVERVIEW_ID
+    from mtofr.viz.dashboard import MissionDashboard, MISSION_OVERVIEW_ID
+    from mtofr.viz.mission_graph_view import GRAPH_PLOT_BACKGROUND
     import matplotlib.colors
 
 

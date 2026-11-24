@@ -17,7 +17,8 @@ DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
 # SPLIT: independent loops. WAIT: ugv2 waits on ugv1 via mesh sync. VILLAGE: exercises
 # simple_village's road speed boost and blocked-terrain hard stop. VILLAGE_DEFAULT: same
 # map, but every platform (including the mission-editor "interface" platform) boots onto
-# its own default_mission_graph() -- author/push a real mission live via its window.
+# its own default_mission_graph() -- author/push a real mission live via its web UI
+# (the address is printed at startup, and opens in a browser).
 ACTIVE_SCENARIO = Scenario.VILLAGE_DEFAULT
 MAX_BACKLOG_STEPS = 5   # once the loop falls further behind than this many steps, drop the backlog
 IDLE_SLEEP_SECONDS = 0.001   # yields the CPU when there's no step/redraw to do
@@ -38,6 +39,8 @@ IDLE_SLEEP_SECONDS = 0.001   # yields the CPU when there's no step/redraw to do
 # Unguarded top-level setup code would re-run there too -- reconstructing the whole world
 # (and spawning more worker processes) inside each worker, recursively.
 if __name__ == "__main__":
+    print("Starting up the MTOFR Simulator...")
+
     #===============# Set Up #===============#
 
     scenario = SCENARIOS[ACTIVE_SCENARIO]

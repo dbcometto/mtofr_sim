@@ -1,0 +1,105 @@
+{
+  "knowledge": {
+    "ugv2/target": {
+      "type": "Location",
+      "value": {
+        "x": 40.0,
+        "y": 15.0
+      }
+    },
+    "ugv2/tolerance": {
+      "type": "float",
+      "value": 0.5
+    },
+    "ugv2/arrived": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv2/go": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv2/elapsed_time": {
+      "type": "float",
+      "value": 0.0
+    }
+  },
+  "nodes": {
+    "start": {
+      "capabilities": {}
+    },
+    "drive": {
+      "capabilities": {
+        "move_to": {
+          "capability": "move_to",
+          "inputs": {
+            "target": "ugv2/target",
+            "tolerance": "ugv2/tolerance"
+          },
+          "outputs": {
+            "arrived": "ugv2/arrived"
+          }
+        }
+      }
+    },
+    "wait": {
+      "capabilities": {
+        "stopwatch": {
+          "capability": "stopwatch",
+          "inputs": {},
+          "outputs": {
+            "elapsed_time": "ugv2/elapsed_time"
+          }
+        }
+      }
+    }
+  },
+  "edges": {
+    "start": [
+      {
+        "condition": [
+          "ugv2/go",
+          "==",
+          true
+        ],
+        "to": "drive"
+      }
+    ],
+    "drive": [
+      {
+        "condition": [
+          "ugv2/arrived",
+          "==",
+          true
+        ],
+        "to": "wait"
+      }
+    ]
+  },
+  "start": "start",
+  "name": "go_ugv2",
+  "editor": {
+    "layout": {
+      "start": [
+        0.0,
+        0.0
+      ],
+      "drive": [
+        1.5800000000000003,
+        0.9111111111111109
+      ],
+      "wait": [
+        2.8955555555555548,
+        -0.013333333333333239
+      ]
+    },
+    "unset_keys": [],
+    "following_keys": [
+      "ugv2/arrived",
+      "ugv2/elapsed_time",
+      "ugv2/go",
+      "ugv2/target",
+      "ugv2/tolerance"
+    ]
+  }
+}

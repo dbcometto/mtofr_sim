@@ -105,6 +105,19 @@ class TestKnowledgeSync(unittest.TestCase):
         self.assertEqual(ugv2.knowledge_database.get("battery"), 0.9)
 
 
+class TestLastSyncTimes(unittest.TestCase):
+    def test_last_sync_times_records_each_synced_peer(self):
+        """After a sync, both sides report a last-sync time for the other (as a copy)."""
+        ugv1 = _make_backseater("ugv1")
+        ugv2 = _make_backseater("ugv2")
+        self.assertEqual(ugv1.last_sync_times(), {})
+        ugv1.sync_with(ugv2)
+        self.assertIn("ugv2", ugv1.last_sync_times())
+        self.assertIn("ugv1", ugv2.last_sync_times())
+        ugv1.last_sync_times().clear()   # a copy: clearing it changes nothing
+        self.assertIn("ugv2", ugv1.last_sync_times())
+
+
 class TestMissionSync(unittest.TestCase):
     def test_a_platforms_own_mission_graph_is_gossiped_to_a_peer(self):
         """A platform's own Mission entry reaches the peer as the same graph object."""

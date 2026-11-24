@@ -1,0 +1,65 @@
+{
+  "knowledge": {
+    "Pose1": {
+      "type": "Location",
+      "value": {
+        "x": 40.0,
+        "y": 22.0
+      }
+    },
+    "tol": {
+      "type": "float",
+      "value": 0.5
+    },
+    "go": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv1/arrived": {
+      "type": "bool",
+      "value": false
+    }
+  },
+  "nodes": {
+    "start": {
+      "capabilities": {}
+    },
+    "Drive": {
+      "capabilities": {
+        "drive": {
+          "capability": "move_to",
+          "inputs": {
+            "target": "Pose1",
+            "tolerance": "tol"
+          },
+          "outputs": {
+            "arrived": "ugv1/arrived"
+          }
+        }
+      }
+    }
+  },
+  "edges": {
+    "start": [
+      {
+        "condition": [
+          "go",
+          "==",
+          true
+        ],
+        "to": "Drive"
+      }
+    ]
+  },
+  "start": "start",
+  "layout": {
+    "start": [
+      -0.9377777777777779,
+      0.9288888888888888
+    ],
+    "Drive": [
+      0.8066666666666665,
+      1.4
+    ]
+  }
+}

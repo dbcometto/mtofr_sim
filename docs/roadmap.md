@@ -1,8 +1,8 @@
 # Roadmap
 
 ## Current Status
-- Done: the peer-to-peer platform stack, image-based maps, default missions, the mission editor (interface platform), and the reorganization into layered packages (build order steps 1-7).  The LLM assistant (step 10) has a first cut.
-- Next: step 8, a web UI capability for the interface platform.  On the LLM side, the post-turn graph check (Next Up for LLM Agent, below).
+- Done: the peer-to-peer platform stack, image-based maps, default missions, the mission editor (interface platform), and the reorganization into layered packages (build order steps 1-7).  The LLM assistant (step 10) has a first cut.  The web UI (step 8) has a first cut, routed through the interface's own Backseater, with live `PlatformRecord` gossip and pose (notes 41-42), a graphical editor and per-window sessions (note 43), and an editor document, incomplete requests, a condition builder, and a Knowledge panel (note 44).
+- Next: the web UI's open items (below).  On the LLM side, the post-turn graph check (Next Up for LLM Agent, below).
 
 
 
@@ -14,16 +14,22 @@
 5. [x] Default startup missions (note 25)
 6. [x] Manual mission-authoring "interface" platform (notes 27-33)
 7. [x] Reorganization: layered packages, `mission/`, `scenarios/`, environment-specific state; primitive → capability request (note 40)
-8. [ ] Web UI capability so interface is more flexible
-9. [ ] Convoying-related capabilities
-10. [ ] [~] Agentic LLM on the interface platform: first cut done (the mission-editor assistant, notes 34-35); see open items below
-11. [ ] Teleop on the interface platform, for the experimental comparison (inside the existing system if it fits)
+8. [~] Web UI capability so interface is more flexible: first cut done (Tk parity, panel seam, mesh-routed, graphical editor, per-window sessions; notes 41-43); see open items below
+9. [ ] Re-touch user experience implementing platforms and capabilities so it is clean and easy
+10. [ ] Convoying-related capabilities
+11. [ ] [~] Agentic LLM on the interface platform: first cut done (the mission-editor assistant, notes 34-35); see open items below
+12. [ ] Teleop on the interface platform, for the experimental comparison (inside the existing system if it fits)
 
 
 
-## Reach Goals
-- Logistics: hardware limits, refueling (battery/gas), and pick-up/drop-off of cargo containers.  Interview heavily to nail down the details.
-- Scenario scripting for experimental mission drops, and metric collection
+## Web UI Open Items
+1. Usability: graphical editing, edge reordering, the condition builder, live validation (⚠), inline capability requests, and the Knowledge panel are done (notes 43-44).  Still open: the condition builder can't nest and/or groups (nested conditions use raw tokens), and the table Editor tab is off and may be retired.
+2. The LLM assistant as a web panel.  `DraftToolbox` is already the Editor's command layer, so it can edit the same draft.
+3. A map panel (overhead view with `<id>/pose` markers), then panels like obstacle painting, which would submit painted obstacles as Knowledge.  The map asset would be the panel's own config, never `World`.
+4. A per-platform port: two interface platforms would collide on `WEB_PORT`.
+5. Retire the Tk editor's direct writes (it calls the target's `write_mission()` and reads `World`), or retire the Tk editor itself once the web UI supersedes it.
+6. `CapabilityRegistry` and `KnowledgeEntry` values are gossiped as in-process objects; a real comms boundary needs them serialized (`encode_capabilities()` in `web/encoding.py` is a start).
+7. `WebHost.editor_store` is memory-only: a sim restart forgets pushed missions' layouts (saved files keep theirs).  Two different missions given the same name share one entry.
 
 
 
@@ -52,6 +58,11 @@
 6. An object/world-state/OPORD layer (object lists, confidence, OPORD parsing).
 
 
+## Reach Goals
+- Logistics: hardware limits, refueling (battery/gas), and pick-up/drop-off of cargo containers.  Interview heavily to nail down the details.
+- Scenario scripting for experimental mission drops, and metric collection
+
+
 
 ## Deferred and Known Limitations
 - Runtime privilege reassignment ("may assign levels ≤ its own, never its own") is specified but not implemented.
@@ -73,4 +84,4 @@
 
 
 ## Known Issues
-- None currently
+- Both UGVs' default missions declare the same un-prefixed `startup/elapsed_time` key, so they overwrite each other through mesh sync (last write wins).  It should be `<platform_id>/elapsed_time`, like `<platform_id>/pose`.

@@ -5,7 +5,7 @@ Backseater, so these tests wire in a minimal fake backseater (a plain dict-backe
 query/publish) instead of a full Backseater."""
 import unittest
 
-from mtofr.database import Location
+from mtofr.database import Location, Pose
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
@@ -189,16 +189,60 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
 
 
 
+    #===============# sense_pose #===============#
+
+    def test_capabilities_advertises_sense_pose_with_a_pose_output(self):
+        """sense_pose is advertised, with one Pose-typed "pose" output and no inputs."""
+        capability = self.frontseater.capabilities().get("sense_pose")
+        self.assertIsNotNone(capability)
+        self.assertEqual(capability.inputs, ())
+        self.assertEqual([(spec.name, spec.type) for spec in capability.outputs], [("pose", Pose)])
+
+    def test_sense_pose_publishes_the_sensed_pose_every_step(self):
+        """Each step publishes a fresh Pose matching the hardware's (sensed) state."""
+        self.frontseater.set_active_capabilities({
+            "pose": {"capability": "sense_pose", "inputs": {}, "outputs": {"pose": "ugv1/pose"}}
+        })
+        self.hardware.state.x, self.hardware.state.y, self.hardware.state.theta = 1.0, 2.0, 0.5
+        self.frontseater._step_active_capabilities()
+        first_pose = self.knowledge["ugv1/pose"]
+        self.assertIsInstance(first_pose, Pose)
+        self.assertEqual((first_pose.x, first_pose.y, first_pose.theta), (1.0, 2.0, 0.5))
+
+        self.hardware.state.x = 4.0
+        self.frontseater._step_active_capabilities()
+        self.assertEqual(self.knowledge["ugv1/pose"].x, 4.0)
+
+    def test_sense_pose_reports_sensing(self):
+        """An active sense_pose request's status reads "sensing"."""
+        self.frontseater.set_active_capabilities({
+            "pose": {"capability": "sense_pose", "inputs": {}, "outputs": {"pose": "ugv1/pose"}}
+        })
+        self.assertEqual(self.frontseater.describe_status()["capabilities"]["pose"], "sensing")
+
+
+
+
+
     #===============# Default Mission Graph #===============#
 
-    def test_default_mission_graph_starts_on_a_stopwatch_only_startup_node(self):
-        """The default graph starts on a "startup" node running exactly one stopwatch capability request."""
+    def test_default_mission_graph_starts_on_a_startup_node_running_stopwatch_and_pose(self):
+        """The default graph starts on a "startup" node running a stopwatch and the pose sensor."""
         graph = self.frontseater.default_mission_graph()
         self.assertEqual(graph["start"], "startup")
         capability_requests = graph["nodes"]["startup"]["capabilities"]
-        self.assertEqual(len(capability_requests), 1)
-        loiter = next(iter(capability_requests.values()))
-        self.assertEqual(loiter["capability"], "stopwatch")
+        self.assertEqual({name: request["capability"] for name, request in capability_requests.items()},
+                         {"loiter": "stopwatch", "pose": "sense_pose"})
+
+    def test_default_mission_graph_binds_pose_to_a_platform_prefixed_key(self):
+        """The default pose request publishes to "<platform_id>/pose", declared as a Pose seeded at the current pose."""
+        self.frontseater.platform_id = "ugv1"
+        self.hardware.state.x = 3.0
+        graph = self.frontseater.default_mission_graph()
+        self.assertEqual(graph["nodes"]["startup"]["capabilities"]["pose"]["outputs"], {"pose": "ugv1/pose"})
+        declaration = graph["knowledge"]["ugv1/pose"]
+        self.assertEqual(declaration["type"], Pose)
+        self.assertEqual(declaration["value"].x, 3.0)
 
     def test_default_mission_graph_declares_its_own_output_knowledge_key(self):
         """The default graph declares its stopwatch's output key as a float in its knowledge section."""

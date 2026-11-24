@@ -1,7 +1,7 @@
 """Village-default scenario: the same map as village, but every platform boots straight
-onto its own Frontseater.default_mission_graph() -- ugv1/ugv2 idle-loiter, and the
-interface platform shows its editor window -- until a mission is authored and pushed
-live via the mission editor."""
+onto its own Frontseater.default_mission_graph() -- ugv1/ugv2 idle-loiter (gossiping
+their poses), and the interface platform serves its web UI -- until a mission is
+authored and pushed live via that UI."""
 from mtofr.environments.anywhere.platforms.interface.spec import interface
 from mtofr.environments.ground_plane.env import GroundPlaneEnv
 from mtofr.environments.ground_plane.maps import load_map

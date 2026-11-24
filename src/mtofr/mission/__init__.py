@@ -10,5 +10,6 @@ from .validation import (
     declared_types,
     find_capability_problems,
     find_binding_problems,
+    find_condition_problems,
 )
 from .serialization import save_mission_graph, load_mission_graph

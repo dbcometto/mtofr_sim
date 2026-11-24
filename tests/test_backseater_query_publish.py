@@ -95,6 +95,20 @@ class TestQueryPublishPlatform(unittest.TestCase):
         with self.assertRaises(ValueError):
             backseater.publish("platform", "ugv1", "not-a-record")
 
+    def test_publish_refuses_another_platforms_record(self):
+        """publish("platform", ...) is self-write-only: another platform's record raises PermissionError."""
+        backseater = _make_backseater(self)
+        backseater.platform_database.declare("ugv2", PlatformRecord(privilege_level=1))
+        with self.assertRaises(PermissionError):
+            backseater.publish("platform", "ugv2", PlatformRecord(privilege_level=1))
+
+    def test_publish_refuses_changing_its_own_privilege_level(self):
+        """A self-write may not change this platform's own privilege level."""
+        backseater = _make_backseater(self)
+        with self.assertRaises(PermissionError):
+            backseater.publish("platform", "ugv1", PlatformRecord(privilege_level=0))
+        self.assertEqual(backseater.query("platform", "ugv1").privilege_level, 1)
+
 
 class TestQueryPublishMission(unittest.TestCase):
     def test_publish_mission_self_write_lands_via_write_mission(self):
@@ -105,11 +119,10 @@ class TestQueryPublishMission(unittest.TestCase):
 
     def test_publish_mission_still_goes_through_the_privilege_gate(self):
         """publish("mission", ...) routes through write_mission, so a structurally bad graph is rejected."""
-        # publish("mission", ...) is only ever a self-write (key is ignored, target is
-        # always this platform's own entry via write_mission), so the privilege gate
-        # never actually blocks it -- this asserts it really does route through
-        # write_mission rather than bypassing it, by checking the structural-verify gate
-        # (which write_mission also runs) rejects a bad graph the same way.
+        # A self-write (key = own id) skips the privilege gate, so this asserts it really
+        # does route through write_mission rather than bypassing it, by checking the
+        # structural-verify gate (which write_mission also runs) rejects a bad graph the
+        # same way. Writes to another platform's entry are covered in test_mesh_mission_push.
         from mtofr.mission.validation import MissionStructuralError
         backseater = _make_backseater(self)
         bad_graph = {

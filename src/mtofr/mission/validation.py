@@ -3,7 +3,7 @@ against one platform's capabilities (find_binding_problems).  The editor, the LL
 assistant, Backseater.write_mission(), and Backseater's bind-time check all share these,
 so a graph is judged the same way everywhere."""
 from mtofr.core.capability import CapabilityRegistry
-from mtofr.mission.condition import parse_condition
+from mtofr.mission.condition import And, Comparison, Not, Or, parse_condition
 from mtofr.mission.graph import MissionGraph, CapabilityRequest
 
 
@@ -40,6 +40,56 @@ def verify_mission_structure(mission_graph: MissionGraph) -> None:
         raise MissionStructuralError(
             f"Mission graph references undeclared knowledge key(s): {sorted(missing_keys)}"
         )
+
+
+
+
+
+
+
+#========================================#
+# Conditions
+#========================================#
+
+def _comparisons(node) -> list[Comparison]:
+    """Every Comparison in a parsed condition tree."""
+    if isinstance(node, Comparison):
+        return [node]
+    if isinstance(node, (And, Or)):
+        return [comparison for operand in node.operands for comparison in _comparisons(operand)]
+    if isinstance(node, Not):
+        return _comparisons(node.operand)
+    return []   # IsNone compares against no literal
+
+
+def _literal_fits(value, declared_type: type) -> bool:
+    """Whether a condition literal can meaningfully be compared with a key of `declared_type`:
+    the same type, or an int for a float key. A bool is never a number here, even though
+    Python treats it as an int, so `"flag" == 1` and `"speed" > True` are both flagged."""
+    if isinstance(value, bool) or declared_type is bool:
+        return isinstance(value, bool) and declared_type is bool
+    if declared_type is float:
+        return isinstance(value, (int, float))
+    return isinstance(value, declared_type)
+
+
+def find_condition_problems(condition: list, known_types: dict[str, type]) -> list[str]:
+    """Every reason an edge condition is wrong or likely a mistake: it doesn't parse, it reads an
+    undeclared key, or it compares a key with a literal of another type (e.g. the string "true"
+    against a bool key, which would silently never match).  `known_types` is as in
+    find_capability_problems().  Empty when the condition is fine."""
+    try:
+        tree = parse_condition(condition)
+    except ValueError as error:   # ConditionSyntaxError, or a malformed token list
+        return [f"condition doesn't parse: {error}"]
+    problems = [f"key '{key}' is not declared; declare it first" for key in sorted(tree.keys() - set(known_types))]
+    problems += [
+        f"'{comparison.key}' is declared {known_types[comparison.key].__name__}, but is compared with "
+        f"{comparison.value!r} ({type(comparison.value).__name__})"
+        for comparison in _comparisons(tree)
+        if comparison.key in known_types and not _literal_fits(comparison.value, known_types[comparison.key])
+    ]
+    return problems
 
 
 

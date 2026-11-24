@@ -2,7 +2,7 @@
 KnowledgeDatabase in knowledge.py, which is keyed by arbitrary key instead of
 platform_id): MissionDatabase and PlatformDatabase, sharing a PlatformKeyedDatabase base."""
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from mtofr.core.capability import CapabilityRegistry
@@ -107,18 +107,23 @@ class MissionDatabase(PlatformKeyedDatabase):
 
 @dataclass(frozen=True)
 class PlatformStatus:
-    """A platform's self-reported health: a status string plus an arbitrary free-text
-    message, one field of the PlatformRecord value PlatformDatabase locks its entries to."""
+    """A platform's self-reported live status, one field of the PlatformRecord value
+    PlatformDatabase locks its entries to: the overall status text, a free-text message,
+    and the mission progress Backseater.status() reports (active node, blocked flag, and
+    per-request capability/status/inputs), so a peer can observe it without local access."""
     status: str
     message: str = ""
+    active_node_id: Optional[str] = None
+    blocked: bool = False
+    capability_statuses: dict = field(default_factory=dict)   # request name -> {"capability", "status", "inputs"}
 
 
 @dataclass(frozen=True)
 class PlatformRecord:
     """Everything gossiped "about" one platform, merged into a single row so a mesh
     sync only has to reconcile one entry per peer instead of three: its privilege
-    level (placeholder security, see Backseater), self-reported status, and its most
-    recently advertised CapabilityRegistry snapshot."""
+    level (placeholder security, see Backseater), self-reported status, and its
+    advertised CapabilityRegistry."""
     privilege_level: int
     status: PlatformStatus = PlatformStatus("idle")
     capabilities: Optional[CapabilityRegistry] = None
@@ -128,8 +133,6 @@ class PlatformDatabase(PlatformKeyedDatabase):
     """Keyed by platform_id, one PlatformRecord per platform, gossiped across the mesh so
     an operator/LLM can observe a remote platform's health, capabilities, or privilege
     level without local access. Also the lookup Backseater's Mission write gate uses to
-    resolve both sides' privilege levels."""
-    # TODO: status and capabilities are meant to be self-write-only, but that isn't
-    # enforced yet (privilege_level is the exception: only a strictly higher-privilege
-    # platform may change it).
+    resolve both sides' privilege levels. Each platform writes only its own record (enforced
+    by Backseater.publish(), write-side); mesh sync carries everyone else's."""
     value_type = PlatformRecord

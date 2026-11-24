@@ -41,8 +41,10 @@ def _as_condition(value) -> list:
     return condition
 
 
-def _as_knowledge_value(entry_type: type, value):
-    """Builds a knowledge value of `entry_type` from what the model sent (a scalar, or a field dict/list for compound types)."""
+def as_knowledge_value(entry_type: type, value):
+    """Builds a knowledge value of `entry_type` from what the model (or a web form) sent: a
+    scalar or its text, or a field dict/list for compound types. Public: the web Live
+    Control panel coerces its form values through this too."""
     if is_compound_knowledge_type(entry_type):
         field_names = [name for name, _ in constructor_fields(entry_type)]
         if isinstance(value, str):
@@ -81,11 +83,16 @@ class DraftToolbox:
     1:1 wrapper of a graph_draft helper (deliberately no composite tools -- the granularity is the point);
     `run()` returns "ok: ..." or an "Error: ..." string, never raises, so the model can read it and retry."""
 
-    def __init__(self, get_draft, apply_draft, get_capabilities=lambda: None):
-        """Binds the tools to the caller's draft accessors and builds the schemas."""
+    def __init__(self, get_draft, apply_draft, get_capabilities=lambda: None, require_bindable: bool = True):
+        """Binds the tools to the caller's draft accessors and builds the schemas. With
+        `require_bindable` False, capability requests the target couldn't bind yet are accepted
+        (the web editor, where an operator fills bindings in over several steps and Validate/Push
+        still refuse an unbindable graph); the assistant keeps the default, so it gets the fix
+        in the error at once."""
         self.get_draft = get_draft
         self.apply_draft = apply_draft
         self.get_capabilities = get_capabilities   # the target platform's CapabilityRegistry, or None when unknown
+        self.require_bindable = require_bindable
         self._functions = {
             "add_node": self.add_node, "remove_node": self.remove_node, "rename_node": self.rename_node,
             "set_start_node": self.set_start_node,
@@ -144,7 +151,7 @@ class DraftToolbox:
     def _require_bindable(self, capability: str, inputs: dict, outputs: dict) -> None:
         """Rejects a capability request the target platform could not bind (unknown capability or field, undeclared key, wrong key type)."""
         registry = self.get_capabilities()
-        if registry is None:
+        if registry is None or not self.require_bindable:
             return
         capability_request = {"capability": capability, "inputs": inputs, "outputs": outputs}
         problems = find_capability_problems(capability_request, declared_types(self.get_draft()), registry)
@@ -247,7 +254,7 @@ class DraftToolbox:
         """Tool: declare a new knowledge key of the named type."""
         entry_type = _as_knowledge_type(type)
         self.apply_draft(graph_draft.add_knowledge_key(
-            self.get_draft(), key, entry_type, _as_knowledge_value(entry_type, value)))
+            self.get_draft(), key, entry_type, as_knowledge_value(entry_type, value)))
         return f"ok: declared knowledge key '{key}' ({type})"
 
     def edit_knowledge_key(self, key: str, type: str, value) -> str:
@@ -255,7 +262,7 @@ class DraftToolbox:
         self._require_key(key)
         entry_type = _as_knowledge_type(type)
         self.apply_draft(graph_draft.edit_knowledge_key(
-            self.get_draft(), key, entry_type, _as_knowledge_value(entry_type, value)))
+            self.get_draft(), key, entry_type, as_knowledge_value(entry_type, value)))
         broken = find_binding_problems(self.get_draft(), self.get_capabilities())   # a type change can invalidate existing bindings
         warning = f" WARNING, this broke existing bindings: {'; '.join(broken)}" if broken else ""
         return f"ok: knowledge key '{key}' is now a {type}.{warning}"

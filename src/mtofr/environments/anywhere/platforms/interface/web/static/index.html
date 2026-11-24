@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mission Interface</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1 id="title">Mission Interface</h1>
+    <label class="target">Target
+      <select id="target"></select>
+    </label>
+    <span id="sync-age" class="note" title="Time since this interface last synced with the Target"></span>
+    <span id="connection" class="connection"></span>
+  </header>
+
+  <nav id="tabs"></nav>
+  <main id="panels"></main>
+
+  <section class="console-section">
+    <h2>Console</h2>
+    <pre id="console"></pre>
+  </section>
+
+  <!-- The one shared form dialog every panel uses (see mtofr.ui.formDialog in app.js) -->
+  <dialog id="form-dialog">
+    <form method="dialog">
+      <h2 id="form-dialog-title"></h2>
+      <div id="form-dialog-fields" class="form-fields"></div>
+      <menu>
+        <button value="ok" id="form-dialog-ok" data-primary>OK</button>
+        <button type="button" id="form-dialog-cancel">Cancel</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+  <script src="/static/draft_tools.js"></script>
+</body>
+</html>

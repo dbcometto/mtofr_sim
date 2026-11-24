@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
 from mtofr.viz.base import EnvironmentViewer
-from mtofr.viz.mission_graph_view import MissionGraphViewer
+from mtofr.viz.mission_graph_view import GRAPH_PLOT_BACKGROUND, MissionGraphViewer
 from mtofr.viz.platform_overview_view import PlatformOverviewViewer
 
 
@@ -33,7 +33,6 @@ TOOLTIP_BACKGROUND = "#ffffe0"
 TOOLTIP_EDGE_COLOR = "gray"
 PLOT_BACKGROUND = "white"   # the environment view keeps its original white background;
                              # only the surrounding ttk chrome uses the dark theme
-GRAPH_PLOT_BACKGROUND = "#808080"   # mission graph gets a mid-gray background instead
 PAUSED_BUTTON_BACKGROUND = "#8b3a3a"   # "pressed in" look while time is not passing
 SCROLLBAR_THUMB = "#808080"
 

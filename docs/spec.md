@@ -33,6 +33,7 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
   - `status()`: read-only snapshot of the active node, blocked flag, and per-request capability/status/inputs (under `"capabilities"`).  Status text comes fresh from `Frontseater.describe_status()`.
   - `query(database_name, key)` / `publish(database_name, key, value, timestamp=None)` across `"knowledge"`/`"mission"`/`"platform"`, plus `declare_knowledge_key()`.  A `"mission"` publish always goes through `write_mission()`.
   - Bind check, each tick before handing off: `mission.validation.find_capability_problems()` against the live `KnowledgeDatabase.types()`, the same check the editor runs against a graph's declarations.  Any problem halts the mission (blocked) without crashing.
+  - `update()` = `_advance_mission()` then `_refresh_own_record()`, which re-publishes its own `PlatformRecord` status (from `status()`) only when it changed.
 - **Frontseater** (`platform/frontseater.py` ABC): the only bespoke part of each platform (planning/control, capability implementations).  Talks to Hardware only via `send_controls`/`read_state`, and reaches its Backseater via `frontseater.backseater`.
   - `capabilities()`: builds its own `CapabilityRegistry`.
   - `set_active_capabilities(capability_requests)`: called only when the active node's `{name: {"capability", "inputs", "outputs"}}` dict changes (by identity).  The Frontseater diffs it (start new, stop gone, leave unchanged) and decides how "running" works.
@@ -55,20 +56,21 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
 
 ## Databases
 All three belong to the Backseater, are stamped by its `Clock`, and carry `origin_platform_id` per entry (the platform that held the entry at its latest locally converted timestamp, transitively).  Every check happens write-side only, once, at the originating platform; there is no re-verification on receipt.
-- **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, entry_type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required; `Location(x, y)` is the only built-in, in `knowledge_types.py`).
-- **Mission** (`MissionDatabase`): platform_id → `mission_graph` dict.  Writes from another platform go through `Backseater.write_mission(mission_graph, writer_platform_id, timestamp=None)`, which applies:
-  - a privilege check (skipped for a self-write);
+- **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, entry_type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required; built-ins `Location(x, y)` and `Pose(x, y, theta)` in `knowledge_types.py`).
+- **Mission** (`MissionDatabase`): platform_id → `mission_graph` dict.  Each Backseater self-writes its boot mission at construction, so peers can read it.  Every write goes through `Backseater.write_mission(mission_graph, writer_platform_id, timestamp=None, target_platform_id=None)` (None = this platform), which applies:
+  - a privilege check (skipped when the writer is the target);
   - a type check;
   - `mission.validation.verify_mission_structure()`: every edge-condition key and binding key must be declared in the graph's `"knowledge"` section, otherwise `MissionStructuralError(ValueError)`;
-  - `mission.validation.find_binding_problems()`: every capability request must be bindable by this platform (capability exists, no missing/unknown fields, exact key types).
+  - `mission.validation.find_binding_problems()`: every capability request must be bindable by the target (capability exists, no missing/unknown fields, exact key types), against its own registry or, for a peer, its gossiped `PlatformRecord.capabilities` (refused if unknown).
 
   Edge reachability is not checked.
-- **Platform** (`PlatformDatabase`): platform_id → `PlatformRecord(privilege_level, status: PlatformStatus(status, message), capabilities)`.  Gossiped per platform, and seeded at construction.  `status` and `capabilities` are meant to be self-write-only (not enforced yet).  `privilege_level` may only be changed by a strictly higher-privilege platform.
+- **Platform** (`PlatformDatabase`): platform_id → `PlatformRecord(privilege_level, status, capabilities)`, gossiped so observers see a peer's health and abilities without local access.  `capabilities` is seeded at construction; `status` is `PlatformStatus(status, message, active_node_id, blocked, capability_statuses)`, re-published by `update()` on change.  `publish("platform", ...)` is self-write-only and may not change the platform's own `privilege_level` (only a strictly higher-privilege platform may; not implemented).
 
 
 
 ## Privilege, Mission Change, Sync
-- **Privilege**: integer, 0 = highest (reserved), default 1, set by the harness.  A platform may write another's Mission entry only if its level is strictly lower (higher privilege).  Both levels are read from the target's own `PlatformDatabase`, and an unknown writer gets `PermissionError`.  Runtime reassignment is not implemented.
+- **Privilege**: integer, 0 = highest (reserved), default 1, set by the harness.  A platform may write another's Mission entry only if its level is strictly lower (higher privilege).  Both levels are read from the writing Backseater's own `PlatformDatabase`, and an unknown writer or target gets `PermissionError`.  Runtime reassignment is not implemented.
+- **Mesh push**: `publish("mission", target_id, graph)` writes the target's entry into the writer's own Mission database, with every check done there; sync delivers it, and the target's mission-change detection adopts it.  The web UI pushes this way.  The Tk editor still calls the target's `write_mission()` directly (a sim-only shortcut).
 - **Mission change** (`_detect_mission_change()`, top of `update()`): when this platform's own Mission entry is a new object, it:
   1. stops the old capability requests;
   2. resets the new graph's knowledge keys to their declared defaults;
@@ -85,10 +87,10 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 
 
 ## Missions (`mission/`)
-- **Shape** (`graph.py`, the single readable definition): `{"knowledge": {key: {"type", "value"}}, "nodes": {id: {"capabilities": {name: {"capability", "inputs", "outputs"}}}}, "edges": {id: [{"condition": [tokens], "to": id}]}, "start": id}`.  TypedDicts `MissionGraph`/`Node`/`CapabilityRequest`/`Edge`/`KnowledgeDeclaration` document it and type-hint public signatures; graphs stay plain dicts.  One node is active at a time; its capability requests run concurrently.
+- **Shape** (`graph.py`, the single readable definition): `{"knowledge": {key: {"type", "value"}}, "nodes": {id: {"capabilities": {name: {"capability", "inputs", "outputs"}}}}, "edges": {id: [{"condition": [tokens], "to": id}]}, "start": id}`, plus an optional `"name"` (a label the Backseater and validation ignore).  Editor-only data (node layout, key flags) never goes in the mission graph; see the web editor's `EditorDocument`.  TypedDicts `MissionGraph`/`Node`/`CapabilityRequest`/`Edge`/`KnowledgeDeclaration` document it and type-hint public signatures; graphs stay plain dicts.  One node is active at a time; its capability requests run concurrently.
 - `"inputs"`/`"outputs"` map a capability's field names to Knowledge keys, never literals.  They are the initial binding; a running capability may `query()`/`publish()` anything.
 - **Conditions** (`condition.py`): pre-tokenized boolean expressions over Knowledge keys (e.g. `["(", "ugv1/arrived", "==", True, "and", "ugv1/battery", ">", 0.9, ")", "or", "ugv1/target_found", "is", "not", None]`).  `parse_condition()` (recursive descent, no `eval`) builds a tree of `Comparison`/`IsNone`/`And`/`Or`/`Not`, each with `evaluate(knowledge)` and `keys()`.  Precedence is `not` > `and` > `or`.  Capability status never drives transitions; capabilities write Knowledge.
-- **Validation** (`validation.py`): `verify_mission_structure()` (every referenced key declared) and `find_capability_problems(request, known_types, registry)` / `find_binding_problems(graph, registry)`.  `known_types` is key → type: `declared_types(graph)` for the editor, assistant, and push; `KnowledgeDatabase.types()` for the Backseater's bind check.  Edge reachability is not checked.
+- **Validation** (`validation.py`): `verify_mission_structure()` (every referenced key declared), `find_capability_problems(request, known_types, registry)` / `find_binding_problems(graph, registry)`, and `find_condition_problems(condition, known_types)` (a parse error, undeclared keys, or a literal whose type doesn't match the key's, e.g. the string `"true"` against a bool key).  `known_types` is key → type: `declared_types(graph)` for the editor, assistant, and push; `KnowledgeDatabase.types()` for the Backseater's bind check.  Edge reachability is not checked.
 - **Serialization** (`serialization.py`): JSON save/load with a type-name registry (`KNOWLEDGE_TYPES_BY_NAME`); a new `KnowledgeEntry` type needs one registry line.
 - **Capabilities** (`core/capability.py`): `ParamSpec(name, type, description)` describes fields and drives the binding checks; it never resolves values.  Its `describe()` includes a `KnowledgeEntry` type's own `describe()`, so a human or LLM can read what a field means.  `Capability(ipl_type, description, inputs, outputs)` and `CapabilityRegistry` (`.get`, `.all`, `.describe`).  A capability request's `"capability"` equals an `ipl_type`.
 
@@ -114,8 +116,9 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
   - `BicycleFrontseater` is the reference Frontseater, a plain if/elif over its capabilities:
     - `move_to` (`target`, `tolerance` → `arrived`; re-queries each tick);
     - `avoid` (`point`, `radius` → `registered`);
-    - `stopwatch` (→ `elapsed_time` in sim seconds since start; never completes).
-  - Its default mission loiters on `stopwatch`.
+    - `stopwatch` (→ `elapsed_time` in sim seconds since start; never completes);
+    - `sense_pose` (→ `pose`, the sensed `Pose` from `read_state()`, every tick; never completes).
+  - Its default mission loiters on `stopwatch` and runs `sense_pose` bound to `<platform_id>/pose`, so pose gossips by default.  A pushed mission without `sense_pose` stops that.
   - MPC (`mpc.solve_mpc`, SLSQP, `MPC_MAX_ITERATIONS` 20, warm-started) runs in one persistent worker process per platform.  The MPC knows nothing about terrain.
 - **Stationary** (`environments/anywhere/hardware.py`): `StationaryHardware` (`environment_type = None`) never moves.
 - **Maps** (`environments/ground_plane/maps/`): `load_map(name)` (None → no map) and `GroundMap.load(folder)`, which reads `<name>.yaml` plus `_cosmetic`/`_traversability`/`_regions` PNGs.
@@ -131,8 +134,8 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
   - draws platforms as dots with a fixed on-screen heading marker;
   - draws the map's cosmetic image with toggleable overlays and a combined legend;
   - uses a gray off-map background.
-- `MissionGraphViewer` (`viz/mission_graph_view.py`):
-  - deterministic force-directed `compute_graph_layout()`, cached by `id(graph)` with a strong reference;
+- `MissionGraphViewer` (`viz/mission_graph_view.py`, which also owns `GRAPH_PLOT_BACKGROUND` for every graph view):
+  - deterministic force-directed `compute_graph_layout(graph, pinned_positions=None)`.  Pinned nodes stay put and only the rest are placed.  It is cached by `(id(graph), pins)` with a strong reference, bounded by `LAYOUT_CACHE_LIMIT`;
   - arrowheads at edge midpoints, and opposing edges curved apart by a quadratic bezier;
   - hover hit-testing in display pixels, with tooltips titled `Node:`/`Edge:`.
 - `PlatformOverviewViewer`: one row per platform (`platform_id: "active_node"`); hover shows active capabilities, and a click selects the platform.
@@ -147,15 +150,57 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 
 
 
-## Interface Platform and Mission Editor
-- `interface(platform_id, initial_state, ...)` (`environments/anywhere/platforms/interface/`, privilege 0): `MissionEditorFrontseater` + `ConsoleHardware` (a `StationaryHardware`, placed at `initial_state`, e.g. a `GroundPlaneState`).
-  - Its one capability, `show_interface`, opens or closes the editor window.  Its default graph runs that capability unconditionally.
+## Interface Platform and Mission Editors
+- `interface(platform_id, initial_state, ..., build_panels=default_panels)` (`environments/anywhere/platforms/interface/`, privilege 0): `MissionEditorFrontseater` + `ConsoleHardware` (a `StationaryHardware`, placed at `initial_state`, e.g. a `GroundPlaneState`).
+  - Two capabilities, matched by capability type: `show_interface` opens or closes the Tk editor window, and `serve_web_interface` starts or stops the web UI.  The default graph runs only `serve_web_interface`.
   - Editing itself is not a capability.
-  - `attach()` installs the window factory (`_NullWindow` when headless).
-- `MissionEditorWindow` (`mission_editor/window.py`): a Toplevel on the dashboard's root.
+  - `attach()` installs the Tk window factory (`_NullWindow` when headless).  The web UI needs neither `World` nor Tk.
+- **Web UI** (`interface/web/`), the hardware-portable one: it reads and writes only through the interface's own Backseater.
+  - `WebInterfaceServer` (stdlib `ThreadingHTTPServer`, `WEB_HOST`/`WEB_PORT` in `web/config.py`, default `127.0.0.1:8765`) serves a vanilla-JS page and a JSON API in front of one `WebHost`.  A start failure (port taken) shows in `describe_status()`.
+  - Threading: `WebHost.on_tick(backseater)` runs on the sim thread from the frontseater's `begin_update()`.  It runs every queued write (outcomes go to the console of the window that queued it), then captures an `InterfaceView` (frozen copies of all three databases).  Server threads only read the latest view and queue writes, so while the sim is paused, reads hold still and writes wait.
+  - Per-window sessions: the page keeps an id in `sessionStorage` and sends it as `X-Session-Id` (400 if missing or malformed).  `WebHost(own_platform_id, build_panels)` builds fresh panels for each session, so each window has its own Target, draft, undo history, and console over the one shared view.  A session survives a reload, expires after `SESSION_IDLE_TIMEOUT`, and is capped at `MAX_SESSIONS`.
+  - Panels (`web/panel.py`): a `WebPanel` has `name`, `title`, `script_path` (its JS half, which calls `mtofr.registerPanel(name, mount)`), `state(context)`, and `commands()`.  `PanelContext(view, target_platform_id, submit, log, editor_store)`.  `api.command()` resolves after the resulting state is applied.
+    - A static registry: `default_panels()` gives Graph, then Live Control.  The table Editor tab is off for now (a NOTE in `panels/__init__.py`), but its `EditorPanel` still holds the window's draft.
+    - A custom panel is a `WebPanel` subclass plus its script.
+  - **Enter** (page-wide, `app.js`): in a field it blurs the field, which commits it.  With nothing focused, it presses the `[data-primary]` button of the open dialog, or of the last-used `[data-enter-scope]` container.  The header shows the time since the last sync with the Target.
+  - **Live Control**: every Knowledge key the interface holds (the whole mesh), with origin, write age, and the time since the interface last synced with the origin.  Edits are published through the interface's Backseater, cast by `assistant_tools.as_knowledge_value()`.  Pending rows are italic:
+    - a value queued until the next tick;
+    - a key some known mission declares that hasn't arrived yet.
+  - **The draft** (`EditorPanel`): one `DraftHistory` of `EditorDocument`s per window (`mission_editor/editor_document.py`).
+    - **The document** is the mission graph plus editor-only data: the node `layout`, `unset_keys` and `following_keys`.  Only the graph is ever pushed.
+    - **Edits** go through `DraftToolbox.run()` with `require_bindable=False`: incomplete capability requests are allowed while drafting, and are reported instead.
+    - **`edit_batch`** runs several steps as one atomic undo step.  It also takes the editor-only steps `move_nodes`, `move_edge`, `declare_key`, `set_key_flags`, `set_mission_name` and `retarget`, none of which are assistant tools.
+    - **`state`** carries:
+      - `problems`: `requests` (node → request), `edges`, `keys` (unset) and `graph`;
+      - `edge_rows`: each condition as builder rows, from `encoding.condition_rows()`, or null;
+      - `target`, `name` and `draft_namespace`.
+    - **Validate and Push** refuse an unbindable request, a mistyped condition, an unset key, or a missing start node.
+    - **Unset keys:** a key made by "+ New key…" has no value until the operator sets one, so a default like Location(0, 0) can never pass for real.
+    - **Namespaces:** a key whose namespace was left at the default (the Target) follows the Target, but only through the explicit "Retarget keys" button; a Target change alone renames nothing.
+    - **Load, save and the store:**
+      - Load Live comes from the gossiped Mission entry.
+      - Files carry an `"editor"` section, which plain loaders ignore.
+      - Push records the editor data in `WebHost.editor_store` (mission name → sidecar, in memory, shared by all windows), and Load Live of that name restores it.
+    - The toolbar (mission name, Retarget) and shared forms, including the condition builder, are in `static/draft_tools.js`.
+  - **Graph** (the first tab, opening in Live mode): `[Knowledge panel | canvas | inspector]`, the side panels collapsing by their arrows.  `GraphPanel` delegates every command to its `EditorPanel`.  `draft_layout` is `compute_graph_layout(graph, document.layout)`.
+    - **Knowledge panel:** the draft's keys, showing the dimmed namespace, then name, type and value.
+      - Unset keys are italic with ⚠, and keys bound by the selected node are highlighted.
+      - Hover shows ✎/✕, and double-click edits inline (Namespace, Name, Type, value; Save is primary).
+      - In Live mode it shows the live mission's keys with their mesh values.
+    - **Inspector and popover** (the popover opens on double-click or the node's pencil): capability requests are edited inline (name, capability, one binding select per field).
+      - A binding select offers the declared keys (matching type first) and "+ New key…", which declares an unset `ns/field` and binds it in one step.
+      - The edge editor uses the condition builder: rows of `[not] key operator value`, with operators chosen by the key's type and typed literals, under all/any. "Advanced" switches to raw tokens.
+    - **Canvas:**
+      - ⚠ on nodes and edges with problems.
+      - Priority badges (1st, 2nd, …) only where a node has two or more outgoing edges.
+      - Halos under every edge, so crossings show gaps.
+      - A selected edge marks its origin and recipient nodes in different colors, and a drawn edge's drop-target node lights up.
+    - **Gestures:** drag a node's port to draw an edge (onto blank space adds a node); drag a selected edge's end handle to re-route it; double-click blank space to add a node; box-select and group-move; right-click menu; Delete, Ctrl+A, F, Escape, Ctrl+Z/Y.
+    - **Live mode** shows the Target's gossiped mission (laid out from the store when its name is known), `PlatformStatus` and last-sync age, read-only.
+- **Tk editor**: `MissionEditorWindow` (`mission_editor/window.py`), a Toplevel on the dashboard's root.  A sim-only direct path: it reads `World` and writes peers' Backseaters itself.
   - It edits one draft at a time, loaded from a live platform (deep-copied), from a file (`mission/serialization.py`), or blank.
-  - Every mutation goes through `_set_draft()`, using pure `graph_draft.py` helpers that return new dicts.  This gives undo/redo (`UNDO_HISTORY_LIMIT`, Ctrl+Z/Y bound on the window).
-  - Validate, then Push through `write_mission()`.  The editor is just another writer.
+  - Every mutation goes through `_set_draft()`, using pure `graph_draft.py` helpers that return new dicts, recorded in a `DraftHistory` (`mission_editor/draft_history.py`, shared with the web Editor) for undo/redo (`UNDO_HISTORY_LIMIT`, Ctrl+Z/Y bound on the window).
+  - Validate, then Push through the target's `write_mission()`.  The editor is just another writer.
   - Tabs:
     - **Live Control** (default): the target's Knowledge, edited live via `set()` and refreshed each second.
     - **Editor**: resizable panes of Nodes+Capabilities | Edges | Knowledge, with Add/Edit/Remove and double-click editing.

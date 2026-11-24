@@ -10,8 +10,36 @@ from mtofr.mission.validation import (
     declared_types,
     find_binding_problems,
     find_capability_problems,
+    find_condition_problems,
     verify_mission_structure,
 )
+
+
+class TestConditionProblems(unittest.TestCase):
+    KNOWN = {"flag": bool, "speed": float, "count": int, "label": str}
+
+    def test_a_clean_condition_has_no_problems(self):
+        """Matching literal types (an int for a float key included) are fine."""
+        condition = ["flag", "==", True, "and", "speed", ">", 1, "and", "count", "<", 3, "and", "label", "==", "x"]
+        self.assertEqual(find_condition_problems(condition, self.KNOWN), [])
+
+    def test_a_string_compared_with_a_bool_key_is_flagged(self):
+        """The JSON-editor trap: "true" (a string) against a bool key."""
+        problems = find_condition_problems(["flag", "==", "true"], self.KNOWN)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("declared bool", problems[0])
+
+    def test_a_bool_compared_with_a_number_key_is_flagged(self):
+        """A bool is never a number here, even though Python treats it as an int."""
+        self.assertEqual(len(find_condition_problems(["speed", ">", True], self.KNOWN)), 1)
+
+    def test_an_undeclared_key_is_flagged(self):
+        """A condition key missing from the declarations is reported."""
+        self.assertIn("not declared", find_condition_problems(["ghost", "==", 1], self.KNOWN)[0])
+
+    def test_a_condition_that_does_not_parse_is_flagged(self):
+        """A malformed token list is one problem, not an exception."""
+        self.assertIn("doesn't parse", find_condition_problems(["flag", "=="], self.KNOWN)[0])
 
 
 class TestVerifyMissionStructure(unittest.TestCase):

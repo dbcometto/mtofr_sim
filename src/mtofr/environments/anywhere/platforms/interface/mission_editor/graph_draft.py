@@ -1,5 +1,7 @@
 """Defines mutation helpers for a draft mission-graph dict, used by the mission
-editor window. Each helper returns a new top-level dict object rather than
+editors (Tk and web) and the assistant's tools. They touch mission semantics only;
+editor-only data (node layout, key flags) lives in the web editor's EditorDocument
+(editor_document.py). Each helper returns a new top-level dict object rather than
 mutating in place, so MissionGraphViewer's identity-keyed layout cache
 (mtofr.viz.mission_graph_view.compute_graph_layout) recomputes a fresh layout
 after every edit instead of returning a stale one keyed off the old identity.
@@ -97,6 +99,16 @@ def rename_node(draft: dict, old_id: str, new_id: str) -> dict:
     return new_draft
 
 
+def set_mission_name(draft: dict, name: str) -> dict:
+    """Sets the mission's optional human-readable name; an empty (or all-whitespace) name removes it."""
+    new_draft = dict(draft)
+    if name.strip():
+        new_draft["name"] = name.strip()
+    else:
+        new_draft.pop("name", None)
+    return new_draft
+
+
 def set_start_node(draft: dict, node_id: str) -> dict:
     """Makes `node_id` the start node; raises ValueError if it doesn't exist."""
     if node_id not in draft["nodes"]:
@@ -181,11 +193,30 @@ def add_edge(draft: dict, source_id: str, target_id: str, condition: list) -> di
 
 def edit_edge(draft: dict, source_id: str, index: int, new_source_id: str, new_target_id: str,
               condition: list) -> dict:
-    """Replaces an existing edge in place -- removes the edge at `index` in
-    `source_id`'s list, then adds the edited version (possibly under a different
-    source/target) back, same as remove_edge followed by add_edge in one step."""
-    new_draft = remove_edge(draft, source_id, index)
-    return add_edge(new_draft, new_source_id, new_target_id, condition)
+    """Replaces the edge at `index` in `source_id`'s list. With the same source it stays at
+    its index (keeping its priority); moved to a different source, it is appended there
+    (checked last), the same as remove_edge followed by add_edge."""
+    if new_source_id != source_id:
+        return add_edge(remove_edge(draft, source_id, index), new_source_id, new_target_id, condition)
+    new_draft = dict(draft)
+    new_edges = dict(draft["edges"])
+    edge_list = [dict(edge) for edge in new_edges[source_id]]
+    edge_list[index] = {"condition": condition, "to": new_target_id}
+    new_edges[source_id] = edge_list
+    new_draft["edges"] = new_edges
+    return new_draft
+
+
+def move_edge(draft: dict, source_id: str, index: int, new_index: int) -> dict:
+    """Moves the edge at `index` in `source_id`'s list to `new_index`, changing its priority
+    (edges are checked in order, first match wins); raises IndexError if either is out of range."""
+    edge_list = [dict(edge) for edge in draft["edges"].get(source_id, [])]
+    if not (0 <= index < len(edge_list) and 0 <= new_index < len(edge_list)):
+        raise IndexError(f"node '{source_id}' has {len(edge_list)} edge(s); can't move edge {index} to {new_index}")
+    edge_list.insert(new_index, edge_list.pop(index))
+    new_draft = dict(draft)
+    new_draft["edges"] = {**draft["edges"], source_id: edge_list}
+    return new_draft
 
 
 def remove_edge(draft: dict, source_id: str, index: int) -> dict:

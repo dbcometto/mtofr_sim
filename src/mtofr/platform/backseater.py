@@ -1,4 +1,5 @@
 """Defines a backseater"""
+import dataclasses
 import hashlib
 
 from mtofr.core.clock import Clock
@@ -87,7 +88,6 @@ class Backseater:
         self.frontseater = frontseater
         self.frontseater.backseater = self  # cascades down, mirrors the platform_id cascade below
         self.knowledge_database = knowledge_database
-        self.mission_graph = mission_graph if mission_graph is not None else self.frontseater.default_mission_graph()
         self.clock = clock or Clock()
         self.debug = debug
         self.privilege_level = privilege_level
@@ -103,17 +103,28 @@ class Backseater:
 
 
         # Identity cascades down to the Frontseater (and from there to its Hardware)
+        # NOTE: before the default mission graph is built, since a default graph may bind
+        # platform-prefixed keys (e.g. BicycleFrontseater's "<platform_id>/pose").
         self.platform_id = platform_id
         if self.platform_id is not None and self.frontseater is not None:
             self.frontseater.platform_id = platform_id
+        self.mission_graph = mission_graph if mission_graph is not None else self.frontseater.default_mission_graph()
 
+
+        # Own entries, gossiped to peers by mesh sync
+        # NOTE: The boot mission is self-written too, so a peer (e.g. an operator interface) can read
+        # what this platform is running before anyone has pushed it a new one; it is the same
+        # object as self.mission_graph, so _detect_mission_change() leaves it alone.
         if self.platform_id is not None:
             self.platform_database.declare(
                 self.platform_id,
-                PlatformRecord(privilege_level=self.privilege_level, status=PlatformStatus(INITIAL_PLATFORM_STATUS)),
+                PlatformRecord(privilege_level=self.privilege_level, status=PlatformStatus(INITIAL_PLATFORM_STATUS),
+                               capabilities=self.frontseater.capabilities()),
                 timestamp=self.clock.now(),
                 origin_platform_id=self.platform_id,
             )
+            self.mission_database.declare(self.platform_id, self.mission_graph,
+                                          timestamp=self.clock.now(), origin_platform_id=self.platform_id)
 
 
         # Mission state
@@ -185,14 +196,18 @@ class Backseater:
 
     def publish(self, database_name: str, key, value, timestamp: float = None) -> None:
         """Writes `value` to `key` in one of this platform's three databases: the path a
-        running capability uses to write data at any time. A "mission" publish always
-        targets this platform's own entry and goes through the gated write_mission() (key
-        is ignored, since Mission has exactly one entry per platform); "knowledge"/"platform"
-        publishes go straight to that database's own type-checked set(), which raises if
-        `key` wasn't already declared or `value` doesn't match its declared type."""
+        running capability (or an operator interface) uses to write data at any time.
+        - "mission": `key` is the target platform_id (None or this platform's own id for a
+          self-write), through the gated write_mission(); a write to another platform's
+          entry lands here and reaches the target by mesh sync.
+        - "platform": self-write-only, and may not change this platform's own privilege level.
+        - "knowledge"/"platform" go straight to that database's own type-checked set(), which
+          raises if `key` wasn't already declared or `value` doesn't match its declared type."""
         if database_name == "mission":
-            self.write_mission(value, writer_platform_id=self.platform_id, timestamp=timestamp)
+            self.write_mission(value, writer_platform_id=self.platform_id, timestamp=timestamp, target_platform_id=key)
             return
+        if database_name == "platform":
+            self._check_own_record_write(key, value)
         database = self._database_for(database_name)
         database.set(key, value, timestamp=timestamp if timestamp is not None else self.clock.now(),
                       origin_platform_id=self.platform_id)
@@ -206,28 +221,58 @@ class Backseater:
                                          timestamp=timestamp if timestamp is not None else self.clock.now(),
                                          origin_platform_id=self.platform_id)
 
-    def write_mission(self, mission_graph: MissionGraph, writer_platform_id: str, timestamp: float = None) -> None:
-        """The single gated write point for this platform's Mission database entry.
-        Skips the privilege check entirely when `writer_platform_id` is this platform's
-        own id (self-writes are always allowed); otherwise requires the writer's
-        privilege level, resolved from this platform's own PlatformDatabase, to be
-        strictly higher-privilege (lower number) than this platform's own. Raises
-        PermissionError if the writer is unprivileged or unknown, ValueError on a type
-        mismatch, and MissionStructuralError if the graph references an undeclared
-        knowledge key or can't be bound on this platform. A successful write just lands;
-        the next update() detects it and changes the mission."""
+    def _check_own_record_write(self, platform_id: str, record) -> None:
+        """Raises PermissionError unless a Platform write targets this platform's own record
+        and leaves its privilege level alone (only a strictly higher-privilege platform may
+        change that; runtime reassignment isn't implemented). Write-side only: mesh sync
+        carries peers' records without this check."""
+        if platform_id != self.platform_id:
+            raise PermissionError(
+                f"Platform '{self.platform_id}' may only write its own PlatformRecord, not '{platform_id}'s"
+            )
+        own_record = self.platform_database.get(self.platform_id)
+        if isinstance(record, PlatformRecord) and record.privilege_level != own_record.privilege_level:
+            raise PermissionError(f"Platform '{self.platform_id}' may not change its own privilege level")
+
+    def _capabilities_of(self, platform_id: str):
+        """The CapabilityRegistry `platform_id` advertises: this platform's own live one, or a
+        peer's as gossiped in its PlatformRecord (None if unknown here)."""
+        if platform_id == self.platform_id:
+            return self.frontseater.capabilities()
+        known_records = self.platform_database.all()
+        return known_records[platform_id].capabilities if platform_id in known_records else None
+
+    def write_mission(self, mission_graph: MissionGraph, writer_platform_id: str, timestamp: float = None,
+                      target_platform_id: str = None) -> None:
+        """The single gated write point for a Mission database entry: `target_platform_id`'s
+        (None = this platform's own). Writing another platform's entry is a mesh write: it
+        lands in this platform's Mission database and reaches the target by sync, whose
+        mission-change detection adopts it, with every check done here, write-side.
+
+        Skips the privilege check when the writer is the target (self-writes are always
+        allowed); otherwise requires the writer's privilege level to be strictly
+        higher-privilege (lower number) than the target's, both resolved from this platform's
+        own PlatformDatabase. Raises PermissionError if the writer is unprivileged or either
+        side is unknown, ValueError on a type mismatch, and MissionStructuralError if the graph
+        references an undeclared knowledge key, or can't be bound on the target (or the
+        target's capabilities aren't known here yet). A successful write just lands; the
+        target's next update() detects it and changes the mission."""
+        target_platform_id = self.platform_id if target_platform_id is None else target_platform_id
+
+
         # Privilege check
-        if writer_platform_id != self.platform_id:
-            writer_record = self.platform_database.get(writer_platform_id) if writer_platform_id in self.platform_database.all() else None
-            if writer_record is None:
-                raise PermissionError(
-                    f"Cannot verify privilege of unknown platform '{writer_platform_id}' — rejecting Mission write"
-                )
-            own_record = self.platform_database.get(self.platform_id)
-            if not writer_record.privilege_level < own_record.privilege_level:
+        if writer_platform_id != target_platform_id:
+            known_records = self.platform_database.all()
+            for platform_id in (writer_platform_id, target_platform_id):
+                if platform_id not in known_records:
+                    raise PermissionError(
+                        f"Cannot verify privilege of unknown platform '{platform_id}' — rejecting Mission write"
+                    )
+            writer_record, target_record = known_records[writer_platform_id], known_records[target_platform_id]
+            if not writer_record.privilege_level < target_record.privilege_level:
                 raise PermissionError(
                     f"Platform '{writer_platform_id}' (privilege {writer_record.privilege_level}) may not write "
-                    f"platform '{self.platform_id}'s Mission entry (privilege {own_record.privilege_level})"
+                    f"platform '{target_platform_id}'s Mission entry (privilege {target_record.privilege_level})"
                 )
 
 
@@ -241,17 +286,24 @@ class Backseater:
 
         # Structural verify and binding check
         verify_mission_structure(mission_graph)
-        binding_problems = find_binding_problems(mission_graph, self.frontseater.capabilities())
+        target_capabilities = self._capabilities_of(target_platform_id)
+        if target_capabilities is None:
+            raise MissionStructuralError(
+                f"Cannot check bindings: platform '{target_platform_id}'s capabilities aren't known here yet"
+            )
+        binding_problems = find_binding_problems(mission_graph, target_capabilities)
         if binding_problems:   # reject now rather than accept it and halt the running mission at bind time
-            raise MissionStructuralError("Mission graph cannot be bound on this platform: " + "; ".join(binding_problems))
+            raise MissionStructuralError(
+                f"Mission graph cannot be bound on platform '{target_platform_id}': " + "; ".join(binding_problems)
+            )
 
 
         # Write
         write_timestamp = timestamp if timestamp is not None else self.clock.now()
-        if self.platform_id in self.mission_database.all():
-            self.mission_database.set(self.platform_id, mission_graph, timestamp=write_timestamp, origin_platform_id=writer_platform_id)
+        if target_platform_id in self.mission_database.all():
+            self.mission_database.set(target_platform_id, mission_graph, timestamp=write_timestamp, origin_platform_id=writer_platform_id)
         else:
-            self.mission_database.declare(self.platform_id, mission_graph, timestamp=write_timestamp, origin_platform_id=writer_platform_id)
+            self.mission_database.declare(target_platform_id, mission_graph, timestamp=write_timestamp, origin_platform_id=writer_platform_id)
 
 
 
@@ -319,6 +371,11 @@ class Backseater:
         if self.debug:
             print(f"[Backseater] Synced with '{peer.platform_id}'")
 
+    def last_sync_times(self) -> dict:
+        """peer platform_id -> local clock time (s) this platform last synced with it (a copy):
+        how fresh each peer's gossiped entries here can be, for an operator display."""
+        return dict(self._last_sync_time)
+
     def sync_with_stale_peers(self, peers: list["Backseater"]) -> None:
         """Calls sync_with() against every peer in `peers` whose last sync (if any) is
         older than this platform's sync_interval: the staleness gate World drives each
@@ -339,7 +396,8 @@ class Backseater:
         """Declares/resets every knowledge key listed in `mission_graph`'s "knowledge"
         section to its declared type/default; shared by construction and mission-change handling."""
         for key, declaration in mission_graph.get("knowledge", {}).items():
-            self.knowledge_database.declare(key, declaration["type"], declaration["value"], timestamp=self.clock.now())
+            self.knowledge_database.declare(key, declaration["type"], declaration["value"], timestamp=self.clock.now(),
+                                            origin_platform_id=self.platform_id)
 
     def _parse_edge_conditions(self, mission_graph: MissionGraph) -> dict:
         """Parses every edge condition in `mission_graph` once, keyed by source node id;
@@ -358,9 +416,8 @@ class Backseater:
         object than the mission graph currently driving update(), and if so swaps to it.
         Done here rather than synchronously inside write_mission() so a mesh sync that
         writes mission_database directly triggers the mission change the same way a
-        local write_mission() call does. No-ops until this platform's first Mission write
-        lands, leaving the constructor's initial mission graph (which never touches
-        mission_database) untouched.
+        local write_mission() call does. No-ops while the entry is still the boot mission
+        the constructor self-wrote (the same object), or for a platform with no id.
         """
         if self.platform_id is None or self.platform_id not in self.mission_database.all():
             return
@@ -387,11 +444,33 @@ class Backseater:
     #===============# Tick #===============#
 
     def update(self) -> None:
-        """Advances this platform's mission by one tick: detects a mission change, checks
-        the active node's capability requests are all fulfillable and correctly bound, hands
-        them to the Frontseater only if they differ from what it was last given, then evaluates
-        edges. There is no polling here: once handed off, running the capability requests is
-        entirely the Frontseater's own affair."""
+        """Advances this platform's mission by one tick, then re-publishes its own
+        PlatformRecord if its live status changed, so peers observe it via mesh sync."""
+        self._advance_mission()
+        self._refresh_own_record()
+
+    def _refresh_own_record(self) -> None:
+        """Self-writes this platform's PlatformRecord with a status built from status(), only
+        when that status changed (so an idle platform doesn't churn the sync checksum)."""
+        if self.platform_id is None:
+            return
+        status = self.status()
+        own_record = self.platform_database.get(self.platform_id)
+        new_status = PlatformStatus(
+            status=status["overall_status"],
+            message=own_record.status.message,
+            active_node_id=status["active_node_id"],
+            blocked=status["blocked"],
+            capability_statuses=status["capabilities"],
+        )
+        if new_status != own_record.status:
+            self.publish("platform", self.platform_id, dataclasses.replace(own_record, status=new_status))
+
+    def _advance_mission(self) -> None:
+        """Detects a mission change, checks the active node's capability requests are all
+        fulfillable and correctly bound, hands them to the Frontseater only if they differ
+        from what it was last given, then evaluates edges. There is no polling here: once
+        handed off, running the capability requests is entirely the Frontseater's own affair."""
         self._detect_mission_change()
         if self._blocked or self.active_node_id is None:
             return

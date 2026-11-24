@@ -25,9 +25,9 @@ from mtofr.mission.serialization import (
     is_compound_knowledge_type, constructor_fields, save_mission_graph, load_mission_graph,
 )
 from mtofr.mission.validation import find_binding_problems, verify_mission_structure, MissionStructuralError
-from mtofr.viz.dashboard import GRAPH_PLOT_BACKGROUND   # the draft preview matches the dashboard's live graph panel
-from mtofr.viz.mission_graph_view import MissionGraphViewer
+from mtofr.viz.mission_graph_view import GRAPH_PLOT_BACKGROUND, MissionGraphViewer
 from mtofr.environments.anywhere.platforms.interface.mission_editor import graph_draft
+from mtofr.environments.anywhere.platforms.interface.mission_editor.draft_history import DraftHistory
 
 
 #========================================#
@@ -41,11 +41,6 @@ LIVE_PREVIEW_REFRESH_MS = 500
 # How often the Live Control tab's Knowledge table re-renders from the target
 # platform's actual current values.
 LIVE_KNOWLEDGE_REFRESH_MS = 1000
-
-# Caps memory use for the undo history; unlikely to matter for a hand-edited
-# mission graph, but an unbounded stack is needless for a session that could
-# run for a long time.
-UNDO_HISTORY_LIMIT = 50
 
 AT_BOTTOM_FRACTION = 0.999   # text scroll position counted as "at the bottom", so output keeps following
 DEFAULT_KNOWLEDGE_TYPE_NAME = "float"
@@ -117,15 +112,11 @@ class MissionEditorWindow(tk.Toplevel):
 
         self.world = world
         self.own_platform_id = own_platform_id
-        self.draft = graph_draft.blank_graph()
+        self.history = DraftHistory(graph_draft.blank_graph())
         self.draft_source_platform_id = None   # platform_id the draft was loaded from, or None (new/from-file)
         self.selected_node_id = None
         self.selected_request_name = None
         self.selected_live_knowledge_key = None
-        self.undo_stack = []   # past drafts, most recent last
-        self.redo_stack = []   # drafts undone away from, most recent last
-        self._undo_group_open = False       # True while the assistant is mid-turn: all its edits share one undo entry
-        self._undo_group_recorded = False   # whether the open group has already pushed its entry
         self.assistant_window = None
         self.mission_graph_viewer = MissionGraphViewer()
         self._live_preview_refresh_job = None      # self.after() id, cancelled explicitly in close()
@@ -348,19 +339,17 @@ class MissionEditorWindow(tk.Toplevel):
 
     #===============# Draft Mutation Actions #===============#
 
+    @property
+    def draft(self) -> dict:
+        """The current draft, owned by self.history."""
+        return self.history.draft
+
     def _set_draft(self, new_draft: dict) -> None:
         """The single choke point every draft mutation (including Load Live/New
-        Blank/Load File, treated as ordinary undoable actions) goes through.
-        Every mutation helper in graph_draft.py returns a brand-new top-level
-        dict rather than mutating in place, so recording the *old* self.draft
-        object here -- no copying needed -- is enough for a full undo history;
-        a fresh action always invalidates whatever was available to redo."""
-        if not (self._undo_group_open and self._undo_group_recorded):
-            self.undo_stack.append(self.draft)
-            del self.undo_stack[:-UNDO_HISTORY_LIMIT]
-        self._undo_group_recorded = self._undo_group_open
-        self.redo_stack.clear()
-        self._apply_draft(new_draft)
+        Blank/Load File, treated as ordinary undoable actions) goes through: records
+        it in the shared DraftHistory, then refreshes every view."""
+        self.history.set(new_draft)
+        self._refresh_all()
         self._update_undo_redo_buttons()
 
     def apply_draft_edit(self, new_draft: dict) -> None:
@@ -369,13 +358,11 @@ class MissionEditorWindow(tk.Toplevel):
 
     def begin_undo_group(self) -> None:
         """Until end_undo_group(), every draft mutation shares one undo entry (one Ctrl+Z for the whole group)."""
-        self._undo_group_open = True
-        self._undo_group_recorded = False
+        self.history.begin_group()
 
     def end_undo_group(self) -> None:
         """Closes the undo group begin_undo_group() opened."""
-        self._undo_group_open = False
-        self._undo_group_recorded = False
+        self.history.end_group()
 
     def _on_open_assistant(self) -> None:
         """Opens the LLM assistant window, or raises it if already open."""
@@ -386,35 +373,28 @@ class MissionEditorWindow(tk.Toplevel):
         from mtofr.environments.anywhere.platforms.interface.mission_editor.assistant_window import AssistantWindow
         self.assistant_window = AssistantWindow(self)
 
-    def _apply_draft(self, new_draft: dict) -> None:
-        """Swaps in `new_draft` and refreshes every view, without touching the undo history."""
-        self.draft = new_draft
-        self._refresh_all()
-
     def _on_undo(self) -> None:
         """Restores the previous draft, if any."""
-        if not self.undo_stack:
+        if not self.history.undo():
             self._log("Nothing to undo.")
             return
-        self.redo_stack.append(self.draft)
-        self._apply_draft(self.undo_stack.pop())
+        self._refresh_all()
         self._update_undo_redo_buttons()
         self._log("Undid last change.")
 
     def _on_redo(self) -> None:
         """Re-applies the last undone draft, if any."""
-        if not self.redo_stack:
+        if not self.history.redo():
             self._log("Nothing to redo.")
             return
-        self.undo_stack.append(self.draft)
-        self._apply_draft(self.redo_stack.pop())
+        self._refresh_all()
         self._update_undo_redo_buttons()
         self._log("Redid change.")
 
     def _update_undo_redo_buttons(self) -> None:
         """Enables Undo/Redo only when there's something to undo/redo."""
-        self.undo_button.config(state="normal" if self.undo_stack else "disabled")
-        self.redo_button.config(state="normal" if self.redo_stack else "disabled")
+        self.undo_button.config(state="normal" if self.history.can_undo else "disabled")
+        self.redo_button.config(state="normal" if self.history.can_redo else "disabled")
 
     def _log(self, message: str) -> None:
         """Appends a line to the Console, following the output only if the user hasn't scrolled up."""

@@ -68,7 +68,7 @@ class TestAssistantWindow(unittest.TestCase):
         """All of a turn's tool edits form a single undo step that restores the pre-turn draft."""
         before = self.editor.draft
         self._send("add two nodes")
-        self.assertEqual(len(self.editor.undo_stack), 1)
+        self.assertEqual(len(self.editor.history.undo_stack), 1)
         self.editor._on_undo()
         self.assertIs(self.editor.draft, before)
 
@@ -76,7 +76,7 @@ class TestAssistantWindow(unittest.TestCase):
         """A manual edit after a turn gets its own undo step rather than joining the turn's."""
         self._send("add two nodes")
         self.editor.apply_draft_edit(dict(self.editor.draft))
-        self.assertEqual(len(self.editor.undo_stack), 2)
+        self.assertEqual(len(self.editor.history.undo_stack), 2)
 
     def test_tool_steps_are_mirrored_to_console_and_transcript(self):
         """Each tool call appears in both the editor console and the chat transcript, alongside the request and reply."""
@@ -104,7 +104,7 @@ class TestAssistantWindow(unittest.TestCase):
         self.assertIn("Could not reach Ollama", self.editor.console_text.get("1.0", tk.END))
         self.assertEqual(str(self.assistant.send_button.cget("state")), "normal")
         # the failed turn's undo group is closed, so later manual edits record normally
-        self.assertFalse(self.editor._undo_group_open)
+        self.assertFalse(self.editor.history._group_open)
 
     def test_new_chat_clears_history_and_transcript(self):
         """New chat resets the session to just its system message and empties the transcript."""

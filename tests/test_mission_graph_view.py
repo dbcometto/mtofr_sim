@@ -109,9 +109,38 @@ class TestComputeGraphLayout(unittest.TestCase):
             "start": "n1",
         }
         compute_graph_layout(graph)
-        cached_graph, cached_result = _layout_cache[id(graph)]
+        cached_graph, cached_result = _layout_cache[(id(graph), ())]
         self.assertIs(cached_graph, graph)
         self.assertEqual(cached_result, compute_graph_layout(graph))
+
+    def test_pinned_positions_are_used_exactly(self):
+        """With every node pinned, those positions come back unchanged."""
+        pins = {node_id: (float(index), 2.0) for index, node_id in enumerate(CYCLE_GRAPH["nodes"])}
+        self.assertEqual(compute_graph_layout(CYCLE_GRAPH, pinned_positions=pins), pins)
+
+    def test_pinned_nodes_stay_put_while_the_rest_are_laid_out(self):
+        """A partly pinned graph keeps the pinned node exactly where it is and still places every other node."""
+        first_node_id = next(iter(CYCLE_GRAPH["nodes"]))
+        layout = compute_graph_layout(CYCLE_GRAPH, pinned_positions={first_node_id: (5.0, -3.0), "ghost": (9.0, 9.0)})
+        self.assertEqual(layout[first_node_id], (5.0, -3.0))
+        self.assertEqual(set(layout), set(CYCLE_GRAPH["nodes"]))   # a pin for a missing node is ignored
+
+    def test_different_pins_on_one_graph_are_cached_apart(self):
+        """The same graph laid out with different pins gives each pin set its own result."""
+        first_node_id = next(iter(CYCLE_GRAPH["nodes"]))
+        here = compute_graph_layout(CYCLE_GRAPH, pinned_positions={first_node_id: (1.0, 1.0)})
+        there = compute_graph_layout(CYCLE_GRAPH, pinned_positions={first_node_id: (7.0, 7.0)})
+        self.assertNotEqual(here[first_node_id], there[first_node_id])
+
+    def test_the_cache_is_bounded(self):
+        """Laying out more graphs than LAYOUT_CACHE_LIMIT never grows the cache past it."""
+        from mtofr.viz.mission_graph_view import LAYOUT_CACHE_LIMIT, _layout_cache
+        graphs = [{"nodes": {"n1": {"capabilities": {}}, "n2": {"capabilities": {}}}, "edges": {}, "start": "n1"}
+                  for _ in range(LAYOUT_CACHE_LIMIT + 5)]
+        for graph in graphs:
+            compute_graph_layout(graph)
+        self.assertLessEqual(len(_layout_cache), LAYOUT_CACHE_LIMIT)
+        self.assertIn((id(graphs[-1]), ()), _layout_cache)
 
 
 class TestMissionGraphViewerRender(unittest.TestCase):

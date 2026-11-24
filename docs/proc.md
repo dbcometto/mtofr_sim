@@ -20,3 +20,4 @@ This document defines the operating process.
 - Be prepared to defend why the implementation is done the way it is -- keep it simple, easy to understand, but effective
 - Prioritize short summaries in `notes.md`, and keep `spec.md` as concise as possible
 - The mission-editor assistant's system prompt (`assistant_prompt.py`) is hand-edited by the user: don't rewrite it unasked, and don't write tests that assert its wording
+- Limit full test suite runs, as they take significant time

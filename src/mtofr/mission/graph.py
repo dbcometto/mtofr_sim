@@ -8,7 +8,8 @@ TypedDicts below only document and type-hint that shape, they never wrap it.
                                                  "inputs": {field_name: key, ...},
                                                  "outputs": {field_name: key, ...}}}}},
      "edges": {node_id: [{"condition": [token, ...], "to": next_node_id}, ...]},
-     "start": node_id}
+     "start": node_id,
+     "name": mission_name}   # optional
 
 - "knowledge": every Knowledge key the graph touches, with its locked type and the
   default value it is reset to whenever this graph becomes a platform's mission.
@@ -20,6 +21,9 @@ TypedDicts below only document and type-hint that shape, they never wrap it.
   taken.  Capability request status never drives a transition; capabilities write
   Knowledge.
 - "start": the node activated when the graph becomes a platform's mission.
+- "name" (optional): a human-readable label for the mission.  The Backseater and validation
+  ignore it; the web editor keys its own editor-only data (node layout, key flags) by it.
+  Editor-only data never lives in the mission graph itself.
 
 Every key referenced by a condition or a binding must be declared in "knowledge"
 (validation.verify_mission_structure), and every capability request must be bindable by the
@@ -56,9 +60,15 @@ class Edge(TypedDict):
     to: str
 
 
-class MissionGraph(TypedDict):
-    """A whole mission; see this module's docstring for the semantics."""
+class _RequiredMissionGraph(TypedDict):
+    """The keys every mission graph has."""
     knowledge: dict[str, KnowledgeDeclaration]
     nodes: dict[str, Node]
     edges: dict[str, list[Edge]]
     start: str | None
+
+
+# NOTE: a total=False subclass rather than NotRequired, which needs Python 3.11.
+class MissionGraph(_RequiredMissionGraph, total=False):
+    """A whole mission; see this module's docstring for the semantics."""
+    name: str

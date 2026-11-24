@@ -160,7 +160,7 @@ class TestTimestampAndOriginTracking(unittest.TestCase):
 
 class TestBackseaterOwnsTheThreeDatabases(unittest.TestCase):
     def test_backseater_holds_mission_and_platform_databases(self):
-        """A new Backseater owns a MissionDatabase (empty) and a PlatformDatabase."""
+        """A new Backseater owns a MissionDatabase (holding its own boot mission) and a PlatformDatabase."""
         hardware = BicycleHardware()
         frontseater = BicycleFrontseater(hardware=hardware)
         self.addCleanup(frontseater.shutdown)
@@ -168,7 +168,18 @@ class TestBackseaterOwnsTheThreeDatabases(unittest.TestCase):
 
         self.assertIsInstance(backseater.mission_database, MissionDatabase)
         self.assertIsInstance(backseater.platform_database, PlatformDatabase)
-        self.assertEqual(backseater.mission_database.all(), {})
+        self.assertEqual(list(backseater.mission_database.all()), ["ugv1"])
+        self.assertIs(backseater.mission_database.get("ugv1"), backseater.mission_graph)
+        self.assertEqual(backseater.mission_database.origin_of("ugv1"), "ugv1")
+
+    def test_backseater_seeds_its_own_record_with_its_capabilities(self):
+        """A Backseater's own PlatformRecord advertises its Frontseater's CapabilityRegistry."""
+        hardware = BicycleHardware()
+        frontseater = BicycleFrontseater(hardware=hardware)
+        self.addCleanup(frontseater.shutdown)
+        backseater = Backseater(frontseater=frontseater, knowledge_database=KnowledgeDatabase(), platform_id="ugv1")
+
+        self.assertIs(backseater.platform_database.get("ugv1").capabilities, frontseater.capabilities())
 
     def test_backseater_self_declares_its_own_platform_record_at_construction(self):
         """A Backseater seeds its own PlatformRecord with its privilege level and an idle status."""

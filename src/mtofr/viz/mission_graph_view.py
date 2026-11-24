@@ -30,6 +30,7 @@ EDGE_HOVER_TOLERANCE_POINTS = 12.0
 
 
 # Style
+GRAPH_PLOT_BACKGROUND = "#808080"   # mid-gray, shared by every view that draws a mission graph
 ACTIVE_NODE_COLOR = "tab:orange"
 NODE_COLOR = "tab:blue"
 NODE_TEXT_COLOR = "white"
@@ -43,11 +44,14 @@ NODE_ZORDER = 3
 NODE_TEXT_ZORDER = 4
 
 
-# id(mission_graph) -> (mission_graph, {node_id: (x, y)}); see compute_graph_layout.
+# id(mission_graph) -> (mission_graph, {node_id: (x, y)}), oldest first; see compute_graph_layout.
+# (id(mission_graph), pinned positions as a sorted tuple) -> (mission_graph, {node_id: (x, y)}),
+# oldest first; see compute_graph_layout.
 # NOTE: the mission_graph itself is kept alongside the result (not just its id) so the
 # object can never be garbage-collected and have its id reused by an unrelated
 # dict while still "cached", which would silently return a stale, wrong layout.
 _layout_cache: dict = {}
+LAYOUT_CACHE_LIMIT = 64   # layouts kept; every editor edit (or node drag) makes a new graph or pin set
 
 
 
@@ -59,7 +63,8 @@ _layout_cache: dict = {}
 # Layout
 #========================================#
 
-def compute_graph_layout(mission_graph: dict, iterations: int = LAYOUT_ITERATIONS) -> dict:
+def compute_graph_layout(mission_graph: dict, pinned_positions: dict | None = None,
+                         iterations: int = LAYOUT_ITERATIONS) -> dict:
     """Returns node_id -> (x, y) via a force-directed (Fruchterman-Reingold-style)
     layout: every node pair repels, every edge attracts its two endpoints, run for
     a fixed number of iterations with linearly-cooling step size. Unlike a columnar
@@ -70,32 +75,50 @@ def compute_graph_layout(mission_graph: dict, iterations: int = LAYOUT_ITERATION
     circle (in mission-graph insertion order) rather than at random positions, so
     the same graph always lays out the same way.
 
-    Result is cached by the mission_graph object's identity: a mission graph is never
-    mutated in place (the editor's draft helpers return new dicts), so re-running an
+    A node in `pinned_positions` (node_id -> (x, y): where an editor placed it) stays there:
+    the simulation moves only the others, and none runs when every node is placed. Pins for
+    nodes the graph doesn't have are ignored.
+
+    Result is cached by the mission_graph object's identity (plus the pins): a mission graph
+    is never mutated in place (the editor's draft helpers return new dicts), so re-running an
     O(n^2) force simulation on every render() call, several times a second, would
-    recompute an answer that never changes."""
-    cached_entry = _layout_cache.get(id(mission_graph))
+    recompute an answer that never changes. The cache keeps the LAYOUT_CACHE_LIMIT most
+    recently computed layouts."""
+    node_ids = list(mission_graph.get("nodes", {}))
+    pins = pinned_positions or {}
+    pinned = {node_id: (float(pins[node_id][0]), float(pins[node_id][1])) for node_id in node_ids if node_id in pins}
+    cache_key = (id(mission_graph), tuple(sorted(pinned.items())))
+    cached_entry = _layout_cache.get(cache_key)
     if cached_entry is not None:
         return cached_entry[1]
 
-    node_ids = list(mission_graph.get("nodes", {}))
-    if not node_ids:
-        return {}
-    if len(node_ids) == 1:
-        return {node_ids[0]: (0.0, 0.0)}
+    if len(pinned) == len(node_ids):
+        result = pinned
+    elif len(node_ids) == 1:
+        result = {node_ids[0]: (0.0, 0.0)}
+    else:
+        edge_pairs = [
+            (source, edge["to"])
+            for source, edge_list in mission_graph.get("edges", {}).items() if source in node_ids
+            for edge in edge_list if edge["to"] in node_ids
+        ]
+        result = _simulate_layout(node_ids, edge_pairs, pinned, iterations)
 
-    edges = mission_graph.get("edges", {})
-    edge_pairs = [
-        (source, edge["to"])
-        for source, edge_list in edges.items() if source in node_ids
-        for edge in edge_list if edge["to"] in node_ids
-    ]
+    _layout_cache[cache_key] = (mission_graph, result)
+    while len(_layout_cache) > LAYOUT_CACHE_LIMIT:
+        del _layout_cache[next(iter(_layout_cache))]   # oldest entry
+    return result
 
 
-    # Start evenly spaced on a unit circle
+def _simulate_layout(node_ids: list, edge_pairs: list, pinned_positions: dict, iterations: int) -> dict:
+    """The force simulation behind compute_graph_layout(), never moving a pinned node."""
+    # Unplaced nodes start evenly spaced on a unit circle around the placed ones' centroid
+    center = np.mean([np.array(position) for position in pinned_positions.values()], axis=0) \
+        if pinned_positions else np.zeros(2)
     angle_step = 2 * np.pi / len(node_ids)
     positions = {
-        node_id: np.array([np.cos(index * angle_step), np.sin(index * angle_step)])
+        node_id: (np.array(pinned_positions[node_id]) if node_id in pinned_positions
+                  else center + np.array([np.cos(index * angle_step), np.sin(index * angle_step)]))
         for index, node_id in enumerate(node_ids)
     }
 
@@ -123,14 +146,13 @@ def compute_graph_layout(mission_graph: dict, iterations: int = LAYOUT_ITERATION
             displacement[target] += attraction
 
         for node_id in node_ids:
-            magnitude = max(float(np.linalg.norm(displacement[node_id])), LAYOUT_MIN_DISTANCE)
-            step = displacement[node_id] / magnitude * min(magnitude, temperature)
-            positions[node_id] = positions[node_id] + step
+            if node_id not in pinned_positions:
+                magnitude = max(float(np.linalg.norm(displacement[node_id])), LAYOUT_MIN_DISTANCE)
+                step = displacement[node_id] / magnitude * min(magnitude, temperature)
+                positions[node_id] = positions[node_id] + step
 
 
-    result = {node_id: (float(position[0]), float(position[1])) for node_id, position in positions.items()}
-    _layout_cache[id(mission_graph)] = (mission_graph, result)
-    return result
+    return {node_id: (float(position[0]), float(position[1])) for node_id, position in positions.items()}
 
 
 def _curvature_for_group_index(index: int) -> float:

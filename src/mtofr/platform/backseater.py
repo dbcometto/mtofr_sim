@@ -3,7 +3,7 @@ import dataclasses
 import hashlib
 
 from mtofr.core.clock import Clock
-from mtofr.database import MissionDatabase, PlatformDatabase, PlatformRecord, PlatformStatus
+from mtofr.database import MissionDatabase, PlatformDatabase, PlatformRecord, PlatformStatus, split_key
 from mtofr.mission import (
     MissionGraph,
     MissionStructuralError,
@@ -22,6 +22,9 @@ DATABASE_NAMES = ("knowledge", "mission", "platform")   # every database a Backs
 DEFAULT_PRIVILEGE_LEVEL = 1   # 0 is the highest privilege, reserved
 DEFAULT_SYNC_INTERVAL = 1.0   # s between syncs with the same peer
 INITIAL_PLATFORM_STATUS = "idle"
+# s, local frame: older than any real write, so a placeholder declared for a peer's key
+# loses every last-write-wins sync to that peer's real value and never spreads.
+PEER_PLACEHOLDER_TIMESTAMP = 0.0
 
 
 
@@ -193,6 +196,15 @@ class Backseater:
         \"platform\"): the path a running capability uses to read live data at any time,
         rather than only receiving resolved values once at start."""
         return self._database_for(database_name).get(key)
+
+    def knowledge_timestamp(self, key: str) -> float:
+        """When (s, local clock) the value of Knowledge `key` was written, wherever it was
+        written: synced timestamps are converted, not re-stamped."""
+        return self.knowledge_database.timestamp_of(key)
+
+    def knowledge_age(self, key: str) -> float:
+        """Seconds since the value of Knowledge `key` was written, sync latency included."""
+        return self.clock.now() - self.knowledge_timestamp(key)
 
     def publish(self, database_name: str, key, value, timestamp: float = None) -> None:
         """Writes `value` to `key` in one of this platform's three databases: the path a
@@ -393,10 +405,21 @@ class Backseater:
     #===============# Mission Change #===============#
 
     def _declare_knowledge_keys(self, mission_graph: MissionGraph) -> None:
-        """Declares/resets every knowledge key listed in `mission_graph`'s "knowledge"
-        section to its declared type/default; shared by construction and mission-change handling."""
+        """Declares/resets every knowledge key listed in `mission_graph`'s "knowledge" section to
+        its declared type/default, except a key in another known platform's namespace (e.g.
+        "ugv1/pose" in ugv2's mission): that is the peer's own fact, so a live value is kept, and a
+        missing one gets the default as a placeholder that the peer's real value outranks in sync.
+        Shared by construction (no peers known yet) and mission-change handling."""
+        peer_ids = set(self.platform_database.all()) - {self.platform_id}
         for key, declaration in mission_graph.get("knowledge", {}).items():
-            self.knowledge_database.declare(key, declaration["type"], declaration["value"], timestamp=self.clock.now(),
+            namespace, _ = split_key(key)
+            timestamp = self.clock.now()
+            if namespace in peer_ids:
+                # NOTE: a live value of the wrong type is kept too; the bind check then blocks the mission.
+                if self.knowledge_database.type_of(key) is not None:
+                    continue
+                timestamp = PEER_PLACEHOLDER_TIMESTAMP
+            self.knowledge_database.declare(key, declaration["type"], declaration["value"], timestamp=timestamp,
                                             origin_platform_id=self.platform_id)
 
     def _parse_edge_conditions(self, mission_graph: MissionGraph) -> dict:

@@ -100,10 +100,24 @@ class Capability:
     def read(self, field: str):
         """The current value of the Knowledge key bound to input `field`, queried live.
         Raises KeyError for a field this capability doesn't declare as an input."""
+        return self.frontseater.backseater.query("knowledge", self._input_key(field))
+
+    def written_at(self, field: str) -> float:
+        """When (s, the Backseater's local clock) the value of input `field`'s bound key was
+        written, wherever it was written.  Raises KeyError like read()."""
+        return self.frontseater.backseater.knowledge_timestamp(self._input_key(field))
+
+    def age(self, field: str) -> float:
+        """Seconds since the value of input `field`'s bound key was written, wherever it was
+        written (sync latency included).  Raises KeyError like read()."""
+        return self.frontseater.backseater.knowledge_age(self._input_key(field))
+
+    def _input_key(self, field: str) -> str:
+        """The Knowledge key bound to input `field`; raises KeyError for a field this
+        capability doesn't declare as an input."""
         if field not in {spec.name for spec in self.inputs}:
             raise KeyError(f"'{field}' is not an input of {self.ipl_type}")
-        key = self.request.get("inputs", {})[field]   # bound by the Backseater's bind check
-        return self.frontseater.backseater.query("knowledge", key)
+        return self.request.get("inputs", {})[field]   # bound by the Backseater's bind check
 
     def write(self, field: str, value) -> None:
         """Publishes `value` to the Knowledge key bound to output `field`; a no-op when the

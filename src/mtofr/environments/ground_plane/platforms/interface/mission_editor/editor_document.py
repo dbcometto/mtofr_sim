@@ -4,6 +4,7 @@ so it is testable without a browser and reusable by another editor."""
 from collections import Counter
 from dataclasses import dataclass, field, replace
 
+from mtofr.database import join_key, split_key   # NOTE: defined in the database layer, which the Backseater also uses
 from mtofr.environments.ground_plane.platforms.interface.mission_editor import graph_draft
 
 
@@ -11,30 +12,9 @@ from mtofr.environments.ground_plane.platforms.interface.mission_editor import g
 # Config
 #========================================#
 
-NAMESPACE_SEPARATOR = "/"
 RENAME_NODE_TOOL = "rename_node"
 RENAME_KEY_TOOL = "rename_knowledge_key"
 EDIT_KEY_TOOL = "edit_knowledge_key"
-
-
-
-
-
-
-
-#========================================#
-# Keys and Namespaces
-#========================================#
-
-def split_key(key: str) -> tuple[str, str]:
-    """A knowledge key as (namespace, name), split at its last "/" ("" namespace if it has none)."""
-    namespace, _, name = key.rpartition(NAMESPACE_SEPARATOR)
-    return namespace, name
-
-
-def join_key(namespace: str, name: str) -> str:
-    """namespace + "/" + name, or just name for an empty namespace."""
-    return f"{namespace}{NAMESPACE_SEPARATOR}{name}" if namespace else name
 
 
 

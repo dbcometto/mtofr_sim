@@ -49,12 +49,14 @@ class MoveTo(Capability):
 - [ ] **Do the I/O through two methods:**
   - `self.read("field")` queries the bound key live, every call, so a retargeted key is seen next tick;
   - `self.write("field", value)` publishes if the request bound that output, and does nothing otherwise.
-  - Both raise `KeyError` for a field the capability doesn't declare.
+  - `self.written_at("field")`/`self.age("field")` give when the bound input was written and how long ago (sync latency included), e.g. to dead-reckon a peer's pose (cf. `Follow`).
+  - All of them raise `KeyError` for a field the capability doesn't declare.
   - `self.hardware` and `self.frontseater` are available, plus `self.frontseater.backseater` for anything beyond the bindings.
 - [ ] **Actuate it** (only if it moves the platform) by setting a Frontseater attribute that `compute_controls()`/`begin_controls()` reads (e.g. `navigation_target`).
   - **Friction (remaining, 5):** that attribute is ad hoc per platform, and nothing arbitrates between concurrent requests (with two `move_to`, the last ticked wins).
 - [ ] **List it** in the Frontseater's `CAPABILITIES` tuple.  The Backseater's bind check, gossip, the web editor, and the LLM assistant all read the registry built from it.
 - [ ] **Use it:** declare the bound keys in a mission graph's `"knowledge"` and add the request to a node, in a scenario file or the web editor.
+  - Namespace keys by owner: `<platform_id>/...` for a platform's own facts, which reset to their declared defaults when it adopts a mission.  A key in another platform's namespace (e.g. a leader's `ugv1/pose` read by `follow`) keeps its live value, so its declared value is only a placeholder.
 - [ ] **Test it** through the Frontseater's `set_active_capabilities()` and `tick_capabilities()`, with a fake backseater (see `tests/test_bicycle_frontseater.py`).  Register `addCleanup(frontseater.shutdown)` for a Frontseater with a worker process.  Update `docs/spec.md`.
 
 
@@ -85,7 +87,7 @@ The new platform goes in a folder, `environments/<environment>/platforms/<type>/
   - override `compute_controls(state) -> dict`, which runs synchronously each tick after the capabilities;
   - for expensive work, override `begin_controls()` (dispatch, e.g. to a worker process) and `finish_controls()` (collect and `send_controls`), so platforms overlap.  A worker process brings the `__main__` guard in `main.py` and the explicit test-cleanup rule (`docs/style.md`).
 - [ ] **Optional overrides:**
-  - `default_mission_graph()`: the safe idle the platform boots into (the base gives an inert `"startup"` node).  Prefix its keys with `self.platform_id` (see Known Issues in the roadmap).
+  - `default_mission_graph()`: the safe idle the platform boots into (the base gives an inert `"startup"` node).  Prefix its keys with `self.platform_id`, so peers see them as this platform's own facts (see Known Issues in the roadmap).
   - `attach(world, window_root)`: setup that needs `World` or the Tk root.
   - `shutdown()`: release your own resources, after calling `super().shutdown()`, which stops every running capability.
 

@@ -2,6 +2,18 @@
 
 Paths are as they were when each note was written; notes 33, 36, 37, 40, and 48 record the moves.
 
+## 49 - 2026-11-24: follow capability; adoption keeps peers' facts by namespace
+- `follow` (`bicycle_ugv/capabilities.py`) follows Cometto et al.'s convoy method on a `Pose` key: the offhooked point (sec. IV-H), the pose-tracking MPC cost with the paper's weights (sec. IV-I), and idling while the point is behind.  There is no EKF, because the pose is known.
+- User's decisions:
+  - freshness by dead-reckoning in the capability, not a faster sync.  It uses the constant speed and yaw rate estimated from successive samples' write times, and stops past `STALE_POSE_TIMEOUT`;
+  - the paper's MPC cost over reusing `move_to`'s, whose bearing term is ill-defined on top of the point;
+  - no convoy scenario.
+- A "keep live" flag on declarations was declined (it waters down the mission spec).  Instead, a key in another known platform's namespace is that platform's fact: adoption keeps a live value, and a missing one gets a placeholder stamped 0.0 that loses every sync.  The own namespace and all others reset.
+- `split_key`/`join_key` moved to `database/knowledge.py`, so the Backseater and editor share them.  `Capability.written_at()`/`age()` sit over `Backseater.knowledge_timestamp()`/`knowledge_age()`.
+- `navigation_target` may be a `Pose`, which selects `solve_mpc(..., target_heading)`'s tracking cost.
+- Headless smoke test (3-vehicle convoy, 1 s sync): the default is never seen; the lag is in roadmap "Convoy Open Items".
+- New `docs/design.md`: the architecture's design philosophy, written as math.
+
 ## 48 - 2026-11-24: World Viewer, Trajectory, follow_trajectory; interface moves to ground_plane
 - User's decisions: the map reaches the UI through a hardware sensor, not `World` or panel config, so the interface became a ground_plane platform.  `environments/anywhere/` was removed once that worked ("anywhere" abstracted visualization with no use case).
 - The drawer's output is copyable text.  `Trajectory` is a JSON list of `[x, y]`, and `follow_trajectory` takes a `loop` input flag.

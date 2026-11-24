@@ -4,6 +4,43 @@ Concrete entry types (e.g. Location) live in the knowledge_types package, one fi
 import time
 
 
+#========================================#
+# Config
+#========================================#
+
+NAMESPACE_SEPARATOR = "/"
+
+
+
+
+
+
+
+#========================================#
+# Keys and Namespaces
+#========================================#
+
+def split_key(key: str) -> tuple[str, str]:
+    """A knowledge key as (namespace, name), split at its last "/" ("" namespace if it has none).
+    A namespace that is a platform_id marks the key as that platform's own fact (e.g. "ugv1/pose")."""
+    namespace, _, name = key.rpartition(NAMESPACE_SEPARATOR)
+    return namespace, name
+
+
+def join_key(namespace: str, name: str) -> str:
+    """namespace + "/" + name, or just name for an empty namespace."""
+    return f"{namespace}{NAMESPACE_SEPARATOR}{name}" if namespace else name
+
+
+
+
+
+
+
+#========================================#
+# Knowledge Database
+#========================================#
+
 class KnowledgeDatabase:
     """Typed, type-locked store of known entities and values (locations, sensed flags,
     task outputs, etc). Every key must be declared with its type and a default value

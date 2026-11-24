@@ -4,6 +4,7 @@
 - Done: the peer-to-peer platform stack, image-based maps, default missions, the mission editor (interface platform), and the reorganization into layered packages (build order steps 1-7).  The LLM assistant (step 10) has a first cut.  The web UI (step 8) has a first cut, routed through the interface's own Backseater, with live `PlatformRecord` gossip and pose (notes 41-42), a graphical editor and per-window sessions (note 43), and an editor document, incomplete requests, a condition builder, and a Knowledge panel (note 44).
 - The web UI is working and is the primary interface (checkpoint: note 46).  What remains for it is its open items below, not new features.
 - The interface is now a ground_plane platform with a map sensor, feeding a World Viewer panel with a trajectory drawer.  `Trajectory` and `follow_trajectory` exist, and `environments/anywhere/` is gone (note 48).
+- Convoying has begun: a `follow` capability (offhooked point, paper MPC cost, dead-reckoned synced pose), and adoption keeps keys in another platform's namespace (note 49).
 - Next: the web UI's open items and known issues (below), and build order step 9.  On the LLM side, the post-turn graph check (Next Up for LLM Agent, below).
 
 
@@ -18,7 +19,7 @@
 7. [x] Reorganization: layered packages, `mission/`, `scenarios/`, environment-specific state; primitive → capability request (note 40)
 8. [~] Web UI capability so interface is more flexible: working (Tk parity, panel seam, mesh-routed, graphical editor, per-window sessions, editor document, condition builder, Knowledge panel; notes 41-44, checkpoint note 46; World Viewer and trajectory drawer, note 48); open items below
 9. [~] Re-touch user experience implementing platforms and capabilities so it is clean and easy: friction written up in `checklists.md` (note 45); capabilities as single classes, the Frontseater base lifecycle, and automatic Knowledge-type/scenario registration done (note 47).  Still open: actuation arbitration and environment leaks (`checklists.md` friction 5 and 7)
-10. [ ] Convoying-related capabilities
+10. [~] Convoying-related capabilities: `follow` done (note 49); see Convoy Open Items below
 11. [ ] [~] Agentic LLM on the interface platform: first cut done (the mission-editor assistant, notes 34-35); see open items below
 12. [ ] Teleop on the interface platform, for the experimental comparison (inside the existing system if it fits)
 
@@ -36,15 +37,23 @@
 
 
 
+## Convoy Open Items
+1. Tracking lag scales with speed: the MPC treats the offhooked point as stationary over its horizon, so a follower sits behind it (headless smoke test: a median of 0.4 m at 1 m/s and 0.8 m at 2 m/s, so gaps run about 1.5-2 m for a 1 m following distance).  This is the paper's formulation; feeding the point's predicted motion into the rollout would cut it.
+2. A follower needs a higher top speed than its leader to close a gap, since it waits at the start.  Hardware limits aren't exposed by `bicycle_ugv()`.
+3. Dead-reckoning cuts the synced pose's error from a median of about 1.0 m to 0.16 m at 2 m/s (1 s `sync_interval`).  A leader that changes speed sharply (`follow_trajectory` on short legs, up to 8 m/s) still outruns it.
+4. No string-stability analysis (the paper's future work too), and no convoy scenario yet (user's call).
+
+
+
 ## Future Work: Values a Mission Can't Carry Yet (note 46)
 A value made in a specialized viewer has no direct path into a mission today.  The trajectory drawer works around this with plain text (`Trajectory` is one JSON-text field, copied and pasted by the operator; note 48); a richer value can't:
-- **Adoption resets declared keys.** `Backseater._declare_knowledge_keys()` sets every key the new mission declares back to its default, so a value staged live before the push is overwritten.  Reset is still right for run flags like `ugv1/arrived`, so any change must be per key.
+- **Adoption resets declared keys.** `Backseater._declare_knowledge_keys()` sets every key the new mission declares back to its default, so a value staged live before the push is overwritten.  Reset is still right for run flags like `ugv1/arrived`.  Partly resolved (note 49): a key in another known platform's namespace keeps its live value.  A key in the target's own or a shared namespace still resets.
 - **Only the editor writes draft values.** No other panel can contribute a value to the window's draft.
 - **Rich values have no encoding.** `KnowledgeEntry` types serialize through flat scalar constructor fields only, so a waypoint list or an image can't be declared, edited, saved, or sent.
 - **Large values cost every sync and poll.** `_snapshot_checksum()` `repr()`s every value, and the web state resends every value each poll.
 
 Directions to weigh (interview first; none chosen):
-- a per-key "keep live value" flag on declarations, so adoption keeps a staged value of the right type;
+- a per-key "keep live value" flag on declarations, so adoption keeps a staged value of the right type (considered in note 49 and declined, since it waters down the mission specification; the namespace rule was chosen instead);
 - panels registered as typed value editors: editing a Trajectory key opens the drawer, which writes back into the draft (or publishes live);
 - per-type JSON encode/decode hooks on `KnowledgeEntry` (e.g. base64 images), hashed sync checksums, and on-demand fetch of large values in the web UI;
 - for constrained comms, content-addressed blobs: Knowledge holds a reference (hash, media type, size), and the bytes sync separately and lazily.
@@ -70,7 +79,7 @@ Directions to weigh (interview first; none chosen):
 ## Future Steps (maybe)
 1. A real comms boundary with simulated delay (planner↔backseater, backseater↔frontseater), and partial/topological mesh connectivity instead of a full mesh.  An operator should only see platforms in comms range.
 2. An advanced world (CalTopo?).
-3. Terrain-aware MPC: `solve_mpc` only knows fixed speed limits and straight-line target/avoid costs.  The speed multiplier and blocking are applied afterwards by `GroundPlaneHardware.step_dynamics`, so the planner neither seeks roads nor anticipates walls.  Blocked cells could act like `avoid` regions and slow terrain could add cost.
+3. Terrain-aware MPC: `solve_mpc` only knows fixed speed limits and straight-line target/pose/avoid costs.  The speed multiplier and blocking are applied afterwards by `GroundPlaneHardware.step_dynamics`, so the planner neither seeks roads nor anticipates walls.  Blocked cells could act like `avoid` regions and slow terrain could add cost.
 4. Concurrent active nodes in a mission graph, and staleness/timeout semantics on edges.
 5. Frontseater → user/LLM text messages for replanning (`PlatformStatus.message` is the seed).
 6. An object/world-state/OPORD layer (object lists, confidence, OPORD parsing).
@@ -93,6 +102,7 @@ Directions to weigh (interview first; none chosen):
 - No security beyond the privilege placeholder; no adversarial actor is modeled.
 - A single slow computation (e.g. one MPC solve) freezes the UI for its duration, since Tk is pumped between calls.
 - Test noise: Tk tests print "Exception ignored ... main thread is not in main loop" at teardown (GC of Tk objects).  Harmless.
+- Flaky: `test_web_server`'s `test_a_missing_or_malformed_session_id_is_a_bad_request` errored once in a full-suite run (2026-11-24) and passed alone.  The cause is unconfirmed.
 
 
 

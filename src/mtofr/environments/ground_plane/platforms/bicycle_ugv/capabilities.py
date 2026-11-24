@@ -1,15 +1,73 @@
 """The bicycle UGV's own capabilities, which drive its MPC through BicycleFrontseater."""
+import math
+
 import numpy as np
 
 from mtofr.core.capability import Capability, ParamSpec
 from mtofr.core.hardware import Hardware
-from mtofr.database import Location, Trajectory
+from mtofr.database import Location, Pose, Trajectory
+from mtofr.environments.ground_plane.capabilities import sense_pose
 
+
+#========================================#
+# Config
+#========================================#
+
+STALE_POSE_TIMEOUT = 3.0   # s; an older leader pose stops a follower (a lost link, or a placeholder never written)
+MIN_YAW_RATE = 1e-6        # rad/s; below this, extrapolation is a straight line (avoids dividing by ~0)
+
+
+
+
+
+
+
+#========================================#
+# Geometry
+#========================================#
 
 def _distance_to(hardware: Hardware, x: float, y: float) -> float:
     """Distance (m) from `hardware`'s sensed position to (x, y) (m, world frame)."""
     state = hardware.read_state()
     return float(np.hypot(state.x - x, state.y - y))
+
+
+def wrap_angle(angle: float) -> float:
+    """`angle` (rad) wrapped to [-pi, pi]."""
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def offhook_target(leader: Pose, follower: Pose, following_distance: float) -> Pose:
+    """The offhooked target pose (Ng et al.'s virtual trailer link, as in Cometto et al. sec. IV-H):
+    back half the following distance (m) along the leader's heading, then half along the
+    follower's.  Its heading is the follower's own, so the MPC never chases the leader's turn
+    early; in a steady turn this keeps the follower on the leader's path.  World frame."""
+    half_distance = following_distance / 2
+    x = leader.x - half_distance * (math.cos(leader.theta) + math.cos(follower.theta))
+    y = leader.y - half_distance * (math.sin(leader.theta) + math.sin(follower.theta))
+    return Pose(x, y, follower.theta)
+
+
+def extrapolate_pose(pose: Pose, speed: float, yaw_rate: float, dt: float) -> Pose:
+    """`pose` advanced dt (s) at a constant speed (m/s) and yaw rate (rad/s): an arc, or a
+    straight line when the yaw rate is ~0.  World frame."""
+    if abs(yaw_rate) < MIN_YAW_RATE:
+        return Pose(pose.x + speed * dt * math.cos(pose.theta), pose.y + speed * dt * math.sin(pose.theta), pose.theta)
+    new_theta = pose.theta + yaw_rate * dt
+    turn_radius = speed / yaw_rate   # m, signed (positive turns left)
+    return Pose(pose.x + turn_radius * (math.sin(new_theta) - math.sin(pose.theta)),
+                pose.y - turn_radius * (math.cos(new_theta) - math.cos(pose.theta)),
+                new_theta)
+
+
+
+
+
+
+
+#========================================#
+# Capabilities
+#========================================#
 
 
 class MoveTo(Capability):
@@ -97,6 +155,78 @@ class FollowTrajectory(Capability):
         if self.arrived:
             return "arrived"
         return f"waypoint {self.waypoint_index + 1}/{len(self.points)}"
+
+
+class Follow(Capability):
+    """Convoy following (Cometto et al.): tracks the offhooked point behind a leader's pose with
+    the MPC's pose-tracking cost.  The leader's pose arrives by sync, up to sync_interval old, so
+    it is dead-reckoned forward by its age from a speed and yaw rate estimated across samples
+    (the paper's EKF predict step, without measurement updates: the pose is known directly)."""
+    ipl_type = "follow"
+    description = ("Follow another vehicle convoy-style at a following distance: track the point behind it (half the "
+                   "distance back along its heading, then half along this vehicle's) with the internal MPC, waiting "
+                   f"while that point is behind this vehicle, and stopping if its pose is over {STALE_POSE_TIMEOUT} s "
+                   "old. Never completes.")
+    inputs = (
+        ParamSpec("leader_pose", Pose, "Pose of the vehicle to follow, e.g. its sense_pose output <platform_id>/pose"),
+        ParamSpec("following_distance", float, "Desired distance behind the leader, in meters"),
+    )
+    outputs = (ParamSpec("distance", float, "Current distance to the leader's predicted position, in meters"),)
+
+    def start(self) -> None:
+        """No leader sample yet, so the leader is assumed still."""
+        self.previous_sample = None   # (Pose, write time s local clock) of the last distinct leader pose
+        self.speed = 0.0              # m/s, the leader's estimated speed along its heading
+        self.yaw_rate = 0.0           # rad/s, the leader's estimated yaw rate
+        self.mode = "starting"
+
+    def tick(self) -> None:
+        """Re-estimates the leader's motion, predicts it to now, and steers toward the offhooked point."""
+        leader, age = self.read("leader_pose"), self.age("leader_pose")   # Pose, s
+        self._observe_leader(leader, self.written_at("leader_pose"))
+        follower = sense_pose(self.hardware)
+
+
+        # Predict the leader to now and place the target, unless its pose is too old to trust
+        predicted_leader, target = leader, None
+        if age > STALE_POSE_TIMEOUT:
+            self.mode = "leader pose stale"
+        else:
+            predicted_leader = extrapolate_pose(leader, self.speed, self.yaw_rate, age)
+            target = offhook_target(predicted_leader, follower, self.read("following_distance"))
+            distance_ahead = ((target.x - follower.x) * math.cos(follower.theta)
+                              + (target.y - follower.y) * math.sin(follower.theta))   # m, along the follower's heading
+            # Paper sec. IV-I: with the target not in front, wait for it to move rather than reverse.
+            if distance_ahead <= 0:
+                self.mode, target = "waiting", None
+            else:
+                self.mode = "following"
+
+
+        # Steer (None idles the vehicle)
+        # NOTE: single target, shared with move_to/follow_trajectory: the last request ticked wins.
+        self.frontseater.navigation_target = target
+        self.write("distance", float(np.hypot(predicted_leader.x - follower.x, predicted_leader.y - follower.y)))
+
+    def _observe_leader(self, leader: Pose, write_time: float) -> None:
+        """Re-estimates the leader's speed and yaw rate from the previous sample when a newer one arrived."""
+        if self.previous_sample is not None:
+            previous, previous_time = self.previous_sample
+            dt = write_time - previous_time   # s
+            if dt <= 0:
+                return
+            self.speed = ((leader.x - previous.x) * math.cos(previous.theta)
+                          + (leader.y - previous.y) * math.sin(previous.theta)) / dt
+            self.yaw_rate = wrap_angle(leader.theta - previous.theta) / dt
+        self.previous_sample = (leader, write_time)
+
+    def stop(self) -> None:
+        """Releases the MPC target, so the vehicle idles."""
+        self.frontseater.navigation_target = None
+
+    def status(self) -> str:
+        """"starting", "following", "waiting", or "leader pose stale"."""
+        return self.mode
 
 
 class Avoid(Capability):

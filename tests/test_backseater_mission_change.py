@@ -9,8 +9,8 @@ self.mission_graph), not deep equality."""
 import unittest
 
 from mtofr.core.capability import Capability, CapabilityRegistry
-from mtofr.database import KnowledgeDatabase
-from mtofr.platform.backseater import Backseater
+from mtofr.database import KnowledgeDatabase, PlatformRecord, PlatformStatus
+from mtofr.platform.backseater import PEER_PLACEHOLDER_TIMESTAMP, Backseater
 from mtofr.platform.frontseater import Frontseater
 
 
@@ -164,6 +164,64 @@ class TestMissionChangeAppliesNewGraph(unittest.TestCase):
         self.assertIs(backseater.mission_graph, old_graph)
         self.assertEqual(backseater.active_node_id, "old_node")
         self.assertEqual(frontseater.stopped_names, [])
+
+
+def _graph_declaring(keys: list[str]) -> dict:
+    """A one-node graph declaring every key in `keys` as an int defaulting to 0."""
+    return {
+        "knowledge": {key: {"type": int, "value": 0} for key in keys},
+        "nodes": {"new_node": {"capabilities": {}}},
+        "edges": {},
+        "start": "new_node",
+    }
+
+
+class TestMissionChangeKeepsPeersFacts(unittest.TestCase):
+    def setUp(self):
+        """A ugv1 Backseater that knows a peer, ugv2, and holds a live value in four namespaces."""
+        self.backseater, _, _ = _make_backseater("ugv1")
+        self.backseater.platform_database.declare(
+            "ugv2", PlatformRecord(privilege_level=1, status=PlatformStatus("idle"), capabilities=None),
+            origin_platform_id="ugv2")
+        for key in ("ugv2/fact", "ugv1/flag", "shared/value", "plain"):
+            self.backseater.knowledge_database.declare(key, int, 99)
+
+    def _adopt(self, keys: list[str]) -> None:
+        """Writes ugv1 a graph declaring `keys` (ints defaulting to 0) and lets it adopt the graph."""
+        self.backseater.write_mission(_graph_declaring(keys), writer_platform_id="ugv1")
+        self.backseater.update()
+
+    def test_a_key_in_a_peers_namespace_keeps_its_live_value(self):
+        """"ugv2/fact" is ugv2's own fact, so ugv1's adoption leaves it alone."""
+        self._adopt(["ugv2/fact"])
+        self.assertEqual(self.backseater.knowledge_database.get("ugv2/fact"), 99)
+
+    def test_own_other_and_unprefixed_keys_reset(self):
+        """Own-namespace, non-platform-namespace, and un-prefixed keys reset to their declared defaults."""
+        self._adopt(["ugv1/flag", "shared/value", "plain"])
+        for key in ("ugv1/flag", "shared/value", "plain"):
+            self.assertEqual(self.backseater.knowledge_database.get(key), 0, key)
+
+    def test_a_missing_peer_key_gets_a_placeholder_timestamp(self):
+        """A peer's key this platform hasn't received yet is declared with the placeholder timestamp."""
+        self._adopt(["ugv2/missing"])
+        self.assertEqual(self.backseater.knowledge_database.get("ugv2/missing"), 0)
+        self.assertEqual(self.backseater.knowledge_database.timestamp_of("ugv2/missing"), PEER_PLACEHOLDER_TIMESTAMP)
+
+    def test_a_placeholder_loses_sync_to_the_peers_real_value(self):
+        """Once synced, both sides hold the peer's real value, not the placeholder default."""
+        ugv1, _, _ = _make_backseater("ugv1")
+        ugv2, _, _ = _make_backseater("ugv2")
+        ugv1.sync_with(ugv2)   # learn each other's PlatformRecords
+        ugv1.declare_knowledge_key("ugv1/goal", int, 7)
+
+        ugv2.write_mission(_graph_declaring(["ugv1/goal"]), writer_platform_id="ugv2")
+        ugv2.update()
+        self.assertEqual(ugv2.knowledge_database.get("ugv1/goal"), 0)
+
+        ugv2.sync_with(ugv1)
+        self.assertEqual(ugv2.knowledge_database.get("ugv1/goal"), 7)
+        self.assertEqual(ugv1.knowledge_database.get("ugv1/goal"), 7)
 
 
 if __name__ == "__main__":

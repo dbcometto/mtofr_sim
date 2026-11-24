@@ -22,7 +22,7 @@ Design history is in `notes.md`; build order, open items, and known issues are i
 - `scripts/mpc_profile.py`: tick-time and MPC-iteration profiler (not part of the suite).
 - `mission_library/`: saved mission-graph JSON files (mission editor Save/Load).
 - `llm/ollama/`: start/stop scripts for the local LLM service (see `llm_setup.md`).
-- `docs/`: these documents.  `checklists.md` covers adding a capability, platform, environment, Knowledge type, or scenario.
+- `docs/`: these documents.  `design.md` is the design philosophy and math behind the architecture.  `checklists.md` covers adding a capability, platform, environment, Knowledge type, or scenario.
 
 
 
@@ -32,6 +32,7 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
   - `capabilities()`: passthrough to the Frontseater's registry; the only way to learn what a platform can do.
   - `status()`: read-only snapshot of the active node, blocked flag, and per-request capability/status/inputs (under `"capabilities"`).  Status text comes fresh from `Frontseater.describe_status()`.
   - `query(database_name, key)` / `publish(database_name, key, value, timestamp=None)` across `"knowledge"`/`"mission"`/`"platform"`, plus `declare_knowledge_key()`.  A `"mission"` publish always goes through `write_mission()`.
+  - `knowledge_timestamp(key)` / `knowledge_age(key)`: when a Knowledge value was written (local clock) and how long ago, sync latency included.
   - Bind check, each tick before handing off: `mission.validation.find_capability_problems()` against the live `KnowledgeDatabase.types()`, the same check the editor runs against a graph's declarations.  Any problem halts the mission (blocked) without crashing.
   - `update()` = `_advance_mission()` then `_refresh_own_record()`, which re-publishes its own `PlatformRecord` status (from `status()`) only when it changed.
 - **Frontseater** (`platform/frontseater.py`, a concrete base): the only bespoke part of each platform (planning/control, its list of capabilities).  Talks to Hardware only via `send_controls`/`read_state`, and reaches its Backseater via `frontseater.backseater`.  A subclass lists `CAPABILITIES` (Capability classes) and overrides only what it needs; `__init__(hardware, debug=False)`.
@@ -59,6 +60,7 @@ Each platform is a Hardware → Frontseater → Backseater stack, the layers cal
 ## Databases
 All three belong to the Backseater, are stamped by its `Clock`, and carry `origin_platform_id` per entry (the platform that held the entry at its latest locally converted timestamp, transitively).  Every check happens write-side only, once, at the originating platform; there is no re-verification on receipt.
 - **Knowledge** (`KnowledgeDatabase`, `backseater.knowledge_database`): arbitrary keys, each type-locked.  Use `declare(key, entry_type, value, timestamp=None, origin_platform_id=None)` before `get`/`set`; `set` raises on an undeclared key or a wrong type.  `declare()` works at any time.  `set_or_declare()` is the rare bypass mesh sync uses.  Also `timestamp_of`, `origin_of`, and `all()`.  Values may be plain types or `KnowledgeEntry` subclasses (`describe()` required).
+  - Keys are namespaced `namespace/name` (`split_key()`/`join_key()` in `knowledge.py`, split at the last `/`).  A namespace equal to a platform id marks that platform's own fact, which another platform's mission adoption never resets (see Mission change).
   - Types live one per file in `database/knowledge_types/` (built-ins `location.py` `Location(x, y)`, `pose.py` `Pose(x, y, theta)`, and `trajectory.py` `Trajectory(waypoints)`; the base and registry are in `base.py`).  The package imports every module in it.
   - `Trajectory`'s one `str` field is a JSON list of `[x, y]` pairs (m, world frame; `""` is none), parsed into `.points` (a bad one raises `ValueError`).  Plain text, so it needs nothing new in the editors, save/load, sync, or the LLM.
   - Each concrete subclass registers itself by class name in `KNOWLEDGE_TYPES_BY_NAME` (seeded with the scalars) and its reverse `KNOWLEDGE_TYPE_NAMES`; a taken name raises.
@@ -78,11 +80,11 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 - **Mesh push**: `publish("mission", target_id, graph)` writes the target's entry into the writer's own Mission database, with every check done there; sync delivers it, and the target's mission-change detection adopts it.  The web UI pushes this way.  The Tk editor still calls the target's `write_mission()` directly (a sim-only shortcut).
 - **Mission change** (`_detect_mission_change()`, top of `update()`): when this platform's own Mission entry is a new object, it:
   1. stops the old capability requests;
-  2. resets the new graph's knowledge keys to their declared defaults;
+  2. resets the new graph's knowledge keys to their declared defaults, except a key in another known platform's namespace (`split_key()`, e.g. `ugv1/pose` in ugv2's mission).  That key is the peer's own fact: a live value is kept, and a missing one gets the default stamped `PEER_PLACEHOLDER_TIMESTAMP` (0.0), so the peer's real value wins every sync;
   3. swaps the graph and the parsed conditions, and clears blocked;
   4. activates the new start node in the same tick.
 
-  This works for mesh-synced missions too.  Because of step 2, a value staged live before a push is overwritten; see the roadmap's "Values a Mission Can't Carry Yet".
+  This works for mesh-synced missions too.  Because of step 2, a value staged live before a push is overwritten unless it is in another platform's namespace; see the roadmap's "Values a Mission Can't Carry Yet".
 - **Mesh sync** (`Backseater.sync_with(peer)`): reconciles Knowledge, Mission, and Platform in both directions, last-write-wins by locally converted timestamp.  Pulled timestamps are converted (`Clock.to_local()`), never re-stamped.  Received entries bypass the write gates.
   - Symmetric and idempotent, so either side may initiate.
   - `sync_with_stale_peers(peers)` only syncs peers older than `sync_interval`.
@@ -99,7 +101,7 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
 - **Serialization** (`serialization.py`): JSON save/load through the self-populating type-name registry (`KNOWLEDGE_TYPES_BY_NAME`, re-exported from `mtofr.database`).
 - **Capabilities** (`core/capability.py`):
   - `ParamSpec(name, type, description)` describes fields and drives the binding checks.  Its `describe()` includes a `KnowledgeEntry` type's own `describe()`, so a human or LLM can read what a field means.
-  - `Capability` is one class per capability.  Class attributes `ipl_type`, `description`, `inputs`, `outputs` declare it (`describe()` is a classmethod).  One instance per running request, `(frontseater, name, request)`, runs it through `start()`/`tick()`/`stop()`/`status()` (all optional), with `read(field)` (live query of the bound key) and `write(field, value)` (publish if bound, else no-op); both raise `KeyError` for an undeclared field.
+  - `Capability` is one class per capability.  Class attributes `ipl_type`, `description`, `inputs`, `outputs` declare it (`describe()` is a classmethod).  One instance per running request, `(frontseater, name, request)`, runs it through `start()`/`tick()`/`stop()`/`status()` (all optional), with `read(field)` (live query of the bound key), `written_at(field)`/`age(field)` (the bound input's write time and age), and `write(field, value)` (publish if bound, else no-op); all raise `KeyError` for an undeclared field.
   - `CapabilityRegistry` holds the classes (`.get`, `.all`, `.describe`).  A capability request's `"capability"` equals an `ipl_type`.
   - Shared capabilities: `Stopwatch` (`platform/common_capabilities.py`), `SensePose` (`environments/ground_plane/capabilities.py`).
 
@@ -121,14 +123,18 @@ All three belong to the Backseater, are stamped by its `Clock`, and carry `origi
   - `sensors/`: `GroundMapSensor.read(environment) -> GroundMap | None`, the perfect map sensor (it reports `environment.ground_map`).  It isn't a `core.Sensor`, which maps State to State.
 - **Bicycle UGV** (`environments/ground_plane/platforms/bicycle_ugv/`): `bicycle_ugv(platform_id, start_x, start_y, mission_graph=None, privilege_level=1)`.
   - `BicycleHardware` is a kinematic bicycle (`dynamics.bicycle_step()`, shared with the MPC).
-  - `BicycleFrontseater` is the reference Frontseater, `CAPABILITIES = (MoveTo, FollowTrajectory, Avoid, Stopwatch, SensePose)`:
+  - `BicycleFrontseater` is the reference Frontseater, `CAPABILITIES = (MoveTo, FollowTrajectory, Follow, Avoid, Stopwatch, SensePose)`:
     - `move_to` (`bicycle_ugv/capabilities.py`; `target`, `tolerance` → `arrived`; re-reads each tick and sets `navigation_target`, which the MPC chases);
     - `follow_trajectory` (`bicycle_ugv/capabilities.py`; `trajectory`, `tolerance`, `loop` → `arrived`): sets `navigation_target` to each waypoint in turn, advancing within `tolerance`.  After the last one it holds there with `arrived` true, or with `loop` starts over (never arrived).  A changed trajectory restarts at its first waypoint;
+    - `follow` (`bicycle_ugv/capabilities.py`; `leader_pose`, `following_distance` → `distance`; never completes): convoy following after Cometto et al.  Each tick it:
+      - dead-reckons the synced leader pose forward by its `age()`, at a speed and yaw rate estimated across successive samples (`extrapolate_pose()`);
+      - sets `navigation_target` to the offhooked `Pose` (`offhook_target()`: back d/2 along the leader's heading, then d/2 along its own; the heading is its own);
+      - idles while that point is behind it ("waiting"), or while the pose is older than `STALE_POSE_TIMEOUT` ("leader pose stale");
     - `avoid` (`bicycle_ugv/capabilities.py`; `point`, `radius` → `registered`; `add_avoid_region()` at start);
     - `stopwatch` (→ `elapsed_time` in sim seconds since start; never completes);
     - `sense_pose` (→ `pose`, the sensed `Pose` from `read_state()`, every tick; never completes).
   - Its default mission loiters on `stopwatch` and runs `sense_pose` bound to `<platform_id>/pose`, so pose gossips by default.  A pushed mission without `sense_pose` stops that.
-  - MPC (`mpc.solve_mpc`, SLSQP, `MPC_MAX_ITERATIONS` 20, warm-started) runs in one persistent worker process per platform.  The MPC knows nothing about terrain.
+  - MPC (`mpc.solve_mpc`, SLSQP, `MPC_MAX_ITERATIONS` 20, warm-started) runs in one persistent worker process per platform.  The MPC knows nothing about terrain.  A `Location` target is reached (bearing, effort, and distance cost); a `Pose` target is tracked with the paper's `TRACKING_*` weights, W_s = diag(1, 1, 0.1) and W_a = diag(0.2, 0.7).  Avoid-regions apply to both.
 - **Maps** (`environments/ground_plane/maps/`): `load_map(name)` (None → no map) and `GroundMap.load(folder)`, which reads `<name>.yaml` plus `_cosmetic`/`_traversability`/`_regions` PNGs.
   - World (0, 0) is the image center, +y up, so sampling flips rows.
   - Traversability maps a hex color to `TraversabilityType(name, blocking, speed_multiplier)`.  A pixel snaps to the nearest declared color; an unmatched in-bounds pixel is passable, and off-map is blocked.

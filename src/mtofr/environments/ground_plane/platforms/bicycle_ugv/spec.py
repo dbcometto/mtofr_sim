@@ -8,13 +8,13 @@ from mtofr.platform.frontseater import Frontseater
 from mtofr.platform.platform import PlatformSpec
 
 
-def bicycle_ugv(platform_id: str, start_x: float, start_y: float, mission_graph: MissionGraph | None = None,
+def bicycle_ugv(platform_id: str, start_x: float, start_y: float, start_theta: float = None, mission_graph: MissionGraph | None = None,
                 privilege_level: int = DEFAULT_PRIVILEGE_LEVEL) -> PlatformSpec:
     """A PlatformSpec for a UGV with bicycle dynamics starting at (start_x, start_y) (m, world frame) --
     only safe on a map with no blocking terrain at that point."""
     def build_frontseater(debug: bool = False) -> Frontseater:
         """Builds this UGV's BicycleHardware and BicycleFrontseater."""
-        hardware = BicycleHardware(initial_state=GroundPlaneState(x=start_x, y=start_y))
+        hardware = BicycleHardware(initial_state=GroundPlaneState(x=start_x, y=start_y, theta=start_theta))
         return BicycleFrontseater(hardware=hardware, debug=debug)
     return PlatformSpec(platform_id=platform_id, build_frontseater=build_frontseater,
                         mission_graph=mission_graph, privilege_level=privilege_level)

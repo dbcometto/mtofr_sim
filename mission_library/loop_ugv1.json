@@ -1,0 +1,104 @@
+{
+  "knowledge": {
+    "ugv1/trajectory": {
+      "type": "Trajectory",
+      "value": {
+        "waypoints": "[[12.95, -16], [29.93, 0.11], [39.07, 27.1], [26.88, 41.03], [-14.91, 39.07], [-39.72, 31.02], [-53.44, 9.69], [-37.98, -30.58], [-17.52, -38.85], [-7.29, -21.01]]"
+      }
+    },
+    "ugv1/tolerance": {
+      "type": "float",
+      "value": 0.5
+    },
+    "ugv1/loop": {
+      "type": "bool",
+      "value": true
+    },
+    "ugv1/arrived": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv1/go": {
+      "type": "bool",
+      "value": false
+    },
+    "ugv1/pose": {
+      "type": "Pose",
+      "value": {
+        "x": 0.0,
+        "y": 0.0,
+        "theta": 0.0
+      }
+    }
+  },
+  "nodes": {
+    "start": {
+      "capabilities": {
+        "sense_pose": {
+          "capability": "sense_pose",
+          "inputs": {},
+          "outputs": {
+            "pose": "ugv1/pose"
+          }
+        }
+      }
+    },
+    "loop": {
+      "capabilities": {
+        "follow_trajectory": {
+          "capability": "follow_trajectory",
+          "inputs": {
+            "trajectory": "ugv1/trajectory",
+            "tolerance": "ugv1/tolerance",
+            "loop": "ugv1/loop"
+          },
+          "outputs": {
+            "arrived": "ugv1/arrived"
+          }
+        },
+        "sense_pose": {
+          "capability": "sense_pose",
+          "inputs": {},
+          "outputs": {
+            "pose": "ugv1/pose"
+          }
+        }
+      }
+    }
+  },
+  "edges": {
+    "start": [
+      {
+        "condition": [
+          "ugv1/go",
+          "==",
+          true
+        ],
+        "to": "loop"
+      }
+    ]
+  },
+  "start": "start",
+  "name": "loop_ugv1",
+  "editor": {
+    "layout": {
+      "start": [
+        -0.8488888888888888,
+        0.7066666666666667
+      ],
+      "loop": [
+        0.7044444444444444,
+        0.7244444444444444
+      ]
+    },
+    "unset_keys": [],
+    "following_keys": [
+      "ugv1/arrived",
+      "ugv1/go",
+      "ugv1/loop",
+      "ugv1/pose",
+      "ugv1/tolerance",
+      "ugv1/trajectory"
+    ]
+  }
+}

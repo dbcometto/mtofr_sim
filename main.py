@@ -18,7 +18,7 @@ DEBUG = False   # turns on [World]/[Backseater]/[Frontseater] debug prints
 # "split", "wait", "village", or "village_default" (every platform, including the
 # mission-editor "interface" platform, boots onto its default mission -- author/push a
 # real mission live via its web UI, whose address is printed at startup).
-ACTIVE_SCENARIO = "village_default"
+ACTIVE_SCENARIO = "village_close"
 MAX_BACKLOG_STEPS = 5   # once the loop falls further behind than this many steps, drop the backlog
 IDLE_SLEEP_SECONDS = 0.001   # yields the CPU when there's no step/redraw to do
 

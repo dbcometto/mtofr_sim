@@ -12,7 +12,10 @@ TypedDicts below only document and type-hint that shape, they never wrap it.
      "name": mission_name}   # optional
 
 - "knowledge": every Knowledge key the graph touches, with its locked type and the
-  default value it is reset to whenever this graph becomes a platform's mission.
+  default value it is reset to whenever this graph becomes a platform's mission.  The
+  exception is a key in another known platform's namespace (e.g. "ugv1/pose" in ugv2's
+  mission): that is the peer's own fact, so its live value is kept, and the default is
+  only a placeholder until the real value arrives.
 - "nodes": one node is active at a time; all of its capability requests run
   concurrently.  A capability request names a capability (its `ipl_type`) and binds that
   capability's fields to Knowledge keys, never to literals.

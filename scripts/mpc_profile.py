@@ -85,7 +85,7 @@ def _logging_worker(request_queue, response_queue, nav_horizon, nav_dt, wheelbas
         elif request["type"] == "compute":
             vel, steer, prev_solution = solve_mpc(
                 nav_horizon, nav_dt, wheelbase, min_speed, max_speed, min_steer, max_steer,
-                prev_solution, request["state"], request["target"], avoid_regions,
+                prev_solution, request["state"], request["target"], request.get("target_heading"), avoid_regions,
             )
             response_queue.put({"vel": vel, "steer": steer})
         request = request_queue.get()

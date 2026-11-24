@@ -34,7 +34,9 @@ python -m unittest discover -s tests
 
 ## Documentation
 
+- [`docs/design.md`](docs/design.md): design philosophy, with the math behind the architecture
 - [`docs/spec.md`](docs/spec.md): architecture overview
+- [`docs/checklists.md`](docs/checklists.md): adding a capability, platform, environment, Knowledge type, or scenario
 - [`docs/roadmap.md`](docs/roadmap.md): build order, open items, known issues
 - [`docs/notes.md`](docs/notes.md): design history
 - [`docs/proc.md`](docs/proc.md), [`docs/style.md`](docs/style.md): development process and code style

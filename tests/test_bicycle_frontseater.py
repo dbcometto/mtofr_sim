@@ -3,19 +3,28 @@ describe_status) exercised directly, independent of any
 Backseater/mission-graph driving them. A capability calls query()/publish() on its own
 Backseater, so these tests wire in a minimal fake backseater (a plain dict-backed
 query/publish) instead of a full Backseater."""
+import math
 import unittest
 
 from mtofr.database import Location, Pose, Trajectory
+from mtofr.environments.ground_plane.platforms.bicycle_ugv.capabilities import (
+    STALE_POSE_TIMEOUT,
+    extrapolate_pose,
+    offhook_target,
+)
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.hardware import BicycleHardware
 from mtofr.environments.ground_plane.platforms.bicycle_ugv.frontseater import BicycleFrontseater
 
 
 class _FakeBackseater:
     """Minimal query()/publish() stand-in over a plain dict — enough for a capability to
-    read its bound inputs and write its outputs, without needing a real Backseater/Knowledge."""
+    read its bound inputs and write its outputs, without needing a real Backseater/Knowledge.
+    Write times come from a settable clock, `now` (s); a key never published counts as written at 0."""
     def __init__(self, knowledge: dict):
         """Wrap the given dict as the Knowledge store."""
         self.knowledge = knowledge
+        self.timestamps = {}   # key -> write time (s)
+        self.now = 0.0         # s
 
     def query(self, database_name: str, key):
         """Return the Knowledge value for key (only the "knowledge" database is supported)."""
@@ -26,6 +35,15 @@ class _FakeBackseater:
         """Store value under key in Knowledge (only the "knowledge" database is supported)."""
         assert database_name == "knowledge"
         self.knowledge[key] = value
+        self.timestamps[key] = self.now if timestamp is None else timestamp
+
+    def knowledge_timestamp(self, key: str) -> float:
+        """When key was last written (s)."""
+        return self.timestamps.get(key, 0.0)
+
+    def knowledge_age(self, key: str) -> float:
+        """Seconds since key was last written."""
+        return self.now - self.knowledge_timestamp(key)
 
 
 class TestBicycleFrontseaterCapabilities(unittest.TestCase):
@@ -216,6 +234,74 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
 
 
 
+    #===============# follow #===============#
+
+    def _activate_follow(self, leader: Pose, following_distance=1.0, name="convoy"):
+        """Publish the leader's pose at the fake clock's now, and make a single follow request active."""
+        self.frontseater.backseater.publish("knowledge", "ugv1/pose", leader)
+        self.knowledge["following_distance"] = following_distance
+        self.frontseater.set_active_capabilities({name: {
+            "capability": "follow",
+            "inputs": {"leader_pose": "ugv1/pose", "following_distance": "following_distance"},
+            "outputs": {"distance": "distance"},
+        }})
+
+    def _follow_status(self) -> str:
+        """The follow request's status text."""
+        return self.frontseater.describe_status()["capabilities"]["convoy"]
+
+    def test_follow_tracks_the_offhooked_pose_with_the_followers_heading(self):
+        """With the leader ahead, the MPC gets a Pose target behind it, headed like the follower."""
+        self.hardware.state.theta = 0.2
+        self._activate_follow(Pose(3.0, 0.0, 0.0))
+        self.frontseater.tick_capabilities()
+        target = self.frontseater.navigation_target
+        expected = offhook_target(Pose(3.0, 0.0, 0.0), Pose(0.0, 0.0, 0.2), 1.0)
+        self.assertIsInstance(target, Pose)
+        self.assertAlmostEqual(target.x, expected.x)
+        self.assertAlmostEqual(target.y, expected.y)
+        self.assertAlmostEqual(target.theta, 0.2)
+        self.assertEqual(self._follow_status(), "following")
+        self.assertAlmostEqual(self.knowledge["distance"], 3.0)
+
+    def test_follow_waits_while_the_target_point_is_behind(self):
+        """A leader closer than the following distance puts the point behind, so the vehicle idles."""
+        self._activate_follow(Pose(0.5, 0.0, 0.0))
+        self.frontseater.tick_capabilities()
+        self.assertIsNone(self.frontseater.navigation_target)
+        self.assertEqual(self._follow_status(), "waiting")
+
+    def test_follow_stops_on_a_stale_leader_pose(self):
+        """A leader pose older than STALE_POSE_TIMEOUT idles the vehicle."""
+        self._activate_follow(Pose(3.0, 0.0, 0.0))
+        self.frontseater.backseater.now = STALE_POSE_TIMEOUT + 1.0
+        self.frontseater.tick_capabilities()
+        self.assertIsNone(self.frontseater.navigation_target)
+        self.assertEqual(self._follow_status(), "leader pose stale")
+
+    def test_follow_dead_reckons_the_leader_from_successive_samples(self):
+        """Two samples 1 m apart over 1 s, read 0.5 s later, predict the leader 0.5 m further on."""
+        backseater = self.frontseater.backseater
+        self._activate_follow(Pose(3.0, 0.0, 0.0))
+        self.frontseater.tick_capabilities()
+        backseater.now = 1.0
+        backseater.publish("knowledge", "ugv1/pose", Pose(4.0, 0.0, 0.0))
+        backseater.now = 1.5
+        self.frontseater.tick_capabilities()
+        self.assertAlmostEqual(self.knowledge["distance"], 4.5)
+        self.assertAlmostEqual(self.frontseater.navigation_target.x, 3.5)
+
+    def test_stopping_follow_clears_its_target(self):
+        """Deactivating the request releases the MPC target."""
+        self._activate_follow(Pose(3.0, 0.0, 0.0))
+        self.frontseater.tick_capabilities()
+        self.frontseater.set_active_capabilities({})
+        self.assertIsNone(self.frontseater.navigation_target)
+
+
+
+
+
     #===============# avoid #===============#
 
     def test_avoid_reports_registered(self):
@@ -338,6 +424,36 @@ class TestBicycleFrontseaterCapabilities(unittest.TestCase):
         """The default graph has no edges, so it loiters indefinitely."""
         graph = self.frontseater.default_mission_graph()
         self.assertEqual(graph["edges"], {})
+
+
+class TestFollowGeometry(unittest.TestCase):
+    def test_offhook_target_is_straight_behind_an_aligned_leader(self):
+        """With both vehicles headed +x, the point is the full following distance behind the leader."""
+        target = offhook_target(Pose(5.0, 1.0, 0.0), Pose(0.0, 1.0, 0.0), 2.0)
+        self.assertAlmostEqual(target.x, 3.0)
+        self.assertAlmostEqual(target.y, 1.0)
+        self.assertAlmostEqual(target.theta, 0.0)
+
+    def test_offhook_target_splits_the_distance_across_both_headings(self):
+        """A leader headed +y and a follower headed +x: half back along each heading."""
+        target = offhook_target(Pose(5.0, 5.0, math.pi / 2), Pose(0.0, 0.0, 0.0), 2.0)
+        self.assertAlmostEqual(target.x, 4.0)
+        self.assertAlmostEqual(target.y, 4.0)
+        self.assertAlmostEqual(target.theta, 0.0)
+
+    def test_extrapolate_pose_in_a_straight_line(self):
+        """With no yaw rate, the pose moves speed * dt along its heading."""
+        pose = extrapolate_pose(Pose(1.0, 2.0, math.pi / 2), 2.0, 0.0, 0.5)
+        self.assertAlmostEqual(pose.x, 1.0)
+        self.assertAlmostEqual(pose.y, 3.0)
+        self.assertAlmostEqual(pose.theta, math.pi / 2)
+
+    def test_extrapolate_pose_along_an_arc(self):
+        """A quarter turn left at radius 1 m ends at (1, 1) headed +y."""
+        pose = extrapolate_pose(Pose(0.0, 0.0, 0.0), 1.0, 1.0, math.pi / 2)
+        self.assertAlmostEqual(pose.x, 1.0)
+        self.assertAlmostEqual(pose.y, 1.0)
+        self.assertAlmostEqual(pose.theta, math.pi / 2)
 
 
 if __name__ == "__main__":

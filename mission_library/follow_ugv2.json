@@ -1,0 +1,99 @@
+{
+  "knowledge": {
+    "ugv2/pose": {
+      "type": "Pose",
+      "value": {
+        "x": 0.0,
+        "y": 0.0,
+        "theta": 0.0
+      }
+    },
+    "ugv2/following_distance": {
+      "type": "float",
+      "value": 5.0
+    },
+    "ugv1/pose": {
+      "type": "Pose",
+      "value": {
+        "x": 0.0,
+        "y": 0.0,
+        "theta": 0.0
+      }
+    },
+    "ugv2/current_distance": {
+      "type": "float",
+      "value": 5.0
+    },
+    "ugv2/is_following": {
+      "type": "bool",
+      "value": false
+    }
+  },
+  "nodes": {
+    "start": {
+      "capabilities": {
+        "sense_pose": {
+          "capability": "sense_pose",
+          "inputs": {},
+          "outputs": {
+            "pose": "ugv2/pose"
+          }
+        }
+      }
+    },
+    "follow": {
+      "capabilities": {
+        "sense_pose": {
+          "capability": "sense_pose",
+          "inputs": {},
+          "outputs": {
+            "pose": "ugv2/pose"
+          }
+        },
+        "follow": {
+          "capability": "follow",
+          "inputs": {
+            "following_distance": "ugv2/following_distance",
+            "leader_pose": "ugv1/pose"
+          },
+          "outputs": {
+            "distance": "ugv2/current_distance"
+          }
+        }
+      }
+    }
+  },
+  "edges": {
+    "start": [
+      {
+        "condition": [
+          "ugv2/is_following",
+          "==",
+          true
+        ],
+        "to": "follow"
+      }
+    ]
+  },
+  "start": "start",
+  "name": "follow_ugv2",
+  "editor": {
+    "layout": {
+      "start": [
+        -1.76,
+        1.2888888888888888
+      ],
+      "follow": [
+        0.38333333333333336,
+        1.2977777777777777
+      ]
+    },
+    "unset_keys": [],
+    "following_keys": [
+      "ugv2/current_distance",
+      "ugv2/following_distance",
+      "ugv2/is_following",
+      "ugv2/pose"
+    ]
+  }
+}

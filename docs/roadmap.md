@@ -42,6 +42,7 @@
 2. A follower needs a higher top speed than its leader to close a gap, since it waits at the start.  Hardware limits aren't exposed by `bicycle_ugv()`.
 3. Dead-reckoning cuts the synced pose's error from a median of about 1.0 m to 0.16 m at 2 m/s (1 s `sync_interval`).  A leader that changes speed sharply (`follow_trajectory` on short legs, up to 8 m/s) still outruns it.
 4. No string-stability analysis (the paper's future work too), and no convoy scenario yet (user's call).
+5. Some weirdness with heading tracking, and cannot recover from failure if gets pointing away from all trajectory points
 
 
 
